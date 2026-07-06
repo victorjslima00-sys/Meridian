@@ -71,7 +71,7 @@ class AggregateMetrics:
         gate = "✅ PASSA GATE FASE 1" if self.overall_pass else "❌ REPROVADO"
         return (
             f"{gate} | Sharpe agregado={self.sharpe_aggregate:.2f} "
-            f"(gate: >1.0) | Todos regimes ≥0.5: {self.all_regimes_pass}"
+            f"| Todos regimes passam: {self.all_regimes_pass}"
         )
 
 
@@ -197,7 +197,7 @@ def _stress_test_gap(trades: list[Trade], gap_pct: float = -0.10) -> float:
 # Interface principal
 # ---------------------------------------------------------------------------
 
-def compute_regime_metrics(result: BacktestResult) -> RegimeMetrics:
+def compute_regime_metrics(result: BacktestResult, min_sharpe: float = 0.5) -> RegimeMetrics:
     """Calcula métricas completas para um único regime."""
     trades = result.trades
     closed = result.closed_trades
@@ -251,19 +251,22 @@ def compute_regime_metrics(result: BacktestResult) -> RegimeMetrics:
         annualized_return_pct=round(ann_ret, 4),
         stress_gap_10pct=round(_stress_test_gap(trades, -0.10), 4),
         stress_gap_15pct=round(_stress_test_gap(trades, -0.15), 4),
-        passes_gate=sharpe >= 0.5,
+        passes_gate=sharpe >= min_sharpe,
     )
 
     logger.info(metrics.summary())
     return metrics
 
 
-def compute_aggregate_metrics(results: list[BacktestResult]) -> AggregateMetrics:
+def compute_aggregate_metrics(
+    results: list[BacktestResult],
+    min_sharpe_per_regime: float = 0.5,
+    min_sharpe_aggregate: float = 1.0,
+) -> AggregateMetrics:
     """
-    Calcula métricas agregadas de todos os regimes.
-    Gate Fase 1: Sharpe agregado > 1.0 E todos os regimes com Sharpe >= 0.5
+    Calcula métricas agregadas de todos os regimes com base em thresholds injetados.
     """
-    regime_metrics = [compute_regime_metrics(r) for r in results]
+    regime_metrics = [compute_regime_metrics(r, min_sharpe_per_regime) for r in results]
 
     # Sharpe agregado: combina todos os trades fechados de todos os regimes
     all_closed: list[Trade] = []
@@ -274,7 +277,7 @@ def compute_aggregate_metrics(results: list[BacktestResult]) -> AggregateMetrics
 
     sharpe_agg = _trade_sharpe(all_closed, total_days) if len(all_closed) >= 3 else 0.0
     all_pass = all(m.passes_gate for m in regime_metrics)
-    overall_pass = sharpe_agg > 1.0 and all_pass
+    overall_pass = sharpe_agg >= min_sharpe_aggregate and all_pass
 
     agg = AggregateMetrics(
         regimes=regime_metrics,

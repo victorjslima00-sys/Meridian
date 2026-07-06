@@ -22,10 +22,7 @@ from trading_bot.signals.engine import compute_signal, Candidate, get_ibov_data,
 
 logger = logging.getLogger(__name__)
 
-# Custos de transação (conservadores)
-BROKERAGE_PCT = 0.0003   # 0.03% por lado
-SPREAD_PCT    = 0.0002   # 0.02% estimado
-ROUND_TRIP    = (BROKERAGE_PCT + SPREAD_PCT) * 2   # 0.10% total
+# Custos de transação (injetados agora nos scripts)
 
 # Regimes obrigatórios (plano v4)
 REGIMES = [
@@ -107,6 +104,8 @@ def run_regime_backtest(
     max_hold_days: int = 15,
     signal_params: Optional[dict] = None,
     ibov_filter: bool = True,          # Filtro macro: só opera quando IBOV > SMA-50
+    brokerage_pct: float = 0.0003,
+    spread_pct: float = 0.0002,
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -120,6 +119,7 @@ def run_regime_backtest(
     """
     signal_params = signal_params or {}
     initial_capital = capital
+    round_trip = (brokerage_pct + spread_pct) * 2
 
     # Carregar IBOV para filtro macro (se ativo)
     ibov_df = None
@@ -196,7 +196,7 @@ def run_regime_backtest(
 
         for ticker, exit_price, exit_reason in to_close:
             pos = open_positions.pop(ticker)
-            pnl_pct = (exit_price / pos.entry_price - 1) - ROUND_TRIP
+            pnl_pct = (exit_price / pos.entry_price - 1) - round_trip
             pnl_abs = pos.capital * pnl_pct
             capital_cash += pos.capital + pnl_abs   # ← devolve capital (bug v1 corrigido)
 
@@ -240,7 +240,33 @@ def run_regime_backtest(
             candidates.sort(key=lambda c: c.score, reverse=True)
 
             for c in candidates[:slots]:
-                # Dimensionamento: kelly_fraction do equity total / max_positions
+                # -------------------------------------------------------------
+                # C1: Simulação real do preenchimento da ordem
+                # -------------------------------------------------------------
+                df_t = regime_data[c.ticker]
+                today_row = df_t[df_t["ts"] == current_date]
+                if today_row.empty:
+                    continue
+
+                open_price = float(today_row["o"].iloc[0])
+                low = float(today_row["l"].iloc[0])
+                high = float(today_row["h"].iloc[0])
+
+                # Aborta se abriu abaixo do stop planejado
+                if open_price <= c.stop:
+                    logger.info("[%s] Entrada abortada por gap: open=%.2f <= stop original=%.2f",
+                                 c.ticker, open_price, c.stop)
+                    continue
+
+                # Recalcula stop/target proporcionalmente ao fill real (open)
+                stop_dist = (c.entry_price - c.stop) / c.entry_price
+                target_dist = (c.target - c.entry_price) / c.entry_price
+                
+                entry_price_real = open_price
+                stop_real = round(entry_price_real * (1 - stop_dist), 2)
+                target_real = round(entry_price_real * (1 + target_dist), 2)
+
+                # Dimensionamento
                 equity_now = capital_cash + sum(p.capital for p in open_positions.values())
                 pos_size = equity_now * kelly_fraction / max_positions
                 pos_size = min(pos_size, capital_cash)  # Não alocar mais do que disponível
@@ -249,16 +275,50 @@ def run_regime_backtest(
                     continue
 
                 capital_cash -= pos_size
-                open_positions[c.ticker] = _OpenPos(
-                    ticker=c.ticker,
-                    entry_date=current_date,
-                    entry_price=c.entry_price,
-                    stop=c.stop,
-                    target=c.target,
-                    capital=pos_size,
-                    score=c.score,
-                    max_hold_days=max_hold_days,
-                )
+                
+                # Verifica se o novo stop/target foi atingido no PRÓPRIO DIA de entrada
+                exit_price = None
+                exit_reason = None
+                
+                if low <= stop_real:
+                    exit_price = stop_real
+                    exit_reason = "stop"
+                elif high >= target_real:
+                    exit_price = target_real
+                    exit_reason = "target"
+                    
+                if exit_price is not None:
+                    # Trade fechado no mesmo dia
+                    pnl_pct = (exit_price / entry_price_real - 1) - round_trip
+                    pnl_abs = pos_size * pnl_pct
+                    capital_cash += pos_size + pnl_abs
+                    
+                    trades.append(Trade(
+                        ticker=c.ticker,
+                        entry_date=current_date,
+                        exit_date=current_date,
+                        entry_price=entry_price_real,
+                        exit_price=exit_price,
+                        stop=stop_real,
+                        target=target_real,
+                        exit_reason=exit_reason,
+                        pnl_pct=round(pnl_pct, 6),
+                        pnl_abs=round(pnl_abs, 2),
+                        capital_allocated=pos_size,
+                        signal_score=c.score,
+                    ))
+                else:
+                    # Posição sobrevive ao primeiro dia
+                    open_positions[c.ticker] = _OpenPos(
+                        ticker=c.ticker,
+                        entry_date=current_date,
+                        entry_price=entry_price_real,
+                        stop=stop_real,
+                        target=target_real,
+                        capital=pos_size,
+                        score=c.score,
+                        max_hold_days=max_hold_days,
+                    )
 
         # ------------------------------------------------------------------
         # 4. Equity curve = cash + MTM das posições abertas
@@ -327,6 +387,8 @@ def run_full_backtest(
     signal_params: Optional[dict] = None,
     regimes: Optional[list[dict]] = None,
     ibov_filter: bool = True,
+    brokerage_pct: float = 0.0003,
+    spread_pct: float = 0.0002,
 ) -> list[BacktestResult]:
     """Roda backtest nos 3 regimes obrigatórios do plano v4."""
     regimes = regimes or REGIMES
@@ -342,6 +404,8 @@ def run_full_backtest(
             max_hold_days=max_hold_days,
             signal_params=signal_params,
             ibov_filter=ibov_filter,
+            brokerage_pct=brokerage_pct,
+            spread_pct=spread_pct,
         )
         for r in regimes
     ]

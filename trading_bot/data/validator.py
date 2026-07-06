@@ -10,9 +10,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
-
 import pandas as pd
+
+from trading_bot.core.clock import today_b3
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ def validate_ohlcv(df: pd.DataFrame, ticker: str) -> ValidationReport:
     if df.empty:
         report.issues.append(ValidationIssue(
             ticker=ticker,
-            date=date.today(),
+            date=today_b3(),
             issue_type="empty",
             description="DataFrame vazio — nenhum dado disponível",
             severity="error",

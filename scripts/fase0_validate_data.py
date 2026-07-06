@@ -28,25 +28,10 @@ from trading_bot.data.ingestion import fetch_universe_yfinance
 from trading_bot.data.storage import initialize_db, save_ohlcv, get_delta_start
 from trading_bot.data.validator import validate_universe
 from trading_bot.data.cross_validation import run_cross_validation
+from trading_bot.core.config import AppConfig, setup_logging
+from trading_bot.core.clock import today_b3
 
-import yaml
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 logger = logging.getLogger(__name__)
-
-
-def load_config():
-    with open("config/settings.yaml") as f:
-        return yaml.safe_load(f)
-
-def load_universe():
-    with open("config/universe.yaml") as f:
-        data = yaml.safe_load(f)
-    return data["universe"]["tickers"]
 
 
 def main():
@@ -56,10 +41,12 @@ def main():
     parser.add_argument("--years", type=int, default=5, help="Anos de histórico a buscar (default: 5)")
     args = parser.parse_args()
 
-    cfg = load_config()
-    tickers = load_universe()
-    token = args.token or cfg["data"].get("brapi_token", "")
-    db_path = cfg["data"].get("db_path", "data/trading_bot.db")
+    cfg = AppConfig.load()
+    setup_logging(cfg)
+    
+    tickers = cfg.get("_universe", default=[])
+    token = args.token or cfg.get("data", "brapi_token", default="")
+    db_path = cfg.get("data", "db_path", default="data/trading_bot.db")
 
     logger.info("=" * 60)
     logger.info("FASE 0 — VALIDAÇÃO DE DADOS")
@@ -70,7 +57,7 @@ def main():
     initialize_db(db_path)
 
     # 2. Buscar histórico via yfinance
-    start = date.today() - timedelta(days=365 * args.years)
+    start = today_b3() - timedelta(days=365 * args.years)
     logger.info("Buscando histórico via yfinance desde %s...", start)
     data = fetch_universe_yfinance(tickers, start=start)
 
@@ -100,11 +87,16 @@ def main():
             cross_status = "skipped"
         else:
             logger.info("\nRodando validação cruzada yfinance ↔ brapi.dev...")
+            day_of_year = today_b3().timetuple().tm_yday
+            sample_size = 10
+            start_idx = (day_of_year * sample_size) % max(1, len(tickers))
+            sample_tickers = (tickers * 2)[start_idx : start_idx + sample_size]
+            
             summary = run_cross_validation(
-                tickers=tickers[:10],  # Valida amostra de 10 para economizar rate limit
+                tickers=sample_tickers,
                 brapi_token=token,
-                overlap_days=cfg["data"]["cross_validation"]["overlap_days"],
-                max_div_pct=cfg["data"]["cross_validation"]["max_divergence_pct"],
+                overlap_days=cfg.get("data", "cross_validation", "overlap_days", default=90),
+                max_div_pct=cfg.get("data", "cross_validation", "max_divergence_pct", default=0.5),
             )
             cross_status = summary["status"]
     else:
@@ -118,16 +110,21 @@ def main():
     logger.info("  Qualidade OK:       %d/%d", ok_count, len(tickers))
     logger.info("  Validação cruzada:  %s", cross_status.upper())
 
+    if cross_status == "skipped":
+        logger.warning(
+            "Validação cruzada foi PULADA (sem token) — "
+            "Fase 0 aprovada com CONFIANÇA REDUZIDA, não validada contra fonte externa."
+        )
+
     gates_ok = (
         len(data) >= int(len(tickers) * 0.9) and   # 90%+ dos ativos com dados
         errors_total <= 2 and                        # Até 2 erros tolerados (eventos corporativos legítimos)
-        cross_status in ("passed", "skipped")
+        cross_status == "passed"
     )
 
     if errors_total > 0:
         logger.warning("ATENÇÃO: %d erro(s) de qualidade detectados.", errors_total)
         logger.warning("Verifique manualmente — podem ser grupamentos/bonificações legítimos.")
-        logger.warning("Exemplos conhecidos: HAPV3 (+42%% em 2025-11-13 — provável evento corporativo).")
 
     if gates_ok:
         logger.info("\n✅ FASE 0 CONCLUÍDA — Pronto para Fase 1 (motor de sinais)")

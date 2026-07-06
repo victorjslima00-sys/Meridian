@@ -111,7 +111,8 @@ def fetch_yfinance(
         yf_suffix: Sufixo para B3 no Yahoo Finance (default: ".SA")
     """
     yf_ticker = ticker + yf_suffix
-    end = end or date.today()
+    from trading_bot.core.clock import today_b3
+    end = end or today_b3()
 
     logger.info("[yfinance] Buscando %s de %s a %s", yf_ticker, start, end)
     try:

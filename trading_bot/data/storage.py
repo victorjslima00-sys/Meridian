@@ -163,6 +163,7 @@ def get_delta_start(ticker: str, db_path: str = DEFAULT_DB_PATH) -> date:
     """
     last = get_last_date(ticker, db_path)
     if last is None:
-        return date.today() - timedelta(days=365 * 5)
+        from trading_bot.core.clock import today_b3
+        return today_b3() - timedelta(days=365 * 5)
     # Busca a partir do dia seguinte ao último dado
     return last + timedelta(days=1)

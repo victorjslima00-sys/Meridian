@@ -144,12 +144,6 @@ def compute_signal(
     stop_atr_mult: float = 1.5,        # Stop = baixa do canal (ou ATR-based)
     stop_pct: float = 0.04,            # Stop mínimo (fallback)
     target_pct: float = 0.10,          # Target: 10%
-    # Compatibilidade com API anterior
-    rsi_oversold: float = 40.0,
-    sr_window: int = 40,
-    rsi2_oversold: float = 10.0,
-    ema_medium_period: int = 50,
-    sma_pullback_period: int = 50,
 ) -> Optional[Candidate]:
     """
     Sinal de Breakout de 20 dias + Filtro SMA-200 + Volume.
@@ -157,13 +151,13 @@ def compute_signal(
     Regras de entrada (TODAS obrigatórias):
       1. Preço > SMA-200 (uptrend estrutural)
       2. Fechamento de hoje > máxima dos últimos 20 dias (breakout confirmado)
-      3. Volume > 1.5× média 20d (confirmação de interesse institucional)
+      3. Volume > 2.0× média 20d (confirmação de interesse institucional)
       4. RSI(14) entre 50 e 75 (momentum presente, não sobrecomprado)
 
     Stop: mínima dos últimos 10 dias (natural stop abaixo do pivot)
-    Target: +12% (leva tempo, mas wins são grandes quando o breakout é real)
+    Target: 10% (leva tempo, mas wins são grandes quando o breakout é real)
 
-    R:R esperado: stop ~4-6% abaixo, target 12% → R:R de 2:1 a 3:1
+    R:R esperado: stop ~4-6% abaixo, target 10% → R:R de 2:1 a 3:1
     Win rate esperado: 38-48% → expectancy positiva contra Selic
     """
     min_rows = max(breakout_period + 1, sma_trend_period + 1, 22)
@@ -200,13 +194,14 @@ def compute_signal(
 
     # --- Confirmação de volume ---
     vol_ratio = _volume_ratio(volume)
-    cond_volume = vol_ratio >= volume_mult
+    if vol_ratio < volume_mult:
+        return None
 
     # --- Score ---
     breakout_strength = (current_price - donchian_high) / donchian_high  # % acima da resistência
     score = (
         0.40 * min(1.0, breakout_strength / 0.01)   # Força do breakout (0.4 máx)
-        + (0.35 if cond_volume else 0.10)            # Volume (0.35 se confirmado)
+        + 0.35                                       # Volume (agora obrigatório)
         + 0.25 * min(1.0, (current_price - sma200_val) / sma200_val / 0.10)  # Distância SMA-200
     )
 

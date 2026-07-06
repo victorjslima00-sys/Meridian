@@ -72,9 +72,9 @@ trading-bot/
 
 | Fase | Status | Descrição |
 |------|--------|-----------|
-| **0** | 🔄 Em andamento | Validação de dados |
-| **1** | ⏳ Pendente | Motor de sinais + backtesting |
-| **2** | ⏳ Pendente | Risco + circuit breaker + notificações |
+| **0** | ✅ Concluída | Validação de dados |
+| **1** | ✅ Concluída | Motor de sinais + backtesting |
+| **2** | 🔄 Em andamento | Risco + circuit breaker + correlações |
 | **3** | ⏳ Pendente | Dashboard web |
 | **4a** | ⏳ Pendente | PoC corretora (Cedro) |
 | **4b** | ⏳ Pendente | Paper trading (1-2 semanas) |
@@ -82,10 +82,10 @@ trading-bot/
 | **6** | ⏳ Pendente | Agentes de IA |
 | **7** | ⏳ Pendente | Automação total (decisão deliberada) |
 
-## Notas de Segurança
+## Notas de Segurança (Planejamento)
 
-- **Stop-loss**: implementado como ordem STOP nativa na corretora (não depende do sistema estar rodando)
-- **Confirmação manual**: padrão inicial — todas as ordens exigem aprovação via Telegram
-- **Timeout**: sinais expiram sem aprovação → **REJEIÇÃO automática** (nunca auto-aprovação)
-- **Paper trading obrigatório**: 1-2 semanas com ordens simuladas antes de qualquer capital real
-- **Circuit breaker**: 3 limites simultâneos (diário -3%, inception -8%, rolling 30d -6%)
+- **Stop-loss**: será implementado como ordem STOP nativa na corretora (não dependerá do sistema estar rodando)
+- **Confirmação manual**: será o padrão inicial — todas as ordens exigirão aprovação via Telegram
+- **Timeout**: sinais expirarão sem aprovação → **REJEIÇÃO automática** (nunca auto-aprovação)
+- **Paper trading obrigatório**: será conduzido por 1-2 semanas com ordens simuladas antes de qualquer capital real
+- **Circuit breaker**: implementado com 3 limites simultâneos (diário, inception, rolling 30d)

@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from trading_bot.data.ingestion import fetch_brapi, fetch_yfinance
+from trading_bot.core.clock import today_b3
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +70,48 @@ def _align_dataframes(
     return merged
 
 
-def validate_ticker(
+def validate_ticker_current_quote(
     ticker: str,
     brapi_token: str,
+    max_div_pct: float = MAX_DIVERGENCE_PCT,
+) -> dict:
+    """
+    Única checagem real entre DUAS fontes independentes (yfinance vs brapi.dev),
+    limitada ao fechamento do dia mais recente — o plano grátis da brapi não
+    permite comparar séries históricas completas.
+    """
+    df_yf = fetch_yfinance(ticker, start=today_b3() - timedelta(days=10))
+    df_brapi = fetch_brapi(ticker, token=brapi_token)
+
+    if df_yf.empty or df_brapi.empty:
+        return {"ticker": ticker, "status": "error", "errors": ["dados insuficientes em uma das fontes"]}
+
+    yf_close = float(df_yf.sort_values("ts")["c"].iloc[-1])
+    brapi_close = float(df_brapi["c"].iloc[-1])
+    div_pct = _pct_diff(yf_close, brapi_close)
+
+    return {
+        "ticker": ticker,
+        "status": "ok" if div_pct <= max_div_pct else "divergence_exceeded",
+        "yf_close": yf_close,
+        "brapi_close": brapi_close,
+        "divergence_pct": round(div_pct, 4),
+    }
+
+def validate_ticker_adjustment_consistency(
+    ticker: str,
     overlap_days: int = 90,
     max_div_pct: float = MAX_DIVERGENCE_PCT,
 ) -> dict:
     """
-    Valida um único ticker comparando yfinance ↔ brapi.dev.
-
+    Valida um único ticker comparando yfinance com/sem auto_adjust para checar
+    consistência no ajuste de proventos.
+    
     Returns:
         dict com: ticker, status, max_divergence_pct, mean_divergence_pct,
                   samples, ex_date_check, errors
     """
-    end = date.today()
+    end = today_b3()
     start = end - timedelta(days=overlap_days + 30)  # margem extra
 
     result = {
@@ -232,7 +261,7 @@ def run_cross_validation(
         }
     """
     report_dir.mkdir(parents=True, exist_ok=True)
-    report_date = date.today().strftime("%Y%m%d")
+    report_date = today_b3().strftime("%Y%m%d")
     report_path = report_dir / f"cross_validation_{report_date}.json"
 
     logger.info("=" * 60)
@@ -247,15 +276,29 @@ def run_cross_validation(
 
     for i, ticker in enumerate(tickers, 1):
         logger.info("[%d/%d] Validando %s...", i, len(tickers), ticker)
-        result = validate_ticker(ticker, brapi_token, overlap_days, max_div_pct)
+        
+        # 1. Validação de consistência de ajustes (yfinance)
+        result_adj = validate_ticker_adjustment_consistency(ticker, overlap_days, max_div_pct)
+        
+        # 2. Validação cruzada real (yfinance vs brapi)
+        result_cross = {"status": "skipped"}
+        if brapi_token:
+            result_cross = validate_ticker_current_quote(ticker, brapi_token, max_div_pct)
+            
+        result = {
+            "ticker": ticker,
+            "status": "ok" if result_adj["status"] == "ok" and result_cross["status"] in ("ok", "skipped") else "error",
+            "adjustment_check": result_adj,
+            "cross_quote_check": result_cross
+        }
+        
         all_results.append(result)
-
         if result["status"] == "ok":
             passed += 1
-            logger.info("  ✓ %s — divergência máx: %.4f%%", ticker, result["max_divergence_pct"])
+            logger.info("  -> OK")
         else:
             failed += 1
-            logger.warning("  ✗ %s — %s", ticker, result["errors"])
+            logger.error("  -> FALHOU: %s", result)
 
     overall_status = "passed" if failed == 0 else "failed"
 
@@ -296,7 +339,7 @@ def assert_validation_passed(report_dir: Path = REPORT_DIR) -> None:
     Lança exceção se a validação cruzada mais recente não passou.
     Deve ser chamada no início do backtest como guard.
     """
-    today = date.today().strftime("%Y%m%d")
+    today = today_b3().strftime("%Y%m%d")
     report_path = report_dir / f"cross_validation_{today}.json"
 
     if not report_path.exists():

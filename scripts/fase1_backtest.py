@@ -14,26 +14,20 @@ sys.path.insert(0, ".")
 from trading_bot.data.ingestion import fetch_universe_yfinance
 from trading_bot.backtest.engine import run_full_backtest
 from trading_bot.backtest.metrics import compute_aggregate_metrics
-
-logging.basicConfig(level=logging.WARNING)
-
-def load_config():
-    with open("config/settings.yaml") as f:
-        settings = yaml.safe_load(f)
-    with open("config/universe.yaml") as f:
-        universe = yaml.safe_load(f)
-    return settings, universe["universe"]["tickers"]
+from trading_bot.core.config import AppConfig, setup_logging
 
 def main():
     parser = argparse.ArgumentParser(description="Executa o backtest (Fase 1)")
     parser.parse_args()
 
     print("Carregando configurações...")
-    settings, tickers = load_config()
-
-    sig_cfg = settings.get("signals", {})
-    risk_cfg = settings.get("risk", {})
-    bt_cfg = settings.get("backtest", {})
+    cfg = AppConfig.load()
+    setup_logging(cfg)
+    
+    tickers = cfg.get("_universe", default=[])
+    sig_cfg = cfg.get("signals", default={})
+    risk_cfg = cfg.get("risk", default={})
+    bt_cfg = cfg.get("backtest", default={})
 
     print(f"Buscando dados para {len(tickers)} ativos...")
     # Fetch from 1 year before the first regime to ensure SMA-200 and IBOV filter have data
@@ -61,16 +55,22 @@ def main():
         max_hold_days=sig_cfg.get("max_hold_days", 15),
         signal_params=signal_params,
         regimes=bt_cfg.get("regimes"),
-        ibov_filter=sig_cfg.get("ibov_filter", True)
+        ibov_filter=sig_cfg.get("ibov_filter", True),
+        brokerage_pct=risk_cfg.get("brokerage_pct", 0.0003),
+        spread_pct=risk_cfg.get("spread_est_pct", 0.0002)
     )
 
-    agg = compute_aggregate_metrics(results)
+    agg = compute_aggregate_metrics(
+        results,
+        min_sharpe_per_regime=bt_cfg.get("min_sharpe_per_regime", 0.5),
+        min_sharpe_aggregate=bt_cfg.get("min_sharpe_aggregate", 1.0)
+    )
     
     print("\n" + "="*50)
     print("RESULTADO AGREGADO")
     print("="*50)
     print(f"Trades totais: {sum(r.n_trades for r in results)}")
-    gate_status = "✅ PASSA" if agg.sharpe_aggregate >= bt_cfg.get("min_sharpe_baseline", 0.25) else "❌ REPROVA"
+    gate_status = "✅ PASSA" if agg.overall_pass else "❌ REPROVA"
     print(f"Sharpe Agregado: {agg.sharpe_aggregate:.2f} ({gate_status})")
     print("\nDetalhes por Regime:")
     for i, m in enumerate(agg.regimes):
