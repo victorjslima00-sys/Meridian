@@ -1,0 +1,124 @@
+universe:
+  # 50 ações líquidas do IBOVESPA/IBRX-100 — revisado em 2026-07
+  # Removidos: GOLL4 (GOL, RJ), AZUL4 (Azul, RJ), AMER3 (Americanas, RJ),
+  #            GNDI3 (incorporada pela HAPV3), TTEN3 (sem dados yfinance),
+  #            BRDT3 (incorporada pela CSAN3), SMLS3 (incorporada pela LREN3)
+  # Adicionados: PRIO3, EMBR3, WEGE3, RENT3, TOTS3, RADL3, SBFG3
+  tickers:
+    # Financeiro
+    - ITUB4
+    - BBDC4
+    - BBAS3
+    - SANB11
+    - BBSE3
+    - B3SA3
+    - IRBR3
+    # Energia / Petróleo
+    - PETR4
+    - PETR3
+    - UGPA3
+    - CSAN3
+    - PRIO3    # PetroRio (subst. GOLL4/BRDT3)
+    # Mineração / Siderurgia
+    - VALE3
+    - CSNA3
+    - GGBR4
+    - USIM5
+    - BRAP4
+    # Utilities
+    - ELET3
+    - ELET6
+    - EGIE3
+    - CMIG4
+    - SBSP3
+    - CPFE3
+    - ENEV3
+    # Varejo / Consumo
+    - MGLU3
+    - LREN3
+    - VVAR3
+    - NTCO3
+    - PCAR3
+    - SBFG3    # Grupo SBF/Centauro (subst. AMER3)
+    # Saúde
+    - RDOR3
+    - HAPV3
+    - FLRY3
+    - RADL3    # Raia Drogasil (subst. GNDI3)
+    # Telecomunicações
+    - VIVT3
+    - TIMS3
+    # Alimentos / Bebidas
+    - ABEV3
+    - BEEF3    # Minerva Foods (subst. JBSS3/MRFG3/BRFS3 — todos sem dados yfinance)
+    # Indústria / Papel e Celulose
+    - WEGE3    # WEG
+    - SUZB3    # Suzano Papel e Celulose (subst. EMBR3)
+    - KLBN11   # Klabin
+    - RENT3    # Localiza
+    # Imobiliário / Shopping
+    - EZTC3
+    - MRVE3
+    - CYRE3
+    - MULT3    # Multiplan (shopping centers)
+    # Logística / Transporte
+    - RAIL3
+    # Agronegócio
+    - SLCE3
+    - AGRO3
+    # Tecnologia
+    - TOTS3    # TOTVS
+
+  # Setor de cada ativo (para checagem de correlação do Módulo 3)
+  sectors:
+    ITUB4: financeiro
+    BBDC4: financeiro
+    BBAS3: financeiro
+    SANB11: financeiro
+    BBSE3: financeiro
+    B3SA3: financeiro
+    IRBR3: financeiro
+    PETR4: energia
+    PETR3: energia
+    UGPA3: energia
+    CSAN3: energia
+    PRIO3: energia
+    VALE3: mineracao
+    CSNA3: mineracao
+    GGBR4: mineracao
+    USIM5: mineracao
+    BRAP4: mineracao
+    ELET3: utilities
+    ELET6: utilities
+    EGIE3: utilities
+    CMIG4: utilities
+    SBSP3: utilities
+    CPFE3: utilities
+    ENEV3: utilities
+    MGLU3: varejo
+    LREN3: varejo
+    VVAR3: varejo
+    NTCO3: varejo
+    PCAR3: varejo
+    SBFG3: varejo
+    RDOR3: saude
+    HAPV3: saude
+    FLRY3: saude
+    RADL3: saude
+    VIVT3: telecom
+    TIMS3: telecom
+    ABEV3: alimentos
+    BEEF3: alimentos
+    WEGE3: industria
+    SUZB3: papel_celulose
+    KLBN11: papel_celulose
+    TOTS3: tecnologia
+    RENT3: logistica
+    EZTC3: imobiliario
+    MRVE3: imobiliario
+    CYRE3: imobiliario
+    MULT3: imobiliario
+    RAIL3: logistica
+    SLCE3: agronegocio
+    AGRO3: agronegocio
+    TOTS3: tecnologia

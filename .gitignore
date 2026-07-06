@@ -1,0 +1,60 @@
+# ============================================================
+# .gitignore — Trading Bot B3
+# ============================================================
+
+# --- Credenciais e segredos (NUNCA commitar) ---
+.env
+*.key
+*.pem
+*.p12
+secrets/
+
+# --- Banco de dados e dados gerados (apenas raiz do projeto) ---
+/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Logs ---
+logs/
+*.log
+*.jsonl
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# --- Ambientes virtuais ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDEs ---
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Backtest outputs locais ---
+results/
+reports/

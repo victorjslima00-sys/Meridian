@@ -1,0 +1,143 @@
+# ============================================================
+# Sistema de Swing Trading B3 — Configurações
+# Versão: v4 | Stack: Python 3.11+
+# ============================================================
+
+# ----------------------------------------------------------
+# Dados de mercado
+# ----------------------------------------------------------
+data:
+  brapi_base_url: "https://brapi.dev/api"
+  brapi_token: "${BRAPI_TOKEN}"     # Definir em .env (nunca commitar o token real)
+  interval: "1d"             # CONFIRMADO: plano grátis aceita apenas 1d
+  # Nota: interval=60m retorna INVALID_INTERVAL no plano grátis
+  # Plano Pro (R$116,66/mês) necessário para intraday
+
+  yfinance_suffix: ".SA"     # Sufixo para tickers brasileiros no yfinance (ex: PETR4.SA)
+
+  # Validação cruzada (bloqueante antes do primeiro backtest)
+  cross_validation:
+    overlap_days: 90         # Janela de sobreposição yfinance ↔ brapi.dev
+    max_divergence_pct: 0.5  # Threshold: divergência < 0.5% no close ajustado
+
+  # Rate limiting brapi.dev
+  rate_limit:
+    requests_per_month: 15000
+    retry_max_attempts: 3
+    retry_backoff_seconds: 2.0
+
+  # Storage local
+  db_path: "data/trading_bot.db"
+  cache_days: 5              # Re-usa cache para dados mais recentes que N dias
+
+# ----------------------------------------------------------
+# Motor de sinais (candle diário)
+# ----------------------------------------------------------
+signals:
+  # Estratégia: Donchian Breakout 20 dias + Filtro IBOV (SMA-50)
+  # Testado: RSI-14 (WR 28-35%), RSI-2 (WR 14-31%), Breakout (WR 37-39%)
+  # Melhor config encontrada: Breakout + IBOV filter + Stop4% + Target10%
+  strategy: "donchian_breakout"
+  breakout_period: 20              # Canal Donchian (20 dias)
+  sma_trend_period: 200            # Filtro estrutural: preço > SMA-200
+  volume_multiplier: 2.0           # Volume > 2× média (confirma força)
+  rsi_max: 75.0                    # Não comprar se RSI > 75 (sobrecomprado)
+  stop_pct: 0.04                   # Stop-loss 4% abaixo da entrada
+  target_pct: 0.10                 # Take-profit 10% acima da entrada
+  max_hold_days: 15                # Timeout: 15 dias
+  ibov_filter: true                # Filtro macro: só opera quando IBOV > SMA-50
+  # Baseline Sharpe: ~0.33 (alta_juros) — gate Sharpe>1.0 avaliado após Módulo 7 (IA)
+
+# ----------------------------------------------------------
+# Gestão de risco
+# ----------------------------------------------------------
+risk:
+  # Dimensionamento de posição (calibrar com capital inicial)
+  kelly_fraction: 0.25             # 1/4 Kelly (range: 0.25-0.50 até 100+ trades)
+  max_positions: 3                 # Máximo de posições simultâneas
+  capital_initial: 300.00          # R$ 300 (capital inicial informado)
+
+  # Correlação: não abrir posições em ativos com correlação > threshold
+  correlation_window_days: 60
+  correlation_max: 0.70
+
+  # Custos de transação
+  brokerage_pct: 0.0003            # Corretagem (0.03%)
+  spread_est_pct: 0.0002           # Spread estimado (0.02%)
+  min_tick: 0.01                   # Tick mínimo (confirmar por ativo)
+
+  # Circuit breaker — 3 limites simultâneos
+  circuit_breaker:
+    daily_loss_limit: -0.030       # -3.0% do capital no dia (reseta à meia-noite)
+    drawdown_inception: -0.080     # -8.0% desde o início da operação
+    drawdown_rolling_30d: -0.060   # -6.0% nos últimos 30 dias (janela móvel)
+
+# ----------------------------------------------------------
+# Modo de execução
+# ----------------------------------------------------------
+execution:
+  mode: "manual"                   # Padrão: manual | semi_auto | full_auto
+  confirmation_timeout_minutes: 10 # Timeout = REJEIÇÃO automática (nunca auto-aprovar)
+
+# ----------------------------------------------------------
+# Corretora (Cedro Technologies — CONFIRMADO)
+# ----------------------------------------------------------
+broker:
+  provider: "cedro"
+  base_url: "https://cedrotech.com/apis/api-trading"  # Confirmar URL exata com a Cedro
+  api_key: ""                      # Preencher após contato comercial
+  api_secret: ""
+  # PENDENTE: confirmar com a Cedro:
+  #   1. Suporte a swing trade (não só day trade)
+  #   2. Suporte a ordem STOP nativa
+  #   3. Convenção de ticker fracionário (ex: PETR4F)
+  #   4. URL e formato exato de autenticação
+  poll_interval_seconds: 300       # Reconciliação periódica (5 min)
+
+# ----------------------------------------------------------
+# Infraestrutura
+# ----------------------------------------------------------
+scheduler:
+  pre_market_time: "09:00"         # Verificação de dados + reconciliação
+  market_open: "10:00"
+  market_close: "17:30"
+  post_market_time: "18:00"        # Candle diário + motor de sinais + agente pesquisa
+  timezone: "America/Sao_Paulo"
+
+notifications:
+  telegram_bot_token: ""           # Preencher
+  telegram_chat_id: ""             # Preencher
+
+logging:
+  level: "INFO"
+  format: "json"
+  path: "logs/trading_bot.jsonl"
+
+# ----------------------------------------------------------
+# Backtesting
+# ----------------------------------------------------------
+backtest:
+  # 3 regimes de mercado obrigatórios
+  regimes:
+    - name: "crise_volatilidade"
+      start: "2020-03-01"
+      end: "2020-09-30"
+      description: "COVID — alta volatilidade e queda"
+    - name: "alta_juros"
+      start: "2021-06-01"
+      end: "2022-12-31"
+      description: "Ciclo de alta da Selic"
+    - name: "recuperacao_lateral"
+      start: "2023-01-01"
+      end: "2024-06-30"
+      description: "Recuperação lateral pós-ciclo"
+
+  # Gates de saída
+  # Baseline técnico (sem IA): Sharpe ~0.33 — gate reavaliado após Módulo 7
+  min_sharpe_aggregate: 1.0        # Gate final (após Módulo 7 IA)
+  min_sharpe_baseline: 0.25        # Gate aceito para avançar agora (técnico puro)
+  min_sharpe_per_regime: 0.5       # Gate por regime (após Módulo 7 IA)
+
+  # Stress test
+  gap_overnight_min: -0.10         # -10% gap overnight
+  gap_overnight_max: -0.15         # -15% gap overnight (pior cenário)
