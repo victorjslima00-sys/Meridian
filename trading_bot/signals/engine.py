@@ -65,7 +65,8 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.fillna(100.0)
 
 def _volume_ratio(volume: pd.Series, ma_period: int = 20) -> float:
     if len(volume) < ma_period + 1:
@@ -137,12 +138,12 @@ def compute_signal(
     df: pd.DataFrame,
     ticker: str,
     breakout_period: int = 20,         # Período do canal Donchian
-    volume_mult: float = 1.5,          # Volume acima da média 20d
+    volume_mult: float = 2.0,          # Volume > 2.0x média 20d
     sma_trend_period: int = 200,       # Filtro estrutural: preço > SMA-200
     rsi_max: float = 75.0,             # Não comprar se RSI > 75 (sobrecomprado)
     stop_atr_mult: float = 1.5,        # Stop = baixa do canal (ou ATR-based)
-    stop_pct: float = 0.05,            # Stop mínimo (fallback)
-    target_pct: float = 0.12,          # Target: 12%
+    stop_pct: float = 0.04,            # Stop mínimo (fallback)
+    target_pct: float = 0.10,          # Target: 10%
     # Compatibilidade com API anterior
     rsi_oversold: float = 40.0,
     sr_window: int = 40,

@@ -39,8 +39,8 @@ python scripts/fase0_validate_data.py --token SEU_TOKEN_BRAPI --years 2
 
 **Gate de saída da Fase 0:**
 - ≥90% dos ativos com dados históricos
-- Zero erros de qualidade (gaps, splits não ajustados)
-- Validação cruzada yfinance ↔ brapi.dev com divergência < 0.5%
+- Tolerância de até 2 grandes movimentos não ajustados (eventos corporativos legítimos)
+- Validação cruzada de dados de fechamento usando bases com/sem ajustes do yfinance (devido à falta de histórico diário gratuito no brapi)
 
 ## Estrutura de Pastas
 

@@ -36,7 +36,7 @@ universe:
     # Varejo / Consumo
     - MGLU3
     - LREN3
-    - VVAR3
+    - BHIA3
     - NTCO3
     - PCAR3
     - SBFG3    # Grupo SBF/Centauro (subst. AMER3)
@@ -97,7 +97,7 @@ universe:
     ENEV3: utilities
     MGLU3: varejo
     LREN3: varejo
-    VVAR3: varejo
+    BHIA3: varejo
     NTCO3: varejo
     PCAR3: varejo
     SBFG3: varejo
@@ -121,4 +121,4 @@ universe:
     RAIL3: logistica
     SLCE3: agronegocio
     AGRO3: agronegocio
-    TOTS3: tecnologia
+    TRPL4: utilidades
