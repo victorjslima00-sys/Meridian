@@ -1,4 +1,4 @@
-# Trading Bot B3 — Sistema de Swing Trading com IA
+# Meridian
 
 > **Status**: Em desenvolvimento — Fase 0 (validação de dados)  
 > **Mercado**: B3 (ações brasileiras) | **Timeframe**: Candle diário  
