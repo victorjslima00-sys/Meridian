@@ -90,13 +90,16 @@ def get_positions():
             })
 
         invested = sum(p["entry_price"] * p["qty"] for p in active_positions)
-        current_capital = capital_initial - invested  # caixa disponível
+        # Patrimônio atual = Capital inicial + lucros/prejuízos não realizados
+        current_equity = capital_initial + sum((p["current_price"] - p["entry_price"]) * p["qty"] for p in active_positions)
+        free_cash = capital_initial - invested
 
         return {
             "active_positions": active_positions,
             "capital": {
                 "initial": capital_initial,
-                "current": current_capital,
+                "current": current_equity,
+                "free_cash": free_cash,
                 "invested": invested,
                 "currency": "BRL"
             }

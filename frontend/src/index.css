@@ -407,6 +407,10 @@ tr td:last-child { border-top-right-radius: 8px; border-bottom-right-radius: 8px
   transform: translateX(-10px);
 }
 
+.term-time { flex-shrink: 0; white-space: nowrap; color: var(--text-muted); }
+.term-sender { flex-shrink: 0; white-space: nowrap; font-weight: bold; }
+.term-msg { word-break: break-word; color: #fff; }
+
 @keyframes typing {
   to { opacity: 1; transform: translateX(0); }
 }
