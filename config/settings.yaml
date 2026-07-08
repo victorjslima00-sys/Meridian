@@ -110,6 +110,15 @@ notifications:
   telegram_bot_token: ""           # Preencher
   telegram_chat_id: ""             # Preencher
 
+llm:
+  primary_api_key: "${GEMINI_API_KEY}"    # Definir no .env
+  fallback_api_key: "${OPENAI_API_KEY}"   # Alternativa secundária
+
+genetic_optimizer:
+  population_size: 10
+  generations: 5
+  mutation_rate: 0.15
+
 logging:
   level: "INFO"
   format: "json"

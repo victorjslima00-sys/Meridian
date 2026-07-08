@@ -82,6 +82,32 @@ class CircuitBreaker:
         )
         return not status.triggered
 
+    def audit_decision_gate(
+        self,
+        ticker: str,
+        proposed_side: str,
+        signal_confidence: float,
+        open_tickers: list[str],
+        returns_matrix: dict[str, list[float]],
+        ibov_bear_market: bool = False
+    ) -> bool:
+        """
+        Governança Mecânica Determinística.
+        Veta ordens da IA se violarem as fronteiras de risco.
+        Retorna True se aprovado, False se VETADO.
+        """
+        # Regra 1: Correlação linear com o portfólio
+        if not check_correlation(ticker, open_tickers, returns_matrix, correlation_max=0.7):
+            logger.warning("VETO DE GOVERNANÇA: %s apresenta alta correlação com ativos existentes.", ticker)
+            return False
+            
+        # Regra 2: Confiança mínima exigida em mercados de baixa volatilidade adversa
+        if ibov_bear_market and signal_confidence < 0.6:
+            logger.warning("VETO DE GOVERNANÇA: Confiança da IA (%.2f) muito baixa para o %s em Bear Market.", signal_confidence, ticker)
+            return False
+            
+        return True
+
 def check_correlation(
     candidate_ticker: str,
     open_tickers: list[str],
