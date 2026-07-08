@@ -65,3 +65,11 @@ class CedroBroker(BaseBroker):
         conn.commit()
         conn.close()
         return rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Alias de compatibilidade
+# ---------------------------------------------------------------------------
+# O módulo foi criado com o nome CedroBroker, mas código de produção e
+# testes e2e importam CedroClient. O alias permite ambos os nomes funcionarem.
+CedroClient = CedroBroker
