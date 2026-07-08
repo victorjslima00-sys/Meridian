@@ -98,3 +98,11 @@ class TelegramNotifier:
             time.sleep(2)
 
         return False
+
+
+# ---------------------------------------------------------------------------
+# Alias de compatibilidade
+# ---------------------------------------------------------------------------
+# O módulo foi criado com o nome TelegramNotifier, mas código de produção e
+# testes e2e importam TelegramClient. O alias permite ambos os nomes funcionarem.
+TelegramClient = TelegramNotifier
