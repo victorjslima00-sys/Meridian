@@ -68,6 +68,13 @@ def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rsi = 100 - (100 / (1 + rs))
     return rsi.fillna(100.0)
 
+def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.rolling(window=period, min_periods=period).mean()
+
 def _volume_ratio(volume: pd.Series, ma_period: int = 20) -> float:
     if len(volume) < ma_period + 1:
         return 1.0
@@ -144,12 +151,12 @@ def compute_signal(
     df: pd.DataFrame,
     ticker: str,
     breakout_period: int = 20,         # Período do canal Donchian
-    volume_mult: float = 2.0,          # Volume > 2.0x média 20d
+    volume_mult: float = 1.5,          # Volume > 1.5x média 20d (Aprovado pelo Guard-Rail)
     sma_trend_period: int = 200,       # Filtro estrutural: preço > SMA-200
     rsi_max: float = 75.0,             # Não comprar se RSI > 75 (sobrecomprado)
-    stop_atr_mult: float = 1.5,        # Stop = baixa do canal (ou ATR-based)
-    stop_pct: float = 0.04,            # Stop mínimo (fallback)
-    target_pct: float = 0.10,          # Target: 10%
+    stop_atr_mult: float = 2.0,        # Stop baseado no ATR
+    stop_pct: float = 0.04,            # Stop de segurança (hard cap)
+    target_atr_mult: float = 4.0,      # Target dinâmico (ATR * 4, R:R 1:2)
 ) -> Optional[Candidate]:
     """
     Sinal de Breakout de 20 dias + Filtro SMA-200 + Volume.
@@ -214,21 +221,27 @@ def compute_signal(
     if score < 0.55:
         return None
 
-    # --- Stop: usa o mais PRÓXIMO entre natural e % fixo (cap de risco) ---
-    # Bug anterior: min() → stop mais longe → avg_loss > stop_pct
-    # Correto: max() → stop mais próximo → cap avg_loss em stop_pct
-    natural_stop = float(low.iloc[-10:].min())
-    stop_from_pct = current_price * (1 - stop_pct)
-    stop = max(natural_stop, stop_from_pct)   # tighter stop = less risk
+    # --- Volatilidade (ATR) ---
+    atr_series = _atr(high, low, close, period=14)
+    atr_val = float(atr_series.iloc[-1]) if not atr_series.empty and not pd.isna(atr_series.iloc[-1]) else (current_price * 0.02)
 
-    target = round(current_price * (1 + target_pct), 2)
+    # --- Stop: usa o mais PRÓXIMO entre natural, ATR e % fixo (cap de risco do Guard-Rail) ---
+    natural_stop = float(low.iloc[-10:].min())
+    stop_from_atr = current_price - (atr_val * stop_atr_mult)
+    stop_from_pct = current_price * (1 - stop_pct)
+    
+    # max() seleciona o maior valor (mais próximo do preço atual = menor risco financeiro)
+    stop = max(natural_stop, stop_from_atr, stop_from_pct)
+
+    # --- Alvo dinâmico via ATR (e indicação de Trailing Stop) ---
+    target = round(current_price + (atr_val * target_atr_mult), 2)
     stop   = round(stop, 2)
 
     logger.info(
         "[%s] BREAKOUT | Score=%.2f | Preço=%.2f > Donchian=%.2f (+%.1f%%) | "
-        "RSI14=%.1f | Vol=%.1fx | Stop=%.2f Alvo=%.2f",
+        "RSI14=%.1f | Vol=%.1fx | Stop=%.2f (ATR: %.2f) Alvo=%.2f",
         ticker, score, current_price, donchian_high,
-        breakout_strength * 100, rsi14, vol_ratio, stop, target,
+        breakout_strength * 100, rsi14, vol_ratio, stop, atr_val, target,
     )
 
     return Candidate(
@@ -246,8 +259,9 @@ def compute_signal(
             "donchian_high": round(donchian_high, 2),
             "rsi14": round(rsi14, 2),
             "sma200": round(sma200_val, 2),
+            "atr14": round(atr_val, 2),
             "stop_pct_actual": round((current_price - stop) / current_price, 4),
-            "target_pct": target_pct,
+            "trailing_stop_recommended": True,
         },
     )
 

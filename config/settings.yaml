@@ -40,10 +40,11 @@ signals:
   strategy: "donchian_breakout"
   breakout_period: 20              # Canal Donchian (20 dias)
   sma_trend_period: 200            # Filtro estrutural: preço > SMA-200
-  volume_multiplier: 2.0           # Volume > 2× média (confirma força)
+  volume_multiplier: 1.5           # Volume > 1.5x média (confirma força)
   rsi_max: 75.0                    # Não comprar se RSI > 75 (sobrecomprado)
-  stop_pct: 0.05                   # Stop-loss 5% abaixo da entrada (Otimizado via Quant)
-  target_pct: 0.08                 # Take-profit 8% acima da entrada (Otimizado via Quant)
+  stop_atr_mult: 1.5               # Stop baseado em volatilidade (Otimizado via Quant)
+  stop_pct: 0.04                   # Stop-loss rígido de emergência (Hard Cap)
+  target_atr_mult: 3.0             # Alvo dinâmico R:R 1:2 (Otimizado via Quant)
   max_hold_days: 15                # Timeout: 15 dias
   ibov_filter: true                # Filtro macro: só opera quando IBOV > SMA-50
   # Baseline Sharpe: ~0.33 (alta_juros) — gate Sharpe>1.0 avaliado após Módulo 7 (IA)
