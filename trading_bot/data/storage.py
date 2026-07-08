@@ -62,8 +62,11 @@ def initialize_db(db_path: str = DEFAULT_DB_PATH) -> None:
     """Cria o banco e as tabelas se não existirem."""
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     with _db_connection(db_path) as conn:
+        # Ativação do modo WAL (Write-Ahead Logging) para concorrência
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
         conn.executescript(CREATE_TABLE_SQL)
-    logger.info("DB inicializado: %s", db_path)
+    logger.info("DB inicializado com WAL mode: %s", db_path)
 
 
 def save_ohlcv(
