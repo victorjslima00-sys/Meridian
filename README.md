@@ -1,8 +1,8 @@
 # Meridian
 
-> **Status**: Em desenvolvimento — Fase 0 (validação de dados)  
+> **Status**: Em operação — Fase 6 (Comitê Multi-Agentes)  
 > **Mercado**: B3 (ações brasileiras) | **Timeframe**: Candle diário  
-> **Stack**: Python 3.11+ · SQLite · brapi.dev · yfinance · Cedro Technologies
+> **Stack**: Python 3.11+ · SQLite · AWS (EC2/Terraform) · Agentes LLM
 
 ---
 
@@ -70,27 +70,26 @@ trading-bot/
 
 | Fase | Status | Descrição |
 |------|--------|-----------|
-| **0** | ✅ Concluída | Validação de dados |
+| **0** | ✅ Concluída | Validação de dados (yfinance / brapi) |
 | **1** | ✅ Concluída | Motor de sinais + backtesting |
 | **2** | ✅ Concluída | Risco + circuit breaker + correlações |
-| **3** | ⏳ Pendente | Dashboard web |
-| **4a** | ⏳ Pendente | PoC corretora (Cedro) |
-| **4b** | ⏳ Pendente | Paper trading (1-2 semanas) |
-| **5** | ⏳ Pendente | Live trading — modo manual |
-| **6** | ⏳ Pendente | Agentes de IA |
-| **7** | ⏳ Pendente | Automação total (decisão deliberada) |
+| **3** | ✅ Concluída | Cloud Enterprise (Terraform + AWS + GitHub Actions CI/CD) |
+| **4** | ✅ Concluída | Otimização Quântica (Motor de Grid Search) |
+| **5** | ✅ Concluída | Automação Total (100% Autônomo) |
+| **6** | ✅ Concluída | Comitê Multi-Agentes de IA (Pesquisador + Guard-Rail) |
+| **7** | ⏳ Pendente | Painel Web (Frontend separado do Backend) |
 
 ## Qualidade e Cobertura de Código
 
 O repositório possui Integração Contínua (CI) configurada com:
+- **GitHub Actions**: Deploy automatizado via SSH para EC2.
+- **Segurança Infra**: Fail2Ban, Logrotate e UFW no servidor Ubuntu.
 - **Flake8**: Validação rigorosa de estilo e qualidade.
-- **Pytest + Coverage**: Testes abrangentes para ingestão, validação cruzada, motor de regras, e engine de backtest.
-- **Cobertura Alcançada**: **86%** em todos os módulos principais (`trading_bot/`).
+- **Pytest + Coverage**: Testes abrangentes para ingestão e validação.
 
-## Notas de Segurança (Planejamento)
+## Notas de Segurança (Arquitetura Atual)
 
-- **Stop-loss**: será implementado como ordem STOP nativa na corretora (não dependerá do sistema estar rodando)
-- **Confirmação manual**: será o padrão inicial — todas as ordens exigirão aprovação via Telegram
-- **Timeout**: sinais expirarão sem aprovação → **REJEIÇÃO automática** (nunca auto-aprovação)
-- **Paper trading obrigatório**: será conduzido por 1-2 semanas com ordens simuladas antes de qualquer capital real
-- **Circuit breaker**: implementado com 3 limites simultâneos (diário, inception, rolling 30d)
+- **Comitê de IA Ativo**: Agente Guard-Rail avalia e barra qualquer otimização ou trade baseado em Fake News ou alucinação algorítmica. Triangulação obrigatória em fontes Tier-1.
+- **Autonomia Total**: O bot foi destravado da dependência humana. Confirmação manual de ordens via Telegram foi **revogada**.
+- **Stop-loss Nativo**: Ordem STOP disparada e gerenciada no momento da entrada.
+- **Circuit Breaker**: Implementado com 3 limites simultâneos (diário, inception, rolling 30d).
