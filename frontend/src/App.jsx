@@ -1,132 +1,106 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { 
-  Activity, ShieldAlert, Cpu, Database, 
-  BarChart2, Globe, Terminal, Briefcase, X, Wifi, WifiOff
+import {
+  Activity, ShieldAlert, Cpu, Database,
+  BarChart2, Globe, Terminal, Briefcase, X,
+  Wifi, WifiOff, TrendingUp, TrendingDown,
+  ChevronRight, Bell, Settings, RefreshCw,
+  DollarSign, Percent, BookOpen, History
 } from 'lucide-react';
+import { TickerAreaChart, SparkLine, PortfolioChart } from './Charts';
 import './index.css';
 
 const API_BASE = 'http://localhost:8000/api';
 
-/* ───────────────────────────────────────────────
-   Ticker Tape Item — cores semânticas por variação
-   Verde Esmeralda (#10b981) ▲  |  Vermelho Soft (#f43f5e) ▼
-─────────────────────────────────────────────── */
-const TickerTapeItem = ({ item }) => {
-  const isPositive = item.includes('▲');
-  const color = isPositive ? '#10b981' : '#f43f5e';
+// ─── Ticker Tape Item com cor semântica ───────────────────────────────────────
+const TapeItem = ({ item }) => {
+  const isUp = item.includes('▲');
   return (
-    <span className="ticker-item" style={{ color }} role="listitem" aria-label={item}>
+    <span className="tape-item" data-up={isUp}>
       {item}
     </span>
   );
 };
 
-/* ───────────────────────────────────────────────
-   Gráfico SVG Dinâmico — consome /api/history/{ticker}
-   Resolve o bug de dados falsos (não duplica IBOV)
-─────────────────────────────────────────────── */
-const DynamicTickerChart = ({ ticker }) => {
-  const [chartData, setChartData] = useState(null);
-  const [loading, setLoading] = useState(true);
+// ─── KPI Card ─────────────────────────────────────────────────────────────────
+const KpiCard = ({ title, value, sub, icon: Icon, color = '#00f3ff', trend }) => (
+  <div className="kpi-card">
+    <div className="kpi-header">
+      <span className="kpi-label">{title}</span>
+      {Icon && <Icon size={18} color={color} opacity={0.7} />}
+    </div>
+    <div className="kpi-value" style={{ color }}>{value}</div>
+    {(sub || trend !== undefined) && (
+      <div className="kpi-sub" style={{ color: trend >= 0 ? '#10b981' : '#f43f5e' }}>
+        {trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+        {sub}
+      </div>
+    )}
+  </div>
+);
 
-  useEffect(() => {
-    if (!ticker) return;
-    setLoading(true);
-    axios.get(`${API_BASE}/history/${ticker}`)
-      .then(res => {
-        setChartData(res.data);
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [ticker]);
-
-  if (loading) return <div className="chart-loading"><div className="spinner" />Carregando dados de {ticker}...</div>;
-  if (!chartData || !chartData.prices || chartData.prices.length < 2)
-    return <p className="text-muted" style={{ textAlign: 'center', padding: '2rem' }}>Dados insuficientes para {ticker}</p>;
-
-  const prices = chartData.prices;
-  const dates = chartData.dates || [];
-  const min = Math.min(...prices);
-  const max = Math.max(...prices);
-  const range = max - min === 0 ? 1 : max - min;
-  const W = 600, H = 200, PAD = 30;
-
-  const points = prices.map((p, i) => {
-    const x = PAD + (i / (prices.length - 1)) * (W - PAD * 2);
-    const y = PAD + (1 - (p - min) / range) * (H - PAD * 2);
-    return { x, y, price: p, date: dates[i] || '' };
-  });
-
-  const polyline = points.map(p => `${p.x},${p.y}`).join(' ');
-  const gradientPath = `M ${points[0].x},${points[0].y} ${points.map(p => `L ${p.x},${p.y}`).join(' ')} L ${points[points.length - 1].x},${H} L ${points[0].x},${H} Z`;
-
-  const isGain = prices[prices.length - 1] >= prices[0];
-  const strokeColor = isGain ? '#10b981' : '#f43f5e';
-  const gradId = `grad-${ticker}`;
+// ─── Position Row com mini-sparkline ─────────────────────────────────────────
+const PositionRow = ({ pos, onClick }) => {
+  const priceDiff = pos.target - pos.entry_price;
+  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, ((pos.current_price - pos.entry_price) / priceDiff) * 100));
+  const isGain = pos.pnl_pct >= 0;
 
   return (
-    <div className="chart-container" role="img" aria-label={`Gráfico de preços de ${ticker} — últimos ${prices.length} pregões`}>
-      <div className="chart-header">
-        <div className="chart-ticker-label">{ticker}</div>
-        <div className="chart-stats">
-          <span>Mín: R$ {min.toFixed(2)}</span>
-          <span>Máx: R$ {max.toFixed(2)}</span>
-          <span style={{ color: strokeColor, fontWeight: 700 }}>
-            Último: R$ {prices[prices.length - 1].toFixed(2)}
+    <tr className="pos-row" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
+      <td>
+        <div className="ticker-badge">{pos.ticker}</div>
+      </td>
+      <td>
+        <span className={`side-chip ${pos.side === 'BUY' ? 'long' : 'short'}`}>
+          {pos.side === 'BUY' ? '↑ LONG' : '↓ SHORT'}
+        </span>
+      </td>
+      <td className="mono">R$ {pos.entry_price.toFixed(2)}</td>
+      <td>
+        <div className="mtm-cell">
+          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e' }}>
+            R$ {pos.current_price.toFixed(2)}
           </span>
+          <div className="prog-track">
+            <div className="prog-fill" style={{ width: `${progress}%`, background: isGain ? '#10b981' : '#f43f5e' }} />
+          </div>
         </div>
-      </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="price-chart-svg" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={strokeColor} stopOpacity="0.3" />
-            <stop offset="100%" stopColor={strokeColor} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        {/* Grid horizontal */}
-        {[0.25, 0.5, 0.75].map(f => (
-          <line key={f} x1={PAD} y1={PAD + f * (H - PAD * 2)} x2={W - PAD} y2={PAD + f * (H - PAD * 2)}
-            stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
-        ))}
-        {/* Área preenchida */}
-        <path d={gradientPath} fill={`url(#${gradId})`} />
-        {/* Linha principal */}
-        <polyline points={polyline} fill="none" stroke={strokeColor} strokeWidth="2.5"
-          strokeLinecap="round" strokeLinejoin="round" className="chart-line-animate" />
-        {/* Ponto final pulsante */}
-        <circle cx={points[points.length - 1].x} cy={points[points.length - 1].y}
-          r="4" fill={strokeColor} className="pulse-dot-chart" />
-      </svg>
-    </div>
+      </td>
+      <td className="mono dim">R$ {pos.target.toFixed(2)}</td>
+      <td className="mono dim">R$ {pos.stop.toFixed(2)}</td>
+      <td>
+        <span className={`pnl-chip ${isGain ? 'gain' : 'loss'}`}>
+          {isGain ? '+' : ''}{pos.pnl_pct}%
+        </span>
+      </td>
+      <td>
+        <ChevronRight size={14} color="#8b9bb4" />
+      </td>
+    </tr>
   );
 };
 
-/* ───────────────────────────────────────────────
-   Neural Map — Mapa de Agentes Interativos
-─────────────────────────────────────────────── */
+// ─── Neural Map ───────────────────────────────────────────────────────────────
 const NeuralMap = ({ nodes, edges, onNodeClick }) => {
   const layout = {
-    data: { top: '15%', left: '15%', icon: Globe },
-    db: { top: '40%', left: '35%', icon: Database },
-    quant: { top: '15%', left: '55%', icon: BarChart2 },
-    research: { top: '75%', left: '35%', icon: Cpu },
-    guardrail: { top: '75%', left: '65%', icon: ShieldAlert },
-    broker: { top: '40%', left: '85%', icon: Briefcase }
+    data:      { top: '15%', left: '15%', icon: Globe, color: '#3b82f6' },
+    db:        { top: '40%', left: '35%', icon: Database, color: '#8b5cf6' },
+    quant:     { top: '15%', left: '58%', icon: BarChart2, color: '#00f3ff' },
+    research:  { top: '75%', left: '35%', icon: Cpu, color: '#f59e0b' },
+    guardrail: { top: '75%', left: '65%', icon: ShieldAlert, color: '#f43f5e' },
+    broker:    { top: '40%', left: '85%', icon: Briefcase, color: '#10b981' },
   };
 
   return (
-    <div className="glass-card neural-map-container" role="region" aria-label="Mapa Neural de Agentes">
-      <svg className="edges-svg" aria-hidden="true">
-        {edges.map((edge, idx) => {
-          const src = layout[edge.source];
-          const tgt = layout[edge.target];
-          if (!src || !tgt) return null;
+    <div className="neural-canvas">
+      <svg className="neural-svg">
+        {edges.map((e, i) => {
+          const s = layout[e.source], t = layout[e.target];
+          if (!s || !t) return null;
           return (
-            <line key={idx}
-              x1={src.left} y1={src.top}
-              x2={tgt.left} y2={tgt.top}
-              className={`edge-path ${edge.animated ? 'animated' : ''}`}
+            <line key={i}
+              x1={s.left} y1={s.top} x2={t.left} y2={t.top}
+              className={`neural-edge ${e.animated ? 'live' : ''}`}
             />
           );
         })}
@@ -136,435 +110,466 @@ const NeuralMap = ({ nodes, edges, onNodeClick }) => {
         if (!pos) return null;
         const Icon = pos.icon;
         return (
-          <div key={node.id}
-            className={`node ${node.status === 'active' ? 'active' : ''}`}
-            style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)', cursor: 'pointer' }}
+          <button key={node.id} className={`neural-node ${node.status === 'active' ? 'active' : ''}`}
+            style={{ top: pos.top, left: pos.left, '--node-color': pos.color }}
             onClick={() => onNodeClick(node)}
-            role="button" tabIndex={0} aria-label={`Agente: ${node.label}`}
-            onKeyDown={e => e.key === 'Enter' && onNodeClick(node)}
+            aria-label={node.label}
           >
-            <Icon className="node-icon" />
-            <span className="node-label">{node.label}</span>
-          </div>
+            <div className="neural-ring" />
+            <Icon size={20} />
+            <span className="neural-label">{node.label}</span>
+          </button>
         );
       })}
     </div>
   );
 };
 
-/* ───────────────────────────────────────────────
-   Onboarding Overlay (didático, primeira visita)
-─────────────────────────────────────────────── */
-const OnboardingOverlay = ({ onDismiss }) => (
-  <div className="onboarding-overlay" role="dialog" aria-label="Guia de Introdução">
-    <div className="onboarding-card">
-      <div className="onboarding-icon">🛡️</div>
-      <h2>Bem-vindo ao Meridian Command Center</h2>
-      <p>Este é o painel de controle do seu robô de trading quantitativo na B3.</p>
-      <ul className="onboarding-list">
-        <li><strong>Visão Geral</strong> — Monitore capital, posições e resultados em tempo real</li>
-        <li><strong>Mapa Neural</strong> — Visualize e controle cada agente do ecossistema</li>
-        <li><strong>Terminal IA</strong> — Acompanhe as decisões do comitê de inteligência</li>
-        <li><strong>Emergency Stop</strong> — Liquide tudo com autenticação de segurança</li>
-      </ul>
-      <button className="btn btn-primary onboarding-btn" onClick={onDismiss}>Entendido, vamos lá →</button>
+// ─── History Page ─────────────────────────────────────────────────────────────
+const HistoryPage = ({ tickers }) => {
+  const [selected, setSelected] = useState(tickers?.[0] || 'PETR4');
+  return (
+    <div className="history-page">
+      <div className="history-sidebar">
+        <div className="sidebar-title">Ativos</div>
+        {(tickers?.length ? tickers : ['PETR4', 'VALE3', 'ITUB4', 'BBDC4', 'ABEV3']).map(t => (
+          <button key={t} className={`sidebar-ticker ${selected === t ? 'active' : ''}`}
+            onClick={() => setSelected(t)}>
+            {t}
+          </button>
+        ))}
+      </div>
+      <div className="history-main">
+        <div className="section-header">
+          <h3>{selected}</h3>
+          <span className="muted-tag">Últimos 90 pregões · Fonte: SQLite/ohlcv</span>
+        </div>
+        <div className="glass-panel">
+          <TickerAreaChart ticker={selected} />
+        </div>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
-/* ═══════════════════════════════════════════════
-   APP PRINCIPAL
-═══════════════════════════════════════════════ */
+// ═══════════════════════════════════════════════════════════════════
+// APP PRINCIPAL
+// ═══════════════════════════════════════════════════════════════════
 export default function App() {
-  const [activeTab, setActiveTab] = useState('overview');
-  const [systemStatus, setSystemStatus] = useState(null);
+  const [tab, setTab] = useState('overview');
+  const [status, setStatus] = useState(null);
   const [positions, setPositions] = useState(null);
   const [ecosystem, setEcosystem] = useState(null);
-  
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [nodeDetails, setNodeDetails] = useState(null);
-  const [selectedTicker, setSelectedTicker] = useState(null);
-  
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
-
   const [tapeData, setTapeData] = useState(null);
   const [apiError, setApiError] = useState(null);
-  const [isConnected, setIsConnected] = useState(true);
+  const [connected, setConnected] = useState(true);
 
-  // Onboarding: mostrar somente na primeira visita
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    return !localStorage.getItem('meridian_onboarded');
-  });
+  const [chartModal, setChartModal] = useState(null); // ticker string
+  const [nodePanel, setNodePanel] = useState(null);
+  const [nodeDetails, setNodeDetails] = useState(null);
+  const [showEmergency, setShowEmergency] = useState(false);
+  const [password, setPassword] = useState('');
 
-  const dismissOnboarding = () => {
-    localStorage.setItem('meridian_onboarded', 'true');
-    setShowOnboarding(false);
-  };
-
-  // Terminal mock stream
-  const [terminalLogs, setTerminalLogs] = useState([
-    { time: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida com o cluster.' },
-    { time: new Date().toLocaleTimeString(), sender: 'QUANT', msg: 'Modelos estocásticos carregados na memória.' }
+  const [logs, setLogs] = useState([
+    { t: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida.' },
+    { t: new Date().toLocaleTimeString(), sender: 'QUANT',  msg: 'Parâmetros Donchian carregados.' },
   ]);
-  const terminalRef = useRef(null);
+  const termRef = useRef(null);
 
+  // Terminal stream
   useEffect(() => {
-    const thoughts = [
+    const msgs = [
       { sender: 'PESQUISADOR', msg: 'Analisando fluxo institucional em PETR4...' },
-      { sender: 'GUARD-RAIL', msg: 'Auditoria térmica do motor de risco: OK. Exposição controlada.' },
-      { sender: 'QUANT', msg: 'Calculando bandas de volatilidade implícita (IV) para opções.' },
-      { sender: 'SISTEMA', msg: 'Sincronização de relógio atômico com B3 concluída.' },
-      { sender: 'PESQUISADOR', msg: 'Lendo balanço trimestral. Sentimento geral: Bullish.' },
-      { sender: 'QUANT', msg: 'Ajuste fino de pesos no modelo XGBoost.' },
-      { sender: 'GUARD-RAIL', msg: 'VaR (Value at Risk) atualizado. Nível de alerta verde.' }
+      { sender: 'GUARD-RAIL',  msg: 'Correlação PETR4/VALE3 = 0.61 — dentro do limite.' },
+      { sender: 'QUANT',       msg: 'Sharpe otimizado: 0.87 (regime alta_juros).' },
+      { sender: 'SISTEMA',     msg: 'Sincronização B3 concluída. Latência: 12ms.' },
+      { sender: 'PESQUISADOR', msg: 'Sentimento macroeconômico: neutro com viés de alta.' },
+      { sender: 'GUARD-RAIL',  msg: 'VaR diário: R$ 8.40. Limite: R$ 9.00. ✓' },
+      { sender: 'QUANT',       msg: 'Novo breakout detectado em WEGE3 (volume 2.3x).' },
     ];
-
-    const interval = setInterval(() => {
-      const randomThought = thoughts[Math.floor(Math.random() * thoughts.length)];
-      setTerminalLogs(prev => {
-        const newLogs = [...prev, { time: new Date().toLocaleTimeString(), ...randomThought }];
-        return newLogs.length > 50 ? newLogs.slice(-50) : newLogs;
-      });
-    }, 4500);
-
-    return () => clearInterval(interval);
+    const iv = setInterval(() => {
+      const m = msgs[Math.floor(Math.random() * msgs.length)];
+      setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), ...m }]);
+    }, 4000);
+    return () => clearInterval(iv);
   }, []);
 
   useEffect(() => {
-    if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-  }, [terminalLogs]);
+    if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
+  }, [logs]);
 
-  // Data polling
+  // Data fetch
   useEffect(() => {
-    const fetchData = async () => {
+    const load = async () => {
       try {
-        setApiError(null);
-        const [statRes, posRes, ecoRes, tapeRes] = await Promise.all([
+        const [s, p, e, tp] = await Promise.all([
           axios.get(`${API_BASE}/status`),
           axios.get(`${API_BASE}/positions`),
           axios.get(`${API_BASE}/ecosystem`),
-          axios.get(`${API_BASE}/market_tape`)
+          axios.get(`${API_BASE}/market_tape`),
         ]);
-        if (posRes.data.error_msg) console.warn("Aviso do servidor:", posRes.data.error_msg);
-        setSystemStatus(statRes.data);
-        setPositions(posRes.data);
-        setEcosystem(ecoRes.data);
-        setTapeData(tapeRes.data);
-        setIsConnected(true);
-      } catch (err) {
-        console.error("API falhou:", err);
-        setApiError(err.message || "Erro de conexão com o servidor API.");
-        setIsConnected(false);
+        setStatus(s.data); setPositions(p.data);
+        setEcosystem(e.data); setTapeData(tp.data);
+        setConnected(true); setApiError(null);
+      } catch (e) {
+        setApiError(e.message); setConnected(false);
       }
     };
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+    load();
+    const iv = setInterval(load, 5000);
+    return () => clearInterval(iv);
   }, []);
 
-  const handleNodeClick = async (node) => {
-    setSelectedNode(node);
+  const openNode = async (node) => {
+    setNodePanel(node); setNodeDetails(null);
     try {
-      const res = await axios.get(`${API_BASE}/node/${node.id}`);
-      setNodeDetails(res.data);
-    } catch (e) { console.error(e); }
+      const r = await axios.get(`${API_BASE}/node/${node.id}`);
+      setNodeDetails(r.data);
+    } catch {}
   };
 
-  const handleAction = async (actionType) => {
+  const doEmergencyStop = async () => {
     try {
-      const res = await axios.post(`${API_BASE}/node/${selectedNode.id}/action`, { action: actionType });
-      alert(res.data.msg);
-    } catch (e) { alert("Erro ao disparar ação."); }
+      const r = await axios.post(`${API_BASE}/system/emergency_stop`, { action: 'emergency_stop', password });
+      alert(r.data.error || r.data.msg);
+      if (!r.data.error) { setShowEmergency(false); setPassword(''); }
+    } catch { alert('Erro de conexão.'); }
   };
 
-  const handleEmergencyStop = async () => {
-    try {
-      const res = await axios.post(`${API_BASE}/system/emergency_stop`, { 
-        action: 'emergency_stop', password: passwordInput 
-      });
-      if (res.data.error) {
-        alert(res.data.error);
-      } else {
-        alert(res.data.msg);
-        setShowPasswordModal(false);
-        setPasswordInput('');
-        const posRes = await axios.get(`${API_BASE}/positions`);
-        setPositions(posRes.data);
-      }
-    } catch (e) { alert("Erro ao conectar com API."); }
-  };
-
-  /* ─── TELA DE ERRO DE CONEXÃO ─── */
-  if (apiError) {
+  // ── LOADING ────────────────────────────────────────────────────
+  if (!status || !positions || !ecosystem || !tapeData) {
     return (
-      <div className="error-screen" role="alert">
-        <WifiOff size={48} className="error-icon" />
-        <h2>Conexão Perdida</h2>
-        <p>{apiError}</p>
-        <p className="error-hint">Verifique se o backend FastAPI está rodando na porta 8000.</p>
-        <button className="btn btn-danger" onClick={() => window.location.reload()}>
-          Reconectar
-        </button>
+      <div className="splash">
+        <div className="splash-glow" />
+        <div className="splash-logo">
+          <Activity size={40} color="#00f3ff" />
+          <span>MERIDIAN</span>
+        </div>
+        <div className="splash-bar">
+          <div className="splash-fill" />
+        </div>
+        <p className="splash-sub">{apiError ? `⚠️ ${apiError}` : 'Conectando ao cluster...'}</p>
       </div>
     );
   }
 
-  /* ─── LOADING ─── */
-  if (!systemStatus || !positions || !ecosystem || !tapeData) {
-    return (
-      <div className="loading-screen" role="status" aria-live="polite">
-        <div className="loading-spinner" />
-        <span>Inicializando Meridian Command Center...</span>
-      </div>
-    );
-  }
+  const roi = ((positions.capital.current - positions.capital.initial) / positions.capital.initial * 100).toFixed(2);
+  const roiNum = parseFloat(roi);
+  const tickers = positions.active_positions.map(p => p.ticker);
 
-  const kpis = {
-    roi: ((positions.capital.current - positions.capital.initial) / positions.capital.initial * 100).toFixed(2)
-  };
-
+  // ── RENDER ─────────────────────────────────────────────────────
   return (
-    <div className="dashboard-container">
-      {showOnboarding && <OnboardingOverlay onDismiss={dismissOnboarding} />}
-      
-      {/* ═══ HEADER ═══ */}
-      <header className="header" role="banner">
-        <h1><Activity color="#00f0ff" aria-hidden="true" /> Meridian Command Center</h1>
-        <div className="system-status">
-          <div className="status-badge" aria-label="Status do banco de dados: online">
-            <div className="status-dot" /><span>SQLite DB</span>
-          </div>
-          <div className="status-badge" aria-label="Status do servidor: online">
-            <div className="status-dot" /><span>AWS EC2</span>
-          </div>
-          <div className="status-badge" aria-label="Guard-Rail: ativo">
-            <div className="status-dot" /><span>Guard-Rail</span>
-          </div>
+    <div className="shell">
 
-          {/* Indicador de conexão */}
-          <div className={`conn-indicator ${isConnected ? 'online' : 'offline'}`} aria-live="polite">
-            {isConnected ? <Wifi size={14} /> : <WifiOff size={14} />}
-            <span>{isConnected ? 'LIVE' : 'OFFLINE'}</span>
+      {/* ── SIDEBAR ── */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <Activity size={22} color="#00f3ff" />
+          <span>MERIDIAN</span>
+        </div>
+
+        <nav className="sidebar-nav">
+          {[
+            { id: 'overview',  Icon: BarChart2,  label: 'Visão Geral' },
+            { id: 'history',   Icon: History,    label: 'Histórico' },
+            { id: 'neural',    Icon: Globe,      label: 'Mapa Neural' },
+            { id: 'backtest',  Icon: BookOpen,   label: 'Backtests' },
+          ].map(({ id, Icon, label }) => (
+            <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
+              <Icon size={18} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className={`conn-pill ${connected ? 'up' : 'down'}`}>
+            {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {connected ? 'LIVE' : 'OFFLINE'}
           </div>
-          
-          {/* Emergency Stop */}
-          <button 
-            className="emergency-btn"
-            onClick={() => setShowPasswordModal(true)}
-            aria-label="Acionar parada de emergência"
-          >
-            <ShieldAlert size={16} /> EMERGENCY STOP
+          <button className="icon-btn" title="Configurações"><Settings size={16} /></button>
+          <button className="icon-btn" title="Alertas"><Bell size={16} /></button>
+        </div>
+      </aside>
+
+      {/* ── MAIN ── */}
+      <main className="main-area">
+
+        {/* ── TOPBAR ── */}
+        <header className="topbar">
+          <div className="topbar-tape" aria-label="Fita de mercado">
+            <div className="tape-scroll">
+              {tapeData.tape.map((item, i) => <TapeItem key={i} item={item} />)}
+              {tapeData.tape.map((item, i) => <TapeItem key={`r${i}`} item={item} />)}
+            </div>
+          </div>
+          <button className="emergency-btn" onClick={() => setShowEmergency(true)}>
+            <ShieldAlert size={14} /> STOP
           </button>
-        </div>
-      </header>
+        </header>
 
-      {/* ═══ TICKER TAPE LIVE FEED ═══ */}
-      <div className="ticker-wrap" role="marquee" aria-label="Fita de mercado em tempo real">
-        <div className="ticker-move">
-          {tapeData.tape.map((item, idx) => <TickerTapeItem key={idx} item={item} />)}
-          {tapeData.tape.map((item, idx) => <TickerTapeItem key={`loop-${idx}`} item={item} />)}
-        </div>
-      </div>
+        {/* ── PAGE CONTENT ── */}
+        <div className="page-content">
 
-      {/* ═══ TABS ═══ */}
-      <div className="tabs" role="tablist">
-        <button className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-          onClick={() => setActiveTab('overview')} role="tab" aria-selected={activeTab === 'overview'}>
-          <BarChart2 size={18} aria-hidden="true" /> Visão Geral (Carteira)
-        </button>
-        <button className={`tab-btn ${activeTab === 'neural' ? 'active' : ''}`}
-          onClick={() => setActiveTab('neural')} role="tab" aria-selected={activeTab === 'neural'}>
-          <Globe size={18} aria-hidden="true" /> Mapa Neural Interativo
-        </button>
-      </div>
+          {/* OVERVIEW ─────────────────────────────────────────── */}
+          {tab === 'overview' && (
+            <div className="overview-layout">
 
-      {/* ═══ MAIN CONTENT ═══ */}
-      <div className="main-content">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          
-          {activeTab === 'overview' && (
-            <>
-              {/* KPI CARDS */}
-              <div className="kpi-grid">
-                <div className="kpi-card">
-                  <div className="kpi-title">Capital Inicial</div>
-                  <div className="kpi-value">R$ {positions.capital.initial.toFixed(2)}</div>
-                </div>
-                <div className="kpi-card highlight">
-                  <div className="kpi-title">Patrimônio Atual</div>
-                  <div className="kpi-value" style={{color: '#00f0ff'}}>R$ {positions.capital.current.toFixed(2)}</div>
-                </div>
-                <div className="kpi-card">
-                  <div className="kpi-title">Retorno (ROI)</div>
-                  <div className={`kpi-value ${kpis.roi >= 0 ? 'positive' : 'negative'}`}>
-                    {kpis.roi > 0 ? '+' : ''}{kpis.roi}%
+              {/* KPI ROW */}
+              <div className="kpi-row">
+                <KpiCard
+                  title="Capital Inicial" icon={DollarSign} color="#8b9bb4"
+                  value={`R$ ${positions.capital.initial.toFixed(2)}`}
+                />
+                <KpiCard
+                  title="Patrimônio Atual" icon={DollarSign} color="#00f3ff"
+                  value={`R$ ${positions.capital.current.toFixed(2)}`}
+                  sub={`${roiNum >= 0 ? '+' : ''}${roi}% total`}
+                  trend={roiNum}
+                />
+                <KpiCard
+                  title="ROI" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'}
+                  value={`${roiNum >= 0 ? '+' : ''}${roi}%`}
+                  sub="desde o início"
+                  trend={roiNum}
+                />
+                <KpiCard
+                  title="Posições Abertas" icon={Activity} color="#f59e0b"
+                  value={positions.active_positions.length}
+                  sub={`R$ ${positions.capital.invested?.toFixed(2) || '0.00'} investido`}
+                />
+              </div>
+
+              {/* PORTFOLIO CHART + POSITIONS */}
+              <div className="content-grid">
+
+                {/* Left: Portfolio evolution + table */}
+                <div className="left-col">
+                  <div className="glass-panel">
+                    <div className="panel-header">
+                      <h3>Evolução do Portfólio</h3>
+                      <span className="muted-tag">30 dias · BRL</span>
+                    </div>
+                    <PortfolioChart capital={positions.capital} />
+                  </div>
+
+                  <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                    <div className="panel-header">
+                      <h3>Posições Abertas (MTM)</h3>
+                      <span className="muted-tag">Clique para ver o gráfico</span>
+                    </div>
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Ativo</th><th>Lado</th><th>Entrada</th>
+                            <th>MTM / Progresso</th><th>Alvo</th><th>Stop</th>
+                            <th>PnL</th><th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {positions.active_positions.length === 0 ? (
+                            <tr>
+                              <td colSpan="8" className="empty-state">
+                                🛡️ Nenhuma posição aberta — capital protegido
+                              </td>
+                            </tr>
+                          ) : (
+                            positions.active_positions.map((p, i) => (
+                              <PositionRow key={i} pos={p} onClick={() => setChartModal(p.ticker)} />
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 </div>
-                <div className="kpi-card">
-                  <div className="kpi-title">Posições Abertas</div>
-                  <div className="kpi-value">{positions.active_positions.length}</div>
+
+                {/* Right: Terminal IA */}
+                <div className="right-col">
+                  <div className="glass-panel terminal-panel">
+                    <div className="panel-header">
+                      <h3><Terminal size={16} /> Comitê de IA</h3>
+                      <span className="live-badge">● LIVE</span>
+                    </div>
+                    <div className="terminal-feed" ref={termRef}>
+                      {logs.map((l, i) => (
+                        <div key={i} className="log-line">
+                          <span className="log-time">{l.t}</span>
+                          <span className={`log-sender sender-${l.sender.toLowerCase().replace('-','')}`}>
+                            {l.sender}
+                          </span>
+                          <span className="log-msg">{l.msg}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
-
-              {/* TABELA DE POSIÇÕES */}
-              <div className="glass-card">
-                <h2 className="card-title" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
-                  Carteira de Operações (MTM)
-                  <span style={{fontSize: '0.8rem', color: '#8b9bb4', fontWeight: 'normal'}}>Clique em uma linha para abrir o Gráfico Dinâmico</span>
-                </h2>
-                <table role="grid" aria-label="Posições abertas da carteira">
-                  <thead>
-                    <tr><th>Ativo</th><th>Lado</th><th>Entrada</th><th>MTM</th><th>Alvo</th><th>Stop</th><th>Resultado</th></tr>
-                  </thead>
-                  <tbody>
-                    {positions.active_positions.length === 0 ? (
-                      <tr>
-                        <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                          Nenhuma posição aberta. Capital protegido. 🛡️
-                        </td>
-                      </tr>
-                    ) : (
-                      positions.active_positions.map((pos, i) => {
-                        const priceDiff = pos.target - pos.entry_price;
-                        const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, ((pos.current_price - pos.entry_price) / priceDiff) * 100));
-                        return (
-                          <tr key={i} onClick={() => setSelectedTicker(pos.ticker)}
-                            className="table-row-hover" style={{ cursor: 'pointer' }}
-                            role="row" tabIndex={0}
-                            onKeyDown={e => e.key === 'Enter' && setSelectedTicker(pos.ticker)}
-                            aria-label={`${pos.ticker}: ${pos.pnl_pct >= 0 ? 'lucro' : 'prejuízo'} de ${pos.pnl_pct}%`}
-                          >
-                            <td className="ticker-cell">{pos.ticker}</td>
-                            <td><span className={`side-badge ${pos.side === 'BUY' ? 'buy' : 'sell'}`}>{pos.side}</span></td>
-                            <td>R$ {pos.entry_price.toFixed(2)}</td>
-                            <td>
-                              R$ {pos.current_price.toFixed(2)}
-                              <div className="progress-container"><div className="progress-fill" style={{width: `${progress}%`}} /></div>
-                            </td>
-                            <td>R$ {pos.target.toFixed(2)}</td>
-                            <td>R$ {pos.stop.toFixed(2)}</td>
-                            <td className={pos.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                              {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct}%
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </>
+            </div>
           )}
 
-          {activeTab === 'neural' && (
-            <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={handleNodeClick} />
-          )}
-        </div>
-
-        {/* ═══ TERMINAL IA ═══ */}
-        <div className="glass-card" style={{ padding: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-light)' }}>
-            <h2 className="card-title" style={{ marginBottom: 0 }}>
-              <Terminal size={18} aria-hidden="true" /> O que a IA está pensando?
-            </h2>
-          </div>
-          <div className="terminal" ref={terminalRef} role="log" aria-live="polite" aria-label="Feed de pensamentos da IA">
-            {terminalLogs.map((log, i) => (
-              <div key={i} className="terminal-line">
-                <span className="term-time">[{log.time}]</span>
-                <span className="term-sender" style={{
-                  color: log.sender === 'QUANT' ? '#00f3ff' 
-                       : log.sender === 'GUARD-RAIL' ? '#f43f5e' 
-                       : log.sender === 'PESQUISADOR' ? '#a3ff00' 
-                       : '#8b9bb4'
-                }}>&lt;{log.sender}&gt;</span>
-                <span className="term-msg">{log.msg}</span>
+          {/* HISTORY ──────────────────────────────────────────── */}
+          {tab === 'history' && (
+            <div className="page-section">
+              <div className="page-title">
+                <History size={22} />
+                <div>
+                  <h2>Histórico de Preços</h2>
+                  <p>Dados reais da tabela <code>ohlcv</code> · SQLite</p>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      </div>
+              <HistoryPage tickers={tickers.length ? tickers : ['PETR4', 'VALE3', 'ITUB4']} />
+            </div>
+          )}
 
-      {/* ═══ MODAL: GRÁFICO DINÂMICO POR TICKER ═══ */}
-      {selectedTicker && (
-        <div className="modal-overlay" onClick={() => setSelectedTicker(null)}
-          role="dialog" aria-modal="true" aria-label={`Gráfico de ${selectedTicker}`}>
-          <div className="modal-content chart-modal" onClick={e => e.stopPropagation()}>
-            <h3 className="chart-modal-header">
-              <span>📈 Evolução em Tempo Real: <strong>{selectedTicker}</strong></span>
-              <button className="btn-close-x" onClick={() => setSelectedTicker(null)} aria-label="Fechar gráfico">
-                <X size={20} />
-              </button>
-            </h3>
-            <DynamicTickerChart ticker={selectedTicker} />
+          {/* NEURAL MAP ───────────────────────────────────────── */}
+          {tab === 'neural' && (
+            <div className="page-section">
+              <div className="page-title">
+                <Globe size={22} />
+                <div>
+                  <h2>Mapa Neural do Ecossistema</h2>
+                  <p>Agentes ativos e fluxo de dados em tempo real</p>
+                </div>
+              </div>
+              <div className="glass-panel" style={{ flex: 1, minHeight: 500 }}>
+                <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={openNode} />
+              </div>
+            </div>
+          )}
+
+          {/* BACKTEST ─────────────────────────────────────────── */}
+          {tab === 'backtest' && (
+            <div className="page-section">
+              <div className="page-title">
+                <BookOpen size={22} />
+                <div>
+                  <h2>Relatório de Backtests</h2>
+                  <p>Resultados dos 3 regimes de mercado · Donchian Breakout 20d</p>
+                </div>
+              </div>
+              <div className="backtest-grid">
+                {[
+                  { name: 'Crise/Volatilidade', period: 'Mar–Set 2020', sharpe: 0.41, wr: '38%', trades: 47, color: '#f59e0b' },
+                  { name: 'Alta de Juros (Selic)',   period: 'Jun 2021–Dez 2022', sharpe: 0.33, wr: '37%', trades: 112, color: '#f43f5e' },
+                  { name: 'Recuperação Lateral', period: 'Jan 2023–Jun 2024', sharpe: 0.89, wr: '41%', trades: 89, color: '#10b981' },
+                ].map((r, i) => (
+                  <div key={i} className="backtest-card" style={{ '--accent': r.color }}>
+                    <div className="bt-header">
+                      <h3>{r.name}</h3>
+                      <span className="bt-period">{r.period}</span>
+                    </div>
+                    <div className="bt-metrics">
+                      <div className="bt-metric">
+                        <span className="bt-label">Sharpe</span>
+                        <span className="bt-value" style={{ color: r.color }}>{r.sharpe}</span>
+                      </div>
+                      <div className="bt-metric">
+                        <span className="bt-label">Win Rate</span>
+                        <span className="bt-value">{r.wr}</span>
+                      </div>
+                      <div className="bt-metric">
+                        <span className="bt-label">Trades</span>
+                        <span className="bt-value">{r.trades}</span>
+                      </div>
+                    </div>
+                    <div className="bt-bar-wrap">
+                      <div className="bt-bar" style={{ width: `${Math.min(100, r.sharpe / 1.5 * 100)}%`, background: r.color }} />
+                    </div>
+                    <div className="bt-gate">
+                      Gate Sharpe ≥ 0.25 · {r.sharpe >= 0.25 ? '✅ Passou' : '❌ Falhou'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+        </div>
+      </main>
+
+      {/* ── MODAL: CHART ── */}
+      {chartModal && (
+        <div className="overlay" onClick={() => setChartModal(null)}>
+          <div className="modal-box chart-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-head">
+              <h3>📈 {chartModal} · Preços Históricos (90d)</h3>
+              <button className="close-btn" onClick={() => setChartModal(null)}><X size={18} /></button>
+            </div>
+            <TickerAreaChart ticker={chartModal} />
           </div>
         </div>
       )}
 
-      {/* ═══ SIDE PANEL ═══ */}
-      <div className={`side-panel ${selectedNode ? 'open' : ''}`} role="complementary" aria-label="Detalhes do agente">
-        {selectedNode && (
+      {/* ── SIDE PANEL: NEURAL NODE ── */}
+      <div className={`side-drawer ${nodePanel ? 'open' : ''}`}>
+        {nodePanel && (
           <>
-            <button className="side-panel-close" onClick={() => setSelectedNode(null)} aria-label="Fechar painel">
-              <X size={24} />
-            </button>
-            <h2 style={{ fontSize: '1.5rem', color: '#fff', marginTop: '1rem' }}>{selectedNode.label}</h2>
-            
+            <div className="drawer-head">
+              <h3>{nodePanel.label}</h3>
+              <button className="close-btn" onClick={() => setNodePanel(null)}><X size={18} /></button>
+            </div>
             {nodeDetails ? (
-              <>
-                <div>
-                  <div className="panel-section-title">Função no Ecossistema</div>
-                  <div className="panel-box">{nodeDetails.role}</div>
+              <div className="drawer-body">
+                <div className="detail-block">
+                  <span className="detail-label">Função</span>
+                  <span className="detail-val">{nodeDetails.role}</span>
                 </div>
-                <div>
-                  <div className="panel-section-title">Agenda / Próxima Ação</div>
-                  <div className="panel-box" style={{ color: 'var(--accent-cyan)' }}>{nodeDetails.next_run}</div>
+                <div className="detail-block">
+                  <span className="detail-label">Próxima Ação</span>
+                  <span className="detail-val accent">{nodeDetails.next_run}</span>
                 </div>
-                <div>
-                  <div className="panel-section-title">Últimos Registros (Logs)</div>
-                  <div className="panel-box">
-                    {nodeDetails.logs.map((l, idx) => <div key={idx} style={{ marginBottom: '0.5rem' }}>• {l}</div>)}
+                <div className="detail-block">
+                  <span className="detail-label">Logs Recentes</span>
+                  <div className="log-box">
+                    {nodeDetails.logs.map((l, i) => <div key={i}>· {l}</div>)}
                   </div>
                 </div>
-
-                <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <button className="btn btn-primary" onClick={() => handleAction('run_now')}>
-                    ▶ Forçar Execução Imediata
-                  </button>
-                </div>
-              </>
+                <button className="run-btn" onClick={async () => {
+                  try {
+                    const r = await axios.post(`${API_BASE}/node/${nodePanel.id}/action`, { action: 'run_now' });
+                    alert(r.data.msg);
+                  } catch { alert('Erro.'); }
+                }}>
+                  ▶ Forçar Execução
+                </button>
+              </div>
             ) : (
-              <div style={{ color: 'var(--text-muted)' }}>Carregando ficha médica...</div>
+              <div style={{ padding: '2rem', color: '#8b9bb4' }}>Carregando...</div>
             )}
           </>
         )}
       </div>
 
-      {/* ═══ MODAL: EMERGENCY STOP (AUTENTICAÇÃO) ═══ */}
-      {showPasswordModal && (
-        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Autenticação de emergência">
-          <div className="modal-content emergency-modal">
-            <div className="emergency-header">
-              <ShieldAlert size={32} color="#f43f5e" />
-              <h3>Autenticação Necessária</h3>
+      {/* ── MODAL: EMERGENCY STOP ── */}
+      {showEmergency && (
+        <div className="overlay">
+          <div className="modal-box emergency-box">
+            <div className="modal-head danger-head">
+              <ShieldAlert size={24} color="#f43f5e" />
+              <h3>Emergency Stop</h3>
             </div>
-            <p className="emergency-warning">
-              Esta ação travará a corretora e liquidará todas as posições <strong>IMEDIATAMENTE</strong>. 
-              Insira a senha de CEO para confirmar o Circuit Breaker.
+            <p className="danger-warn">
+              Liquida <strong>todas</strong> as posições imediatamente e bloqueia novas ordens.
+              Esta ação é <strong>irreversível</strong>.
             </p>
-            <input 
-              type="password" 
-              placeholder="Digite a senha..." 
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleEmergencyStop()}
+            <input
+              type="password"
+              placeholder="Senha de CEO..."
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && doEmergencyStop()}
+              className="password-input"
               autoFocus
-              aria-label="Senha de emergência"
             />
             <div className="modal-actions">
-              <button className="btn btn-cancel" onClick={() => setShowPasswordModal(false)}>Cancelar</button>
-              <button className="btn btn-danger" onClick={handleEmergencyStop}>🔴 Confirmar Liquidação</button>
+              <button className="btn-cancel" onClick={() => { setShowEmergency(false); setPassword(''); }}>
+                Cancelar
+              </button>
+              <button className="btn-danger" onClick={doEmergencyStop}>
+                🔴 Confirmar Liquidação
+              </button>
             </div>
           </div>
         </div>
