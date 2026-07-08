@@ -106,7 +106,7 @@ def _trade_sharpe(trades: list[Trade], regime_days: int) -> float:
     if std_r == 0:
         return 0.0
     # Annualização: trades por ano
-    years = max(regime_days / 365.25, 0.01) # Correção: regime_days está em dias de calendário
+    years = max(regime_days / TRADING_DAYS_PER_YEAR, 0.01)
     trades_per_year = len(trades) / years
     # Retorno risk-free por trade (convertido de anual para "por trade")
     rf_per_trade = RISK_FREE_RATE_ANNUAL / trades_per_year
@@ -221,7 +221,7 @@ def compute_regime_metrics(result: BacktestResult, min_sharpe: float = 0.5) -> R
     else:
         total_ret = 0.0
 
-    years = max(regime_days / 365.25, 0.01) # Correção: regime_days está em dias de calendário
+    years = max(regime_days / TRADING_DAYS_PER_YEAR, 0.01)
     ann_ret = (1 + total_ret) ** (1 / years) - 1 if total_ret > -1 else -1.0
 
     max_dd, max_dd_dur = _max_drawdown(equity)
