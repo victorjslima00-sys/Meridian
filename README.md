@@ -1,12 +1,20 @@
-# Meridian
+<div align="center">
+  <img src="assets/meridian_banner.jpg" alt="Meridian Banner" width="100%">
+  
+  <h1>🌌 Meridian Trading Bot</h1>
+  <p><strong>Inteligência Quantitativa Autônoma para a B3</strong></p>
 
-> **Status**: Em operação — Fase 6 (Comitê Multi-Agentes)  
-> **Mercado**: B3 (ações brasileiras) | **Timeframe**: Candle diário  
-> **Stack**: Python 3.11+ · SQLite · AWS (EC2/Terraform) · Agentes LLM
+  <p>
+    <img src="https://img.shields.io/badge/Status-Fase%206%20(Comit%C3%AA%20Multi--Agentes)-success" alt="Status">
+    <img src="https://img.shields.io/badge/Mercado-B3%20(A%C3%A7%C3%B5es)-blue" alt="Mercado">
+    <img src="https://img.shields.io/badge/Stack-Python%20%7C%20AWS%20%7C%20SQLite-lightgrey" alt="Stack">
+    <img src="https://img.shields.io/badge/Modo-100%25%20Aut%C3%B4nomo-blueviolet" alt="Autonomia">
+  </p>
+</div>
 
 ---
 
-## Instalação
+## ⚡ Instalação Rápida
 
 ```bash
 cd trading-bot
