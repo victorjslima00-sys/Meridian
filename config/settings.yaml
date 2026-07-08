@@ -26,8 +26,12 @@ data:
     retry_max_attempts: 3
     retry_backoff_seconds: 2.0
 
-  # Storage local
-  db_path: "data/trading_bot.db"
+  # Storage local e distribuído
+  storage:
+    engine: "sqlite"         # Mudar para 'tidb' quando em produção
+    sqlite_path: "data/trading_bot.db"
+    tidb_url: "${TIDB_URI}"
+    redis_url: "${REDIS_URI}"
   cache_days: 5              # Re-usa cache para dados mais recentes que N dias
 
 # ----------------------------------------------------------

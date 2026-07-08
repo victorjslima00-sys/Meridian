@@ -40,3 +40,33 @@ services:
       - ./frontend:/app
     depends_on:
       - api
+
+  # Container 4: Persistência L2 (Redis Cache)
+  redis:
+    image: redis:7-alpine
+    container_name: meridian_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Container 5: Persistência Principal (TiDB - Compatível com MySQL)
+  tidb:
+    image: pingcap/tidb:v7.1.0
+    container_name: meridian_tidb
+    ports:
+      - "4000:4000"
+      - "10080:10080"
+    restart: unless-stopped
+    command: >
+      --store=mocktikv
+      --log-file=
+    healthcheck:
+      test: ["CMD", "mysql", "-h", "127.0.0.1", "-P", "4000", "-u", "root", "-e", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
