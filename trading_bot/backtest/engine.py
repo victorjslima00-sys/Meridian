@@ -174,6 +174,7 @@ def run_regime_backtest(
             if row.empty:
                 continue
 
+            open_price = float(row["o"].iloc[0])
             low  = float(row["l"].iloc[0])
             high = float(row["h"].iloc[0])
             close = float(row["c"].iloc[0])
@@ -181,7 +182,16 @@ def run_regime_backtest(
             exit_price = None
             exit_reason = None
 
-            if low <= pos.stop:
+            # 1. Se a abertura já violar o Stop, liquidado no preço de abertura (gap down)
+            if open_price <= pos.stop:
+                exit_price = open_price
+                exit_reason = "stop_gap"
+            # 2. Se a abertura já violar o Alvo, realiza lucro na abertura (gap up)
+            elif open_price >= pos.target:
+                exit_price = open_price
+                exit_reason = "target_gap"
+            # 3. Fluxo normal intra-day
+            elif low <= pos.stop:
                 exit_price = pos.stop
                 exit_reason = "stop"
             elif high >= pos.target:

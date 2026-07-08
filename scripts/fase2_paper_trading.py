@@ -60,7 +60,15 @@ def main():
         return
 
     # Inicia filtros de Risco
-    cb = CircuitBreaker(cfg)
+    daily_limit = risk_cfg.get("circuit_breaker", {}).get("daily_loss_limit", 0.03)
+    drawdown_inc = risk_cfg.get("circuit_breaker", {}).get("drawdown_inception", 0.08)
+    drawdown_30d = risk_cfg.get("circuit_breaker", {}).get("drawdown_rolling_30d", 0.06)
+
+    cb = CircuitBreaker(
+        daily_loss_limit=daily_limit,
+        drawdown_inception=drawdown_inc,
+        drawdown_rolling_30d=drawdown_30d
+    )
     if not cb.can_trade(hoje):
         print("⚠️ Circuit Breaker Ativado. Trading suspenso.")
         return

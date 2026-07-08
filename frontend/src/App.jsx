@@ -70,6 +70,26 @@ export default function App() {
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
 
+  const [tapeData, setTapeData] = useState(null);
+
+  const DynamicMiniChart = ({ prices }) => {
+    if (!prices || prices.length < 2) return <p className="text-gray-500">Dados insuficientes</p>;
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const range = max - min === 0 ? 1 : max - min;
+    const points = prices.map((p, index) => {
+      const x = (index / (prices.length - 1)) * 300;
+      const y = 100 - ((p - min) / range) * 80; // normaliza em grid de 300x100
+      return `${x},${y}`;
+    }).join(' ');
+
+    return (
+      <svg viewBox="0 0 300 100" className="w-full h-32 stroke-cyan-400 fill-none" style={{strokeWidth: 2}}>
+        <polyline points={points} />
+      </svg>
+    );
+  };
+
   // Terminal mock stream
   const [terminalLogs, setTerminalLogs] = useState([
     { time: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida com o cluster AWS.' },
@@ -111,14 +131,16 @@ export default function App() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [statRes, posRes, ecoRes] = await Promise.all([
+        const [statRes, posRes, ecoRes, tapeRes] = await Promise.all([
           axios.get(`${API_BASE}/status`),
           axios.get(`${API_BASE}/positions`),
-          axios.get(`${API_BASE}/ecosystem`)
+          axios.get(`${API_BASE}/ecosystem`),
+          axios.get(`${API_BASE}/market_tape`)
         ]);
         setSystemStatus(statRes.data);
         setPositions(posRes.data);
         setEcosystem(ecoRes.data);
+        setTapeData(tapeRes.data);
       } catch (err) {
         console.error("API falhou:", err);
       }
@@ -167,7 +189,7 @@ export default function App() {
     }
   };
 
-  if (!systemStatus || !positions || !ecosystem) {
+  if (!systemStatus || !positions || !ecosystem || !tapeData) {
     return <div className="loading" style={{display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', color: '#00f3ff', fontSize: '1.5rem', textShadow: '0 0 10px #00f3ff'}}>Inicializando Matriz Meridian...</div>;
   }
 
@@ -208,24 +230,12 @@ export default function App() {
       {/* TICKER TAPE LIVE FEED */}
       <div className="ticker-wrap">
         <div className="ticker-move">
-          <div className="ticker-item">PETR4 ▲ 39.27 (+2.1%)</div>
-          <div className="ticker-item">VALE3 ▼ 61.12 (-0.5%)</div>
-          <div className="ticker-item">ITUB4 ▲ 34.78 (+1.2%)</div>
-          <div className="ticker-item">BBDC4 ▲ 13.40 (+0.8%)</div>
-          <div className="ticker-item">WEGE3 ▲ 51.00 (+2.0%)</div>
-          <div className="ticker-item">ELET3 ▼ 36.50 (-1.1%)</div>
-          <div className="ticker-item">RENT3 ▲ 45.20 (+1.5%)</div>
-          <div className="ticker-item">RADL3 ▲ 27.80 (+0.4%)</div>
-          
-          {/* Repeat for seamless loop */}
-          <div className="ticker-item">PETR4 ▲ 39.27 (+2.1%)</div>
-          <div className="ticker-item">VALE3 ▼ 61.12 (-0.5%)</div>
-          <div className="ticker-item">ITUB4 ▲ 34.78 (+1.2%)</div>
-          <div className="ticker-item">BBDC4 ▲ 13.40 (+0.8%)</div>
-          <div className="ticker-item">WEGE3 ▲ 51.00 (+2.0%)</div>
-          <div className="ticker-item">ELET3 ▼ 36.50 (-1.1%)</div>
-          <div className="ticker-item">RENT3 ▲ 45.20 (+1.5%)</div>
-          <div className="ticker-item">RADL3 ▲ 27.80 (+0.4%)</div>
+          {tapeData.tape.map((item, idx) => (
+            <div key={idx} className="ticker-item">{item}</div>
+          ))}
+          {tapeData.tape.map((item, idx) => (
+            <div key={`loop-${idx}`} className="ticker-item">{item}</div>
+          ))}
         </div>
       </div>
 
@@ -337,16 +347,8 @@ export default function App() {
               <span>Evolução em Tempo Real: {selectedTicker}</span>
               <button className="btn-close" onClick={() => setSelectedTicker(null)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </h3>
-            <div className="tradingview-widget-container" style={{ height: '450px', width: '100%' }}>
-              <iframe 
-                  src={`https://s.tradingview.com/widgetembed/?symbol=BMFBOVESPA%3A${selectedTicker}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=%5B%5D&theme=dark&style=1&timezone=America%2FSao_Paulo`}
-                  width="100%" 
-                  height="100%" 
-                  frameBorder="0" 
-                  allowTransparency="true" 
-                  scrolling="no" 
-                  allowFullScreen>
-              </iframe>
+            <div style={{ height: '300px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <DynamicMiniChart prices={tapeData.chart_prices} />
             </div>
           </div>
         </div>

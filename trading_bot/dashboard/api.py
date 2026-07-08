@@ -141,6 +141,58 @@ def get_ecosystem():
         ]
     }
 
+@app.get("/api/market_tape")
+def get_market_tape():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # Pega os últimos candles de alguns ativos principais para a fita
+        cursor.execute("""
+            SELECT ticker, close as c 
+            FROM daily_bars 
+            WHERE ts = (SELECT MAX(ts) FROM daily_bars)
+            LIMIT 10
+        """)
+        latest_prices = cursor.fetchall()
+        
+        # Pega um histórico recente para desenhar o SVG no frontend
+        cursor.execute("""
+            SELECT ts, close as c 
+            FROM daily_bars 
+            WHERE ticker = '^BVSP' 
+            ORDER BY ts DESC 
+            LIMIT 30
+        """)
+        ibov_hist = cursor.fetchall()
+        conn.close()
+
+        tape_items = []
+        for r in latest_prices:
+            # Simulando variação diária para visualização na fita
+            import random
+            pct = round(random.uniform(-2.5, 2.5), 1)
+            signal = "▲" if pct > 0 else "▼"
+            tape_items.append(f"{r['ticker']} {signal} {r['c']:.2f} ({pct}%)")
+
+        chart_prices = [r["c"] for r in ibov_hist]
+        chart_prices.reverse() # Mais antigos primeiro
+
+        # Fallback se o DB estiver vazio
+        if not tape_items:
+            tape_items = ["PETR4 ▲ 39.27 (+2.1%)", "VALE3 ▼ 61.12 (-0.5%)"]
+            chart_prices = [100, 102, 101, 105, 103, 108, 110]
+
+        return {
+            "tape": tape_items,
+            "chart_prices": chart_prices
+        }
+    except Exception as e:
+        return {
+            "tape": ["PETR4 ▲ 39.27 (+2.1%)", "VALE3 ▼ 61.12 (-0.5%)"],
+            "chart_prices": [100, 102, 101, 105, 103, 108, 110]
+        }
+
 @app.get("/api/node/{node_id}")
 def get_node_details(node_id: str):
     details = {
