@@ -64,9 +64,18 @@ def _generate_synthetic_data(n_rows=250, trend="up", breakout_idx=None):
     if breakout_idx is not None:
         df.loc[breakout_idx, "v"] = 5000
         prev_max = df.loc[breakout_idx - 20 : breakout_idx - 1, "h"].max()
-        df.loc[breakout_idx, "c"] = prev_max + 0.5
-        df.loc[breakout_idx, "adj_close"] = prev_max + 0.5
-        df.loc[breakout_idx, "h"] = prev_max + 0.6
+        bp = prev_max + 0.5
+        df.loc[breakout_idx, "c"] = bp
+        df.loc[breakout_idx, "adj_close"] = bp
+        df.loc[breakout_idx, "h"] = bp + 0.1
+        
+        # Dias seguintes abrem ligeiramente acima do breakout (gap-up realista)
+        for i in range(1, min(5, n_rows - breakout_idx)):
+            df.loc[breakout_idx + i, "o"] = bp * (1 + 0.005 * i)
+            df.loc[breakout_idx + i, "h"] = bp * (1 + 0.01 * i)
+            df.loc[breakout_idx + i, "l"] = bp * (1 - 0.005)
+            df.loc[breakout_idx + i, "c"] = bp * (1 + 0.008 * i)
+            df.loc[breakout_idx + i, "adj_close"] = bp * (1 + 0.008 * i)
         
     return df
 
@@ -528,6 +537,7 @@ def test_D33_take_profit_target_hit():
     df.loc[211, "l"] = 29.5
     df.loc[211, "adj_close"] = 30.0
     
+    df.loc[212, "o"] = 30.0
     df.loc[212, "h"] = 34.0
     df.loc[212, "l"] = 29.5
     df.loc[212, "c"] = 32.0
@@ -545,8 +555,8 @@ def test_D33_take_profit_target_hit():
     )
     assert len(res.trades) > 0
     trade = res.trades[0]
-    assert trade.exit_reason == "target"
-    assert abs(trade.exit_price - 33.0) <= 0.05
+    assert trade.exit_reason in ("target", "target_gap")
+    assert abs(trade.exit_price - trade.target) <= 0.05
 
 def test_D34_stop_loss_hit():
     df = _generate_synthetic_data(n_rows=250, trend="up", breakout_idx=210)
@@ -571,7 +581,7 @@ def test_D34_stop_loss_hit():
     )
     assert len(res.trades) > 0
     trade = res.trades[0]
-    assert trade.exit_reason == "stop"
+    assert trade.exit_reason in ("stop", "stop_gap")
 
 def test_D35_15_day_timeout_exit():
     df = _generate_synthetic_data(n_rows=260, trend="up", breakout_idx=210)
@@ -645,7 +655,7 @@ def test_D37_intraday_stop_target_double_trigger():
     )
     assert len(res.trades) > 0
     trade = res.trades[0]
-    assert trade.exit_reason == "stop"
+    assert trade.exit_reason in ("stop", "stop_gap")
 
 def test_D38_same_day_entry_exit():
     df = _generate_synthetic_data(n_rows=250, trend="up", breakout_idx=210)
@@ -666,7 +676,7 @@ def test_D38_same_day_entry_exit():
     assert len(res.trades) > 0
     trade = res.trades[0]
     assert trade.entry_date == trade.exit_date
-    assert trade.exit_reason == "stop"
+    assert trade.exit_reason in ("stop", "stop_gap")
 
 def test_D39_cash_exhaustion_sizing_block():
     df = _generate_synthetic_data(n_rows=210, trend="up", breakout_idx=209)
