@@ -1,7 +1,12 @@
 name: Deploy Meridian Bot to AWS
 
+# Só roda depois que o workflow "CI" terminar com sucesso no branch main.
+# Isso garante que código quebrado nunca chega ao servidor.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
     branches:
       - main
 
@@ -10,6 +15,8 @@ permissions:
 
 jobs:
   deploy:
+    # Condição extra: só executa se o CI passou (não só terminou)
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
