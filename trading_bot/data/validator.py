@@ -97,13 +97,13 @@ def validate_ohlcv(df: pd.DataFrame, ticker: str) -> ValidationReport:
     # Check 2: Volume zero
     # --------------------------------------------------------
     if "v" in df.columns:
-        zero_vol = df[df["v"] == 0]
-        for _, row in zero_vol.iterrows():
+        zero_vol_dates = df.loc[df["v"] == 0, "ts"].tolist()
+        for d in zero_vol_dates:
             report.issues.append(ValidationIssue(
                 ticker=ticker,
-                date=row["ts"],
+                date=d,
                 issue_type="zero_volume",
-                description=f"Volume zero em {row['ts']} — possível dado inválido",
+                description=f"Volume zero em {d} — possível dado inválido",
                 severity="warning",
             ))
 

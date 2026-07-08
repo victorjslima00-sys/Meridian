@@ -15,10 +15,10 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 from trading_bot.signals.engine import compute_signal, Candidate, get_ibov_data, ibov_in_uptrend
+from trading_bot.risk.position_sizing import calculate_position_size
 
 logger = logging.getLogger(__name__)
 
@@ -234,8 +234,8 @@ def run_regime_backtest(
                     c = compute_signal(df_hist, ticker, **signal_params)
                     if c:
                         candidates.append(c)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("[%s] Erro no compute_signal: %s", ticker, e)
 
             candidates.sort(key=lambda c: c.score, reverse=True)
 
@@ -252,8 +252,6 @@ def run_regime_backtest(
                 low = float(today_row["l"].iloc[0])
                 high = float(today_row["h"].iloc[0])
 
-                from trading_bot.risk.position_sizing import calculate_position_size
-                
                 capital_invested = sum(p.capital for p in open_positions.values())
                 pos_size = calculate_position_size(
                     capital_cash=capital_cash,

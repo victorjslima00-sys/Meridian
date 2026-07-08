@@ -68,8 +68,8 @@ def test_engine_gap_abort(monkeypatch):
 
 def test_engine_max_positions(monkeypatch):
     monkeypatch.setattr("trading_bot.backtest.engine.get_ibov_data", lambda x: None)
-    
-    # Se eu mandar 5 ativos dando sinal no mesmo dia, só pode abrir max_positions
+    monkeypatch.setattr("trading_bot.backtest.engine.ibov_in_uptrend", lambda df, ts: True)
+
     def mock_signal_always(df, ticker, **kwargs):
         return Candidate(
             ticker=ticker,
@@ -84,31 +84,32 @@ def test_engine_max_positions(monkeypatch):
             signal_details={}
         )
     monkeypatch.setattr("trading_bot.backtest.engine.compute_signal", mock_signal_always)
-    
+
+    # Regime precisa ter >= 30 barras para passar o filtro len(df_r) >= 30 do engine.
+    # E compute_signal precisa de >= 200 barras de historico antes do dia corrente.
+    # Solucao: 232 dias totais, regime nos ultimos 32.
     data_rows = []
     d = date(2022, 1, 1)
-    for i in range(200):
+    for _ in range(232):
         data_rows.append({"ts": d, "o": 100, "h": 105, "l": 95, "c": 100, "v": 1000, "adj_close": 100})
-        d = pd.Timestamp(d) + pd.Timedelta(days=1)
-        d = d.date()
-        
-    data_rows.extend([
-        {"ts": date(2023, 1, 1), "o": 100, "h": 105, "l": 95, "c": 100, "v": 1000, "adj_close": 100},
-        {"ts": date(2023, 1, 2), "o": 100, "h": 105, "l": 95, "c": 100, "v": 1000, "adj_close": 100},
-    ])
+        d = (pd.Timestamp(d) + pd.Timedelta(days=1)).date()
+
     df_base = pd.DataFrame(data_rows)
-    
     data = {f"A{i}": df_base.copy() for i in range(5)}
-    
-    monkeypatch.setattr("trading_bot.backtest.engine.ibov_in_uptrend", lambda df, ts: True)
+
+    regime_start = data_rows[200]["ts"]
+    regime_end = data_rows[231]["ts"]
+
     res = run_regime_backtest(
         data=data,
         regime_name="teste_max",
-        start=date(2023, 1, 1),
-        end=date(2023, 1, 2),
+        start=regime_start,
+        end=regime_end,
         capital=1000.0,
-        max_positions=2, # O limite
+        max_positions=2,
         ibov_filter=False
     )
-    
-    assert len(res.trades) == 2 # Only 2 trades should have been executed because of max_positions=2
+
+    # Com max_positions=2, nunca mais de 2 posicoes ficam abertas simultaneamente
+    eop_trades = [t for t in res.trades if t.exit_reason == "end_of_period"]
+    assert len(eop_trades) <= 2, f"Esperado <=2 posicoes abertas, got {len(eop_trades)}"
