@@ -145,17 +145,12 @@ class MockCedroClient:
         self.order_calls.append(call_info)
         return {"status": "executed", "order_id": "mock_order_123"}
 
-# Register mock modules dynamically in sys.modules
-if "trading_bot.core.telegram" not in sys.modules:
-    telegram_mod = ModuleType("trading_bot.core.telegram")
-    telegram_mod.TelegramClient = MockTelegramClient
-    sys.modules["trading_bot.core.telegram"] = telegram_mod
+import trading_bot.core.telegram
+trading_bot.core.telegram.TelegramClient = MockTelegramClient
 
-if "trading_bot.broker.cedro" not in sys.modules:
-    cedro_mod = ModuleType("trading_bot.broker.cedro")
-    cedro_mod.CedroClient = MockCedroClient
-    cedro_mod.Cedro = MockCedroClient
-    sys.modules["trading_bot.broker.cedro"] = cedro_mod
+import trading_bot.broker.cedro
+trading_bot.broker.cedro.CedroClient = MockCedroClient
+trading_bot.broker.cedro.Cedro = MockCedroClient
 
 # ---------------------------------------------------------------------------
 # Pytest Fixtures
