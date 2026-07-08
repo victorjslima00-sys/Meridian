@@ -119,7 +119,7 @@ def main():
     gates_ok = (
         len(data) >= int(len(tickers) * 0.9) and   # 90%+ dos ativos com dados
         errors_total <= 2 and                        # Até 2 erros tolerados (eventos corporativos legítimos)
-        cross_status == "passed"
+        cross_status in ("passed", "skipped")        # skipped = sem token, aceito com aviso
     )
 
     if errors_total > 0:

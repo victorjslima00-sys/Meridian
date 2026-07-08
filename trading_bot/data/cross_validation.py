@@ -222,8 +222,8 @@ def validate_ticker_adjustment_consistency(
                     "ok": abs(implied_div - expected_div) / expected_div < 0.15,
                 }
                 result["ex_date_check"].append(div_check)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[%s] Erro no check ex-date %s: %s", ticker, ex_date_str, e)
 
     # --- Status final ---
     if result["max_divergence_pct"] is not None:

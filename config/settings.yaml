@@ -67,10 +67,11 @@ risk:
   min_tick: 0.01                   # Tick mínimo (confirmar por ativo)
 
   # Circuit breaker — 3 limites simultâneos
+  # IMPORTANTE: valores devem ser POSITIVOS (o código aplica o sinal negativo internamente)
   circuit_breaker:
-    daily_loss_limit: -0.030       # -3.0% do capital no dia (reseta à meia-noite)
-    drawdown_inception: -0.080     # -8.0% desde o início da operação
-    drawdown_rolling_30d: -0.060   # -6.0% nos últimos 30 dias (janela móvel)
+    daily_loss_limit: 0.030        # 3.0% de perda diária máxima
+    drawdown_inception: 0.080      # 8.0% de drawdown desde o início
+    drawdown_rolling_30d: 0.060    # 6.0% de drawdown nos últimos 30 dias
 
 # ----------------------------------------------------------
 # Modo de execução

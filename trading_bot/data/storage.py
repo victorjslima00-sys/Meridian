@@ -85,13 +85,15 @@ def save_ohlcv(
     ].to_dict("records")
 
     with _db_connection(db_path) as conn:
-        cur = conn.executemany(
+        conn.executemany(
             """INSERT OR IGNORE INTO ohlcv
                (ticker, ts, o, h, l, c, v, adj_close, source)
                VALUES (:ticker, :ts, :o, :h, :l, :c, :v, :adj_close, :source)""",
             rows,
         )
-        inserted = cur.rowcount
+        # executemany com INSERT OR IGNORE retorna rowcount=-1 no sqlite3 do Python.
+        # Usa total_changes para contar as inserções reais.
+        inserted = conn.total_changes
 
     logger.debug("[%s] %d linhas salvas no DB (source=%s)", df["ticker"].iloc[0], inserted, source)
     return inserted
