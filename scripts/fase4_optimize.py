@@ -43,7 +43,7 @@ def main():
         param_grid=param_grid,
         start_date=start_date,
         end_date=end_date,
-        capital=10000.0
+        capital=cfg.get("risk", "capital_initial", default=300.0)
     )
     
     print("\n🏆 RESULTADOS DA OTIMIZAÇÃO 🏆")
