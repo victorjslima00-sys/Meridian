@@ -1,0 +1,13 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: meridian_bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data   # Persiste o banco SQLite
+      - ./logs:/app/logs   # Persiste os logs do Python
+      - ./.env:/app/.env:ro # Mapeia o .env como read-only
+    env_file:
+      - .env

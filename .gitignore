@@ -58,3 +58,6 @@ ENV/
 # --- Backtest outputs locais ---
 results/
 reports/
+.terraform/
+*.pem
+.terraform.lock.hcl
