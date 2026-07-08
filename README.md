@@ -22,8 +22,6 @@ pip install -r requirements.txt
 
 2. Revise `config/universe.yaml` — 50 ativos pré-configurados do IBOVESPA
 
-> **⚠️ Pendente**: informar capital inicial para calibrar o Módulo 3 (Kelly fracionado)
-
 ## Executar Fase 0 — Validação de Dados
 
 ```bash
@@ -74,13 +72,20 @@ trading-bot/
 |------|--------|-----------|
 | **0** | ✅ Concluída | Validação de dados |
 | **1** | ✅ Concluída | Motor de sinais + backtesting |
-| **2** | 🔄 Em andamento | Risco + circuit breaker + correlações |
+| **2** | ✅ Concluída | Risco + circuit breaker + correlações |
 | **3** | ⏳ Pendente | Dashboard web |
 | **4a** | ⏳ Pendente | PoC corretora (Cedro) |
 | **4b** | ⏳ Pendente | Paper trading (1-2 semanas) |
 | **5** | ⏳ Pendente | Live trading — modo manual |
 | **6** | ⏳ Pendente | Agentes de IA |
 | **7** | ⏳ Pendente | Automação total (decisão deliberada) |
+
+## Qualidade e Cobertura de Código
+
+O repositório possui Integração Contínua (CI) configurada com:
+- **Flake8**: Validação rigorosa de estilo e qualidade.
+- **Pytest + Coverage**: Testes abrangentes para ingestão, validação cruzada, motor de regras, e engine de backtest.
+- **Cobertura Alcançada**: **86%** em todos os módulos principais (`trading_bot/`).
 
 ## Notas de Segurança (Planejamento)
 

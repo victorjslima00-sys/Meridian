@@ -252,6 +252,25 @@ def run_regime_backtest(
                 low = float(today_row["l"].iloc[0])
                 high = float(today_row["h"].iloc[0])
 
+                from trading_bot.risk.position_sizing import calculate_position_size
+                
+                capital_invested = sum(p.capital for p in open_positions.values())
+                pos_size = calculate_position_size(
+                    capital_cash=capital_cash,
+                    open_positions_capital=capital_invested,
+                    kelly_fraction=kelly_fraction,
+                    max_positions=max_positions,
+                    current_open_count=len(open_positions)
+                )
+
+                if pos_size <= 0:
+                    continue
+
+                if capital_cash < pos_size:
+                    logger.warning("[%s] Cash insuficiente p/ %s. Requerido: %.2f | Disp: %.2f",
+                                   current_date, c.ticker, pos_size, capital_cash)
+                    continue
+
                 # Aborta se abriu abaixo do stop planejado
                 if open_price <= c.stop:
                     logger.info("[%s] Entrada abortada por gap: open=%.2f <= stop original=%.2f",
@@ -265,14 +284,6 @@ def run_regime_backtest(
                 entry_price_real = open_price
                 stop_real = round(entry_price_real * (1 - stop_dist), 2)
                 target_real = round(entry_price_real * (1 + target_dist), 2)
-
-                # Dimensionamento
-                equity_now = capital_cash + sum(p.capital for p in open_positions.values())
-                pos_size = equity_now * kelly_fraction / max_positions
-                pos_size = min(pos_size, capital_cash)  # Não alocar mais do que disponível
-
-                if pos_size < 5:
-                    continue
 
                 capital_cash -= pos_size
                 
@@ -342,7 +353,7 @@ def run_regime_backtest(
         df_t = regime_data.get(ticker)
         if df_t is not None and not df_t.empty:
             last = df_t.iloc[-1]
-            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - ROUND_TRIP
+            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - round_trip
             pnl_abs = pos.capital * pnl_pct
             capital_cash += pos.capital + pnl_abs   # ← devolve capital
 

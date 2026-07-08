@@ -17,6 +17,10 @@ from typing import Optional
 
 import pandas as pd
 
+import datetime
+sqlite3.register_adapter(datetime.date, lambda d: d.isoformat())
+sqlite3.register_converter("DATE", lambda s: datetime.date.fromisoformat(s.decode('utf-8')))
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "data/trading_bot.db"

@@ -86,11 +86,9 @@ def get_ibov_data(start: date) -> Optional[pd.DataFrame]:
     Baixa dados do IBOVESPA (^BVSP) para o filtro macro.
     Cacheado em memória para evitar downloads repetidos.
     """
-    global _ibov_cache
     key = str(start)
     if key in _ibov_cache:
         return _ibov_cache[key]
-
     try:
         import yfinance as yf
         df = yf.download("^BVSP", start=str(start), auto_adjust=True, progress=False)

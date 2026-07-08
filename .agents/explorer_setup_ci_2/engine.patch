@@ -1,0 +1,7 @@
+diff --git a/trading_bot/backtest/engine.py b/trading_bot/backtest/engine.py
+--- a/trading_bot/backtest/engine.py
++++ b/trading_bot/backtest/engine.py
+@@ -345,3 +345,3 @@
+-            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - ROUND_TRIP
++            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - round_trip
+             pnl_abs = pos.capital * pnl_pct

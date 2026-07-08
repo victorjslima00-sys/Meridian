@@ -1,0 +1,5 @@
+universe:
+  tickers:
+    - PETR4
+  sectors:
+    PETR4: energia

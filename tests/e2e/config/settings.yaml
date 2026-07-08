@@ -1,0 +1,66 @@
+data:
+  brapi_base_url: "https://brapi.dev/api"
+  brapi_token: "MOCK_TOKEN"
+  interval: "1d"
+  yfinance_suffix: ".SA"
+  cross_validation:
+    overlap_days: 90
+    max_divergence_pct: 0.5
+  rate_limit:
+    requests_per_month: 15000
+    retry_max_attempts: 3
+    retry_backoff_seconds: 2.0
+  db_path: "tests/e2e/data/test_trading_bot.db"
+  cache_days: 5
+
+signals:
+  strategy: "donchian_breakout"
+  breakout_period: 20
+  sma_trend_period: 200
+  volume_multiplier: 2.0
+  rsi_max: 75.0
+  stop_pct: 0.04
+  target_pct: 0.10
+  max_hold_days: 15
+  ibov_filter: true
+
+risk:
+  kelly_fraction: 0.25
+  max_positions: 3
+  capital_initial: 300.00
+  correlation_window_days: 60
+  correlation_max: 0.70
+  brokerage_pct: 0.0003
+  spread_est_pct: 0.0002
+  min_tick: 0.01
+  circuit_breaker:
+    daily_loss_limit: -0.030
+    drawdown_inception: -0.080
+    drawdown_rolling_30d: -0.060
+
+execution:
+  mode: "manual"
+  confirmation_timeout_minutes: 10
+
+broker:
+  provider: "cedro"
+  base_url: "https://cedrotech.com/apis/api-trading"
+  api_key: "MOCK_KEY"
+  api_secret: "MOCK_SECRET"
+  poll_interval_seconds: 300
+
+scheduler:
+  pre_market_time: "09:00"
+  market_open: "10:00"
+  market_close: "17:30"
+  post_market_time: "18:00"
+  timezone: "America/Sao_Paulo"
+
+notifications:
+  telegram_bot_token: "MOCK_TELEGRAM_TOKEN"
+  telegram_chat_id: "MOCK_TELEGRAM_CHAT_ID"
+
+logging:
+  level: "INFO"
+  format: "json"
+  path: "logs/test_trading_bot.jsonl"

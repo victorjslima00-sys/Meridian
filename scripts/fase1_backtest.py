@@ -24,7 +24,7 @@ def main():
     cfg = AppConfig.load()
     setup_logging(cfg)
     
-    tickers = cfg.get("_universe", default=[])
+    tickers = cfg.get("_universe", "tickers", default=[])
     sig_cfg = cfg.get("signals", default={})
     risk_cfg = cfg.get("risk", default={})
     bt_cfg = cfg.get("backtest", default={})

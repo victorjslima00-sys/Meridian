@@ -1,0 +1,12 @@
+diff --git a/trading_bot/backtest/engine.py b/trading_bot/backtest/engine.py
+--- a/trading_bot/backtest/engine.py
++++ b/trading_bot/backtest/engine.py
+@@ -342,7 +342,7 @@
+         df_t = regime_data.get(ticker)
+         if df_t is not None and not df_t.empty:
+             last = df_t.iloc[-1]
+-            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - ROUND_TRIP
++            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - round_trip
+             pnl_abs = pos.capital * pnl_pct
+             capital_cash += pos.capital + pnl_abs   # ← devolve capital
+ 

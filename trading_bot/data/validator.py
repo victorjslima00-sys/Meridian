@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date
 import pandas as pd
 
 from trading_bot.core.clock import today_b3

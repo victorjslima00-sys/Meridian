@@ -44,7 +44,7 @@ def main():
     cfg = AppConfig.load()
     setup_logging(cfg)
     
-    tickers = cfg.get("_universe", default=[])
+    tickers = cfg.get("_universe", "tickers", default=[])
     token = args.token or cfg.get("data", "brapi_token", default="")
     db_path = cfg.get("data", "db_path", default="data/trading_bot.db")
 

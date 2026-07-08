@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "symbol": "PETR4",
+      "regularMarketOpen": 35.0,
+      "regularMarketDayHigh": 36.0,
+      "regularMarketDayLow": 34.5,
+      "regularMarketPrice": 35.5,
+      "regularMarketVolume": 10000000,
+      "historicalDataPrice": [
+        {
+          "date": 1719716400,
+          "open": 35.0,
+          "high": 36.0,
+          "low": 34.5,
+          "close": 35.5,
+          "volume": 10000000,
+          "adjustedClose": 35.5
+        }
+      ]
+    }
+  ]
+}
