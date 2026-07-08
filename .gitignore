@@ -61,3 +61,4 @@ reports/
 .terraform/
 *.pem
 .terraform.lock.hcl
+*.bak
