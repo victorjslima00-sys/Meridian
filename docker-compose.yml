@@ -1,13 +1,42 @@
 version: "3.8"
 
 services:
+  # Container 1: O Bot de Paper Trading (cron)
   bot:
     build: .
     container_name: meridian_bot
     restart: unless-stopped
     volumes:
-      - ./data:/app/data   # Persiste o banco SQLite
-      - ./logs:/app/logs   # Persiste os logs do Python
-      - ./.env:/app/.env:ro # Mapeia o .env como read-only
+      - ./data:/app/data      # Persiste o banco SQLite
+      - ./logs:/app/logs      # Persiste os logs do Python
+      - ./.env:/app/.env:ro   # Mapeia o .env como read-only
     env_file:
       - .env
+
+  # Container 2: A API FastAPI (backend do dashboard)
+  api:
+    build: .
+    container_name: meridian_api
+    restart: unless-stopped
+    command: uvicorn trading_bot.dashboard.api:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    depends_on:
+      - bot
+
+  # Container 3: O Frontend React (buildado e servido via nginx)
+  frontend:
+    image: node:20-alpine
+    container_name: meridian_frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run build && npx serve -s dist -l 3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - api
