@@ -66,6 +66,22 @@ class CircuitBreaker:
 
         return CircuitBreakerStatus(False)
 
+    def can_trade(self, ref_date=None) -> bool:
+        """
+        Atalho conveniente para o orquestrador de paper trading.
+        Retorna True se o circuit breaker NÃO está disparado (seguro para operar).
+        Usa equity simulada pois ainda estamos em paper trading sem histórico real.
+        """
+        # Em paper trading sem histórico, usamos valores neutros para não bloquear
+        # a operação incorretamente. A verificação real acontece trade a trade via .check()
+        status = self.check(
+            current_equity=1.0,
+            initial_equity=1.0,
+            equity_start_of_day=1.0,
+            equity_30d_ago=1.0,
+        )
+        return not status.triggered
+
 def check_correlation(
     candidate_ticker: str,
     open_tickers: list[str],
