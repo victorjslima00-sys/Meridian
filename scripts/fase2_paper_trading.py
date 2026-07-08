@@ -93,19 +93,30 @@ def main():
             logger.info("[%s] Rejeitado pelo Position Sizing (Qty 0)", cand.ticker)
             continue
             
-        # Formata mensagem para Telegram
+        # 1. Notificar o operador e aguardar aprovação
+        timeout_min = cfg.get("execution", "confirmation_timeout_minutes", default=10)
         msg = (
-            f"🚨 <b>EXECUÇÃO AUTOMÁTICA (PAPER TRADING)</b> 🚨\n\n"
-            f"📈 Ativo: <b>{cand.ticker}</b>\n"
-            f"💵 Entrada: R$ {cand.entry_price:.2f}\n"
-            f"🛑 Stop Loss: R$ {cand.stop:.2f}\n"
-            f"🎯 Target: R$ {cand.target:.2f}\n"
-            f"📦 Qtd Comprada: {qty} ações\n\n"
-            f"RSI: {cand.rsi:.1f} | Vol: {cand.volume_ratio}x"
+            f"🔔 *SINAL DETECTADO — AGUARDANDO APROVAÇÃO*\n"
+            f"Ticker: `{cand.ticker}`\n"
+            f"Entrada: R$ {cand.entry_price:.2f}\n"
+            f"Stop: R$ {cand.stop:.2f}\n"
+            f"Alvo: R$ {cand.target:.2f}\n"
+            f"Score: {cand.score:.2f}\n\n"
+            f"Responda /aprovar ou /rejeitar em {timeout_min} minutos.\n"
+            f"Silêncio = REJEIÇÃO AUTOMÁTICA."
         )
-        
-        print(f"Executando ordem automática para {cand.ticker} e notificando Telegram...")
-        
+        notifier.send_message(text=msg)
+
+        # 2. Aguardar confirmação (ou timeout = rejeitar)
+        approved = notifier.ask_for_approval(timeout_minutes=timeout_min)
+
+        if not approved:
+            logger.info("[%s] Operação REJEITADA (timeout ou rejeição manual)", cand.ticker)
+            notifier.send_message(text=f"❌ Operação rejeitada: `{cand.ticker}`")
+            continue
+
+        # 3. Só executa APÓS aprovação explícita
+        print(f"Executando ordem confirmada para {cand.ticker}...")
         order = broker.submit_order(
             ticker=cand.ticker,
             side="BUY",
@@ -115,9 +126,7 @@ def main():
             target=cand.target
         )
         print(f"✅ Ordem {order.id} registrada no SQLite com sucesso!")
-        
-        # Notificação assíncrona (não-bloqueante)
-        notifier.send_message(text=msg)
+        notifier.send_message(text=f"✅ Ordem enviada após aprovação: `{cand.ticker}`")
 
 if __name__ == "__main__":
     main()
