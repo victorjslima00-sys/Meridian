@@ -32,8 +32,8 @@ def main():
     risk_cfg = cfg.get("risk", default={})
 
     # Inicializa Módulos de Execução
-    telegram_token = cfg.get("credentials", "telegram_bot_token", default="")
-    telegram_chat = cfg.get("credentials", "telegram_chat_id", default="")
+    telegram_token = cfg.get("notifications", "telegram_bot_token", default="")
+    telegram_chat = cfg.get("notifications", "telegram_chat_id", default="")
     notifier = TelegramNotifier(bot_token=telegram_token, chat_id=telegram_chat)
     broker = CedroBroker() # Instancia mock SQLite
 
