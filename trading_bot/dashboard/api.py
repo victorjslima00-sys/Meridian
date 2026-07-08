@@ -233,3 +233,38 @@ def node_action(node_id: str, req: ActionRequest):
         return {"status": "success", "msg": f"Módulo {node_id} acionado manualmente."}
     
     return {"status": "error", "msg": "Ação desconhecida."}
+
+@app.get("/api/history/{ticker}")
+def get_ticker_history(ticker: str, limit: int = 60):
+    """
+    Retorna o histórico de preços de fechamento de um ticker específico
+    da tabela ohlcv. Usado pelo modal de gráfico dinâmico no frontend
+    para desenhar a curva SVG do ativo selecionado (em vez de duplicar o IBOV).
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT ts, c, o, h, l, v FROM ohlcv WHERE ticker = ? ORDER BY ts DESC LIMIT ?",
+            [ticker, limit]
+        )
+        rows = cursor.fetchall()
+        conn.close()
+
+        if not rows:
+            return {"ticker": ticker, "prices": [], "dates": [], "candles": []}
+
+        # Reverte para ordem cronológica (mais antigo primeiro)
+        rows = list(reversed(rows))
+
+        return {
+            "ticker": ticker,
+            "prices": [r["c"] for r in rows],
+            "dates": [r["ts"] for r in rows],
+            "candles": [
+                {"ts": r["ts"], "o": r["o"], "h": r["h"], "l": r["l"], "c": r["c"], "v": r["v"]}
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        return {"ticker": ticker, "prices": [], "dates": [], "candles": [], "error": str(e)}
