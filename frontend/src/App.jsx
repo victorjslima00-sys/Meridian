@@ -1,15 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
   Activity, ShieldAlert, Cpu, Database, 
-  BarChart2, Globe, Terminal, Briefcase, Server 
+  BarChart2, Globe, Terminal, Briefcase, X
 } from 'lucide-react';
 import './index.css';
 
 const API_BASE = 'http://localhost:8000/api';
 
-const NeuralMap = ({ nodes, edges }) => {
-  // Coordenadas manuais (percentuais) para posicionar os nós
+const NeuralMap = ({ nodes, edges, onNodeClick }) => {
   const layout = {
     data: { top: '15%', left: '15%', icon: Globe },
     db: { top: '40%', left: '35%', icon: Database },
@@ -21,13 +20,11 @@ const NeuralMap = ({ nodes, edges }) => {
 
   return (
     <div className="glass-card neural-map-container">
-      {/* SVG Background for Edges */}
       <svg className="edges-svg">
         {edges.map((edge, idx) => {
           const src = layout[edge.source];
           const tgt = layout[edge.target];
           if (!src || !tgt) return null;
-          
           return (
             <line
               key={idx}
@@ -38,19 +35,16 @@ const NeuralMap = ({ nodes, edges }) => {
           );
         })}
       </svg>
-
-      {/* Nodes */}
       {nodes.map(node => {
         const pos = layout[node.id];
         if (!pos) return null;
-        
         const Icon = pos.icon;
-        
         return (
           <div 
             key={node.id} 
             className={`node ${node.status === 'active' ? 'active' : ''}`}
-            style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)' }}
+            style={{ top: pos.top, left: pos.left, transform: 'translate(-50%, -50%)', cursor: 'pointer' }}
+            onClick={() => onNodeClick(node)}
           >
             <Icon className="node-icon" />
             <span className="node-label">{node.label}</span>
@@ -66,15 +60,17 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState(null);
   const [positions, setPositions] = useState(null);
   const [ecosystem, setEcosystem] = useState(null);
+  
+  // Interactive Panel State
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [nodeDetails, setNodeDetails] = useState(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
 
   // Terminal mock stream
   const [terminalLogs, setTerminalLogs] = useState([
-    { time: '14:02:11', sender: 'SYSTEM', msg: 'Market Ingestion (brapi) completed. 47/50 valid.' },
-    { time: '14:02:32', sender: 'SIGNALS', msg: 'IBOV (877) < SMA-50. Macro filter triggered. NO BUYS.' },
-    { time: '14:03:04', sender: 'QUANT', msg: 'Grid Search optimized parameters: stop_pct=0.05, target_pct=0.08.' },
-    { time: '17:02:34', sender: 'COORD', msg: 'Dispatched Research agent and Guard-Rail.' },
-    { time: '17:04:36', sender: 'RESEARCH', msg: 'Database scanned. Proposed WAL mode for performance.' },
-    { time: '17:04:47', sender: 'GUARD-RAIL', msg: 'VERDICT APPROVED. Risk parameters respected.' },
+    { time: '14:02:11', sender: 'SYSTEM', msg: 'Market Ingestion completed.' },
+    { time: '14:03:04', sender: 'QUANT', msg: 'Optimized parameters applied.' },
     { time: '17:05:31', sender: 'SYSTEM', msg: 'WAL mode injected via AST into storage.py.' }
   ]);
 
@@ -93,109 +89,143 @@ export default function App() {
         console.error("API falhou:", err);
       }
     };
-    
     fetchData();
     const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
+  const handleNodeClick = async (node) => {
+    setSelectedNode(node);
+    try {
+      const res = await axios.get(`${API_BASE}/node/${node.id}`);
+      setNodeDetails(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleAction = async (actionType) => {
+    if (actionType === 'emergency_stop') {
+      setShowPasswordModal(true);
+      return;
+    }
+    
+    // Normal action
+    try {
+      const res = await axios.post(`${API_BASE}/node/${selectedNode.id}/action`, { action: actionType });
+      alert(res.data.msg);
+    } catch (e) {
+      alert("Erro ao disparar ação.");
+    }
+  };
+
+  const handleEmergencyStop = async () => {
+    try {
+      const res = await axios.post(`${API_BASE}/node/${selectedNode.id}/action`, { 
+        action: 'emergency_stop', 
+        password: passwordInput 
+      });
+      if (res.data.error) {
+        alert(res.data.error);
+      } else {
+        alert(res.data.msg);
+        setShowPasswordModal(false);
+        setPasswordInput('');
+      }
+    } catch (e) {
+      alert("Erro ao conectar com API.");
+    }
+  };
+
   if (!systemStatus || !positions || !ecosystem) {
     return <div className="loading">Carregando Meridian Core...</div>;
   }
 
+  const kpis = {
+    roi: ((positions.capital.current - positions.capital.initial) / positions.capital.initial * 100).toFixed(2)
+  };
+
   return (
     <div className="dashboard-container">
-      {/* Header */}
       <header className="header">
         <h1><Activity color="#00f0ff" /> Meridian Command Center</h1>
         <div className="system-status">
-          <div className="status-badge">
-            <div className={`status-dot ${systemStatus.modules.database === 'online' ? '' : 'offline'}`}></div>
-            <span>SQLite Database</span>
-          </div>
-          <div className="status-badge">
-            <div className="status-dot"></div>
-            <span>AWS EC2 Core</span>
-          </div>
-          <div className="status-badge">
-            <div className="status-dot"></div>
-            <span>Guard-Rail AI</span>
-          </div>
+          <div className="status-badge"><div className="status-dot"></div><span>SQLite DB</span></div>
+          <div className="status-badge"><div className="status-dot"></div><span>AWS EC2</span></div>
+          <div className="status-badge"><div className="status-dot"></div><span>Guard-Rail</span></div>
         </div>
       </header>
 
-      {/* Tabs */}
       <div className="tabs">
-        <button 
-          className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-          onClick={() => setActiveTab('overview')}
-        >
+        <button className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`} onClick={() => setActiveTab('overview')}>
           <BarChart2 size={18} /> Visão Geral
         </button>
-        <button 
-          className={`tab-btn ${activeTab === 'neural' ? 'active' : ''}`}
-          onClick={() => setActiveTab('neural')}
-        >
-          <Globe size={18} /> Mapa Neural
+        <button className={`tab-btn ${activeTab === 'neural' ? 'active' : ''}`} onClick={() => setActiveTab('neural')}>
+          <Globe size={18} /> Mapa Neural Interativo
         </button>
       </div>
 
       <div className="main-content">
-        {/* Left Column (Dynamic Content) */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           
           {activeTab === 'overview' && (
-            <div className="glass-card">
-              <h2 className="card-title">Carteira de Operações (Simulado)</h2>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Ativo</th>
-                    <th>Lado</th>
-                    <th>Entrada</th>
-                    <th>MTM Atual</th>
-                    <th>Alvo</th>
-                    <th>Stop</th>
-                    <th>Resultado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {positions.active_positions.map((pos, i) => (
-                    <tr key={i}>
-                      <td className="ticker-cell">{pos.ticker}</td>
-                      <td><span className="side-badge">{pos.side}</span></td>
-                      <td>R$ {pos.entry_price.toFixed(2)}</td>
-                      <td>R$ {pos.current_price.toFixed(2)}</td>
-                      <td>R$ {pos.target.toFixed(2)}</td>
-                      <td>R$ {pos.stop.toFixed(2)}</td>
-                      <td className={pos.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                        {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct}%
-                      </td>
-                    </tr>
-                  ))}
-                  {positions.active_positions.length === 0 && (
-                    <tr>
-                      <td colSpan="7" style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-                        Nenhuma operação aberta no momento. (Filtro Macro IBOV segurando o capital).
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <>
+              {/* KPI CARDS */}
+              <div className="kpi-grid">
+                <div className="kpi-card">
+                  <div className="kpi-title">Capital Inicial</div>
+                  <div className="kpi-value">R$ {positions.capital.initial.toFixed(2)}</div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-title">Patrimônio Atual</div>
+                  <div className="kpi-value">R$ {positions.capital.current.toFixed(2)}</div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-title">Retorno (ROI)</div>
+                  <div className={`kpi-value ${kpis.roi >= 0 ? 'positive' : 'negative'}`}>
+                    {kpis.roi > 0 ? '+' : ''}{kpis.roi}%
+                  </div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-title">Posições Abertas</div>
+                  <div className="kpi-value">{positions.active_positions.length}</div>
+                </div>
+              </div>
+
+              <div className="glass-card">
+                <h2 className="card-title">Carteira de Operações</h2>
+                <table>
+                  <thead>
+                    <tr><th>Ativo</th><th>Lado</th><th>Entrada</th><th>MTM</th><th>Alvo</th><th>Stop</th><th>Resultado</th></tr>
+                  </thead>
+                  <tbody>
+                    {positions.active_positions.map((pos, i) => (
+                      <tr key={i}>
+                        <td className="ticker-cell">{pos.ticker}</td>
+                        <td><span className="side-badge">{pos.side}</span></td>
+                        <td>R$ {pos.entry_price.toFixed(2)}</td>
+                        <td>R$ {pos.current_price.toFixed(2)}</td>
+                        <td>R$ {pos.target.toFixed(2)}</td>
+                        <td>R$ {pos.stop.toFixed(2)}</td>
+                        <td className={pos.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+                          {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
           {activeTab === 'neural' && (
-            <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} />
+            <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={handleNodeClick} />
           )}
         </div>
 
-        {/* Right Column (Terminal Feed) */}
         <div className="glass-card" style={{ padding: 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-light)' }}>
-            <h2 className="card-title" style={{ marginBottom: 0 }}>
-              <Terminal size={18} /> Comm Feed
-            </h2>
+            <h2 className="card-title" style={{ marginBottom: 0 }}><Terminal size={18} /> Comm Feed</h2>
           </div>
           <div className="terminal">
             {terminalLogs.map((log, i) => (
@@ -208,6 +238,70 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* SIDE PANEL */}
+      <div className={`side-panel ${selectedNode ? 'open' : ''}`}>
+        {selectedNode && (
+          <>
+            <button className="side-panel-close" onClick={() => setSelectedNode(null)}><X size={24} /></button>
+            <h2 style={{ fontSize: '1.5rem', color: '#fff', marginTop: '1rem' }}>{selectedNode.label}</h2>
+            
+            {nodeDetails ? (
+              <>
+                <div>
+                  <div className="panel-section-title">Função no Ecossistema</div>
+                  <div className="panel-box">{nodeDetails.role}</div>
+                </div>
+                <div>
+                  <div className="panel-section-title">Agenda / Próxima Ação</div>
+                  <div className="panel-box" style={{ color: 'var(--accent-cyan)' }}>{nodeDetails.next_run}</div>
+                </div>
+                <div>
+                  <div className="panel-section-title">Últimos Registros (Logs)</div>
+                  <div className="panel-box">
+                    {nodeDetails.logs.map((l, idx) => <div key={idx} style={{ marginBottom: '0.5rem' }}>• {l}</div>)}
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <button className="btn btn-primary" onClick={() => handleAction('run_now')}>
+                    ▶ Forçar Execução Imediata
+                  </button>
+                  {selectedNode.id === 'guardrail' && (
+                    <button className="btn btn-danger" onClick={() => handleAction('emergency_stop')}>
+                      🛑 EMERGENCY STOP (CIRCUIT BREAKER)
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div style={{ color: 'var(--text-muted)' }}>Carregando ficha médica...</div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* PASSWORD MODAL */}
+      {showPasswordModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <h3 style={{ color: 'var(--danger)', marginBottom: '1rem' }}>Autenticação Necessária</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+              Esta ação travará a corretora e liquidará todas as posições. Insira a senha de CEO para confirmar o Emergency Stop.
+            </p>
+            <input 
+              type="password" 
+              placeholder="Digite a senha..." 
+              value={passwordInput}
+              onChange={(e) => setPasswordInput(e.target.value)}
+            />
+            <div className="modal-actions">
+              <button className="btn btn-primary" style={{ background: '#333', borderColor: '#555', color: '#fff' }} onClick={() => setShowPasswordModal(false)}>Cancelar</button>
+              <button className="btn btn-danger" onClick={handleEmergencyStop}>Confirmar Parada</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

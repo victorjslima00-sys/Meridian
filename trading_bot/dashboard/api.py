@@ -64,7 +64,7 @@ def get_positions():
 def get_ecosystem():
     return {
         "nodes": [
-            {"id": "data", "label": "Data Ingestion (brapi/yfinance)", "status": "idle"},
+            {"id": "data", "label": "Data Ingestion (brapi)", "status": "idle"},
             {"id": "db", "label": "SQLite (WAL Mode)", "status": "active"},
             {"id": "quant", "label": "Quant Optimizer", "status": "idle"},
             {"id": "research", "label": "Pesquisador IA", "status": "active"},
@@ -79,3 +79,39 @@ def get_ecosystem():
             {"source": "guardrail", "target": "broker", "animated": True}
         ]
     }
+
+from pydantic import BaseModel
+from typing import Optional
+
+class ActionRequest(BaseModel):
+    action: str
+    password: Optional[str] = None
+
+@app.get("/api/node/{node_id}")
+def get_node_details(node_id: str):
+    # Mocking logs and schedule for demonstration
+    details = {
+        "data": {"role": "Ingestão de Dados", "next_run": "09:00 AM", "logs": ["Fetch concluído: 47/50 ativos", "Nenhum dado retornado para ELET6"]},
+        "db": {"role": "Banco de Dados Central", "next_run": "N/A", "logs": ["Modo WAL Ativado", "Batch Querying operando"]},
+        "quant": {"role": "Otimização de Parâmetros", "next_run": "Sexta-feira 23:00", "logs": ["Grid Search concluído", "Melhor Sharpe: 0.90"]},
+        "research": {"role": "Contextualizador Macroeconômico", "next_run": "18:00 PM", "logs": ["Avaliado banco de trades", "Relatório de PnL aprovado", "Proposta de otimização SQLite enviada"]},
+        "guardrail": {"role": "Auditor de Risco", "next_run": "Sempre ativo", "logs": ["Veredito APROVADO para WAL mode", "Nenhuma violação de risco detectada hoje"]},
+        "broker": {"role": "Integração B3 (Cedro)", "next_run": "Tempo real", "logs": ["Paper Trading ativo", "Aguardando ordens"]}
+    }
+    
+    return details.get(node_id, {"role": "Unknown", "next_run": "N/A", "logs": []})
+
+@app.post("/api/node/{node_id}/action")
+def node_action(node_id: str, req: ActionRequest):
+    # Verificação de segurança para o Circuit Breaker (Stop)
+    if req.action == "emergency_stop":
+        if req.password != "meridian2026":
+            return {"error": "Senha incorreta. Acesso negado."}
+        # Aqui o backend rodaria subprocess.run(["python", "scripts/emergency_stop.py"])
+        return {"status": "success", "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas."}
+    
+    # Ações normais
+    if req.action == "run_now":
+        return {"status": "success", "msg": f"Módulo {node_id} acionado manualmente."}
+    
+    return {"status": "error", "msg": "Ação desconhecida."}
