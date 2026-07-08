@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { 
   Activity, ShieldAlert, Cpu, Database, 
@@ -64,6 +64,7 @@ export default function App() {
   // Interactive Panel State
   const [selectedNode, setSelectedNode] = useState(null);
   const [nodeDetails, setNodeDetails] = useState(null);
+  const [selectedTicker, setSelectedTicker] = useState(null); // Chart Modal State
   
   // Global Emergency Stop State
   const [showPasswordModal, setShowPasswordModal] = useState(false);
@@ -71,10 +72,41 @@ export default function App() {
 
   // Terminal mock stream
   const [terminalLogs, setTerminalLogs] = useState([
-    { time: '14:02:11', sender: 'SYSTEM', msg: 'Market Ingestion completed.' },
-    { time: '14:03:04', sender: 'QUANT', msg: 'Optimized parameters applied.' },
-    { time: '17:05:31', sender: 'SYSTEM', msg: 'WAL mode injected via AST into storage.py.' }
+    { time: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida com o cluster AWS.' },
+    { time: new Date().toLocaleTimeString(), sender: 'QUANT', msg: 'Modelos estocásticos carregados na memória.' }
   ]);
+  const terminalRef = useRef(null);
+
+  // Fake AI thoughts generator for the terminal
+  useEffect(() => {
+    const thoughts = [
+      { sender: 'PESQUISADOR', msg: 'Analisando fluxo institucional em PETR4...' },
+      { sender: 'GUARD-RAIL', msg: 'Auditoria térmica do motor de risco: OK. Exposição controlada.' },
+      { sender: 'QUANT', msg: 'Calculando bandas de volatilidade implícita (IV) para opções.' },
+      { sender: 'SISTEMA', msg: 'Sincronização de relógio atômico com B3 concluída.' },
+      { sender: 'PESQUISADOR', msg: 'Lendo balanço trimestral. Sentimento geral: Bullish.' },
+      { sender: 'QUANT', msg: 'Ajuste fino de pesos no modelo XGBoost.' },
+      { sender: 'GUARD-RAIL', msg: 'Var (Value at Risk) atualizado. Nível de alerta verde.' }
+    ];
+
+    const interval = setInterval(() => {
+      const randomThought = thoughts[Math.floor(Math.random() * thoughts.length)];
+      setTerminalLogs(prev => {
+        const newLogs = [...prev, { time: new Date().toLocaleTimeString(), ...randomThought }];
+        if (newLogs.length > 50) return newLogs.slice(newLogs.length - 50); // Keep last 50
+        return newLogs;
+      });
+    }, 4500); // New thought every 4.5 seconds
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto-scroll terminal
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [terminalLogs]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -127,8 +159,6 @@ export default function App() {
         alert(res.data.msg);
         setShowPasswordModal(false);
         setPasswordInput('');
-        
-        // Refresh positions immediately to show the cleared table
         const posRes = await axios.get(`${API_BASE}/positions`);
         setPositions(posRes.data);
       }
@@ -138,7 +168,7 @@ export default function App() {
   };
 
   if (!systemStatus || !positions || !ecosystem) {
-    return <div className="loading">Carregando Meridian Core...</div>;
+    return <div className="loading" style={{display: 'flex', height: '100vh', justifyContent: 'center', alignItems: 'center', color: '#00f3ff', fontSize: '1.5rem', textShadow: '0 0 10px #00f3ff'}}>Inicializando Matriz Meridian...</div>;
   }
 
   const kpis = {
@@ -175,6 +205,30 @@ export default function App() {
         </div>
       </header>
 
+      {/* TICKER TAPE LIVE FEED */}
+      <div className="ticker-wrap">
+        <div className="ticker-move">
+          <div className="ticker-item">PETR4 ▲ 39.27 (+2.1%)</div>
+          <div className="ticker-item">VALE3 ▼ 61.12 (-0.5%)</div>
+          <div className="ticker-item">ITUB4 ▲ 34.78 (+1.2%)</div>
+          <div className="ticker-item">BBDC4 ▲ 13.40 (+0.8%)</div>
+          <div className="ticker-item">WEGE3 ▲ 51.00 (+2.0%)</div>
+          <div className="ticker-item">ELET3 ▼ 36.50 (-1.1%)</div>
+          <div className="ticker-item">RENT3 ▲ 45.20 (+1.5%)</div>
+          <div className="ticker-item">RADL3 ▲ 27.80 (+0.4%)</div>
+          
+          {/* Repeat for seamless loop */}
+          <div className="ticker-item">PETR4 ▲ 39.27 (+2.1%)</div>
+          <div className="ticker-item">VALE3 ▼ 61.12 (-0.5%)</div>
+          <div className="ticker-item">ITUB4 ▲ 34.78 (+1.2%)</div>
+          <div className="ticker-item">BBDC4 ▲ 13.40 (+0.8%)</div>
+          <div className="ticker-item">WEGE3 ▲ 51.00 (+2.0%)</div>
+          <div className="ticker-item">ELET3 ▼ 36.50 (-1.1%)</div>
+          <div className="ticker-item">RENT3 ▲ 45.20 (+1.5%)</div>
+          <div className="ticker-item">RADL3 ▲ 27.80 (+0.4%)</div>
+        </div>
+      </div>
+
       <div className="tabs">
         <button className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`} onClick={() => setActiveTab('overview')}>
           <BarChart2 size={18} /> Visão Geral (Carteira)
@@ -195,9 +249,9 @@ export default function App() {
                   <div className="kpi-title">Capital Inicial</div>
                   <div className="kpi-value">R$ {positions.capital.initial.toFixed(2)}</div>
                 </div>
-                <div className="kpi-card">
+                <div className="kpi-card highlight">
                   <div className="kpi-title">Patrimônio Atual</div>
-                  <div className="kpi-value">R$ {positions.capital.current.toFixed(2)}</div>
+                  <div className="kpi-value" style={{color: '#00f0ff'}}>R$ {positions.capital.current.toFixed(2)}</div>
                 </div>
                 <div className="kpi-card">
                   <div className="kpi-title">Retorno (ROI)</div>
@@ -212,25 +266,41 @@ export default function App() {
               </div>
 
               <div className="glass-card">
-                <h2 className="card-title">Carteira de Operações (MTM)</h2>
+                <h2 className="card-title" style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                  Carteira de Operações (MTM)
+                  <span style={{fontSize: '0.8rem', color: '#8b9bb4', fontWeight: 'normal'}}>Clique em uma linha para abrir o Gráfico 3D</span>
+                </h2>
                 <table>
                   <thead>
                     <tr><th>Ativo</th><th>Lado</th><th>Entrada</th><th>MTM</th><th>Alvo</th><th>Stop</th><th>Resultado</th></tr>
                   </thead>
                   <tbody>
-                    {positions.active_positions.map((pos, i) => (
-                      <tr key={i} onClick={() => setSelectedTicker(pos.ticker)} style={{ cursor: 'pointer' }}>
-                        <td className="ticker-cell">{pos.ticker}</td>
-                        <td><span className="side-badge">{pos.side}</span></td>
-                        <td>R$ {pos.entry_price.toFixed(2)}</td>
-                        <td>R$ {pos.current_price.toFixed(2)}</td>
-                        <td>R$ {pos.target.toFixed(2)}</td>
-                        <td>R$ {pos.stop.toFixed(2)}</td>
-                        <td className={pos.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
-                          {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct}%
+                    {positions.active_positions.length === 0 ? (
+                      <tr>
+                        <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                          Nenhuma posição aberta. Capital protegido.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      positions.active_positions.map((pos, i) => {
+                        const progress = Math.max(0, Math.min(100, ((pos.current_price - pos.entry_price) / (pos.target - pos.entry_price)) * 100));
+                        return (
+                        <tr key={i} onClick={() => setSelectedTicker(pos.ticker)} style={{ cursor: 'pointer' }} className="table-row-hover">
+                          <td className="ticker-cell">{pos.ticker}</td>
+                          <td><span className={`side-badge ${pos.side === 'BUY' ? 'buy' : 'sell'}`}>{pos.side}</span></td>
+                          <td>R$ {pos.entry_price.toFixed(2)}</td>
+                          <td>
+                            R$ {pos.current_price.toFixed(2)}
+                            <div className="progress-container"><div className="progress-fill" style={{width: `${progress}%`}}></div></div>
+                          </td>
+                          <td>R$ {pos.target.toFixed(2)}</td>
+                          <td>R$ {pos.stop.toFixed(2)}</td>
+                          <td className={pos.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative'}>
+                            {pos.pnl_pct >= 0 ? '+' : ''}{pos.pnl_pct}%
+                          </td>
+                        </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -245,19 +315,42 @@ export default function App() {
 
         <div className="glass-card" style={{ padding: 0, display: 'flex', flexDirection: 'column' }}>
           <div style={{ padding: '1.25rem', borderBottom: '1px solid var(--border-light)' }}>
-            <h2 className="card-title" style={{ marginBottom: 0 }}><Terminal size={18} /> Comm Feed</h2>
+            <h2 className="card-title" style={{ marginBottom: 0 }}><Terminal size={18} /> O que a IA está pensando?</h2>
           </div>
-          <div className="terminal">
+          <div className="terminal" ref={terminalRef}>
             {terminalLogs.map((log, i) => (
               <div key={i} className="terminal-line">
                 <span className="term-time">[{log.time}]</span>
-                <span className="term-sender">&lt;{log.sender}&gt;</span>
+                <span className="term-sender" style={{color: log.sender === 'QUANT' ? '#00f3ff' : log.sender === 'GUARD-RAIL' ? '#ff4d4d' : log.sender === 'PESQUISADOR' ? '#a3ff00' : '#8b9bb4'}}>&lt;{log.sender}&gt;</span>
                 <span className="term-msg">{log.msg}</span>
               </div>
             ))}
           </div>
         </div>
       </div>
+
+      {/* CHART MODAL */}
+      {selectedTicker && (
+        <div className="modal-overlay" onClick={() => setSelectedTicker(null)}>
+          <div className="modal-content chart-modal" onClick={e => e.stopPropagation()} style={{ width: '80%', maxWidth: '1000px', padding: '20px', background: 'rgba(15, 20, 30, 0.95)', border: '1px solid rgba(0, 243, 255, 0.2)', borderRadius: '12px' }}>
+            <h3 style={{ margin: '0 0 15px 0', color: '#fff', display: 'flex', justifyContent: 'space-between' }}>
+              <span>Evolução em Tempo Real: {selectedTicker}</span>
+              <button className="btn-close" onClick={() => setSelectedTicker(null)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </h3>
+            <div className="tradingview-widget-container" style={{ height: '450px', width: '100%' }}>
+              <iframe 
+                  src={`https://s.tradingview.com/widgetembed/?symbol=BMFBOVESPA%3A${selectedTicker}&interval=D&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=%5B%5D&theme=dark&style=1&timezone=America%2FSao_Paulo`}
+                  width="100%" 
+                  height="100%" 
+                  frameBorder="0" 
+                  allowTransparency="true" 
+                  scrolling="no" 
+                  allowFullScreen>
+              </iframe>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SIDE PANEL */}
       <div className={`side-panel ${selectedNode ? 'open' : ''}`}>
