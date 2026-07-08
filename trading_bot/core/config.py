@@ -13,8 +13,20 @@ class AppConfig:
         settings_path: str = "config/settings.yaml",
         universe_path: str = "config/universe.yaml",
     ) -> "AppConfig":
+        import os
+        import re
+
         with open(settings_path) as f:
-            settings = yaml.safe_load(f)
+            raw_text = f.read()
+        
+        # Expandir ${VAR_NAME} com os valores do ambiente
+        def expand_env(match):
+            var_name = match.group(1)
+            return os.environ.get(var_name, "")  # "" se não configurada
+        
+        expanded = re.sub(r'\$\{([^}]+)\}', expand_env, raw_text)
+        settings = yaml.safe_load(expanded)
+
         with open(universe_path) as f:
             universe = yaml.safe_load(f)
         settings["_universe"] = universe["universe"]
