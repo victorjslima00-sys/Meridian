@@ -40,22 +40,52 @@ class GeneticOptimizer:
             "stop_pct": round(random.uniform(self.param_bounds["stop_pct"][0], self.param_bounds["stop_pct"][1]), 3)
         }
 
-    def _fitness(self, individual: Dict[str, float]) -> float:
+    def _fitness(self, individual: dict) -> float:
         """
-        Avalia o Sharpe Ratio.
-        A implementação real faria o backtest com self.df_historical.
-        Neste pipeline, injetamos lógica heurística com volatilidade
-        para simular a função de paisagem (landscape).
+        Avalia o indivíduo rodando um backtest real com os parâmetros dados.
+        Retorna o Sharpe Ratio como métrica de fitness.
+        Retorna -1.0 em caso de erro (pior que qualquer resultado válido).
         """
-        # Em produção, chamar engine_backtest(df, **individual)
-        # Por segurança, mockamos os retornos baseados na adequação teórica
-        score = 0.5 
-        if 1.4 <= individual["volume_mult"] <= 2.2: score += 0.2
-        if individual["stop_pct"] < 0.05: score += 0.1
-        if 15 <= individual["breakout_period"] <= 25: score += 0.2
-        
-        # Retorno base oscilando de acordo com volatilidade aleatória
-        return score + random.uniform(-0.1, 0.2)
+        from trading_bot.backtest.engine import run_regime_backtest
+        from trading_bot.backtest.optimizer import calculate_sharpe_ratio
+
+        try:
+            # Usa uma janela de 1 ano para fitness (equilíbrio entre velocidade e qualidade)
+            from datetime import timedelta
+            end = self.df_historical["ts"].max()
+            start = end - timedelta(days=365)
+
+            df_window = self.df_historical[
+                (self.df_historical["ts"] >= start) &
+                (self.df_historical["ts"] <= end)
+            ].copy()
+
+            if len(df_window) < 60:  # Sem dados suficientes
+                return -1.0
+
+            result = run_regime_backtest(
+                data={self.df_historical["ticker"].iloc[0]: df_window},
+                regime_name="fitness_eval",
+                start=start,
+                end=end,
+                capital=1000.0,
+                ibov_filter=False,
+                signal_params={
+                    "breakout_period": int(individual["breakout_period"]),
+                    "volume_mult": float(individual["volume_mult"]),
+                    "rsi_max": float(individual["rsi_max"]),
+                    "stop_pct": float(individual["stop_pct"]),
+                },
+            )
+
+            if len(result.equity_curve) < 10:
+                return 0.0
+
+            return calculate_sharpe_ratio(result.equity_curve)
+
+        except Exception as e:
+            logger.warning("Erro no fitness do genético: %s", e)
+            return -1.0
 
     def _tournament_selection(self, population: List[Tuple[Dict, float]], k: int = 3) -> Dict:
         """Seleciona o melhor indivíduo entre 'k' escolhidos aleatoriamente (Torneio)."""
