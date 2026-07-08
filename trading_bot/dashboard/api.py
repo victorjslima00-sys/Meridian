@@ -171,10 +171,10 @@ def get_market_tape():
         """)
         latest_prices = cursor.fetchall()
         
-        # Pega um histórico recente para desenhar o SVG no frontend
+        # Pega um histórico recente para desenhar o SVG no frontend (usando a tabela ohlcv)
         cursor.execute("""
-            SELECT ts, close as c 
-            FROM daily_bars 
+            SELECT ts, c 
+            FROM ohlcv 
             WHERE ticker = '^BVSP' 
             ORDER BY ts DESC 
             LIMIT 30

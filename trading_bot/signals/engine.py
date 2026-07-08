@@ -157,6 +157,7 @@ def compute_signal(
     stop_atr_mult: float = 2.0,        # Stop baseado no ATR
     stop_pct: float = 0.04,            # Stop de segurança (hard cap)
     target_atr_mult: float = 4.0,      # Target dinâmico (ATR * 4, R:R 1:2)
+    **kwargs,                          # Ignora argumentos adicionais para evitar TypeErrors
 ) -> Optional[Candidate]:
     """
     Sinal de Breakout de 20 dias + Filtro SMA-200 + Volume.
