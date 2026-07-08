@@ -1,0 +1,328 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..2820bdf
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,46 @@
++name: CI
++
++on:
++  push:
++    branches: [ "main" ]
++  pull_request:
++    branches: [ "main" ]
++
++jobs:
++  test:
++    runs-on: ubuntu-latest
++    strategy:
++      matrix:
++        python-version: ["3.11", "3.12"]
++
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Set up Python ${{ matrix.python-version }}
++        uses: actions/setup-python@v5
++        with:
++          python-version: ${{ matrix.python-version }}
++          cache: "pip"
++
++      - name: Install dependencies
++        run: |
++          python -m pip install --upgrade pip
++          pip install -r requirements.txt
++          pip install pytest-cov flake8
++
++      - name: Lint (erros de sintaxe / nomes indefinidos)
++        run: |
++          # Falha o build em erros reais (ex.: NameError de nome indefinido, como o bug ROUND_TRIP)
++          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
++          # Demais avisos de estilo não quebram o build
++          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
++
++      - name: Rodar testes com cobertura
++        run: |
++          pytest tests/ --cov=trading_bot --cov-report=term-missing --cov-report=xml -v
++
++      - name: Upload relatório de cobertura
++        uses: actions/upload-artifact@v4
++        with:
++          name: coverage-report-${{ matrix.python-version }}
++          path: coverage.xml
+diff --git a/.github/workflows/python-package-conda.yml b/.github/workflows/python-package-conda.yml
+deleted file mode 100644
+index f358604..0000000
+--- a/.github/workflows/python-package-conda.yml
++++ /dev/null
+@@ -1,34 +0,0 @@
+-name: Python Package using Conda
+-
+-on: [push]
+-
+-jobs:
+-  build-linux:
+-    runs-on: ubuntu-latest
+-    strategy:
+-      max-parallel: 5
+-
+-    steps:
+-    - uses: actions/checkout@v4
+-    - name: Set up Python 3.10
+-      uses: actions/setup-python@v3
+-      with:
+-        python-version: '3.10'
+-    - name: Add conda to system path
+-      run: |
+-        # $CONDA is an environment variable pointing to the root of the miniconda directory
+-        echo $CONDA/bin >> $GITHUB_PATH
+-    - name: Install dependencies
+-      run: |
+-        conda env update --file environment.yml --name base
+-    - name: Lint with flake8
+-      run: |
+-        conda install flake8
+-        # stop the build if there are Python syntax errors or undefined names
+-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+-        # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+-        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+-    - name: Test with pytest
+-      run: |
+-        conda install pytest
+-        pytest
+diff --git a/tests/test_engine.py b/tests/test_engine.py
+index 743396e..97f1897 100644
+--- a/tests/test_engine.py
++++ b/tests/test_engine.py
+@@ -1,5 +1,5 @@
+ import pytest
+-from datetime import date
++from datetime import date, timedelta
+ import pandas as pd
+ from trading_bot.backtest.engine import run_regime_backtest
+ from trading_bot.signals.engine import Candidate
+@@ -53,3 +53,42 @@ def test_engine_gap_abort(monkeypatch):
+ def test_engine_max_positions():
+     # Esqueleto
+     pass
++
++def test_engine_open_position_closed_at_end_of_period(monkeypatch):
++    """
++    Regressão: posição ainda aberta quando o regime termina deve ser fechada
++    com exit_reason='end_of_period' SEM lançar exceção.
++    Bug anterior: `ROUND_TRIP` (indefinida) em vez de `round_trip` causava
++    NameError sempre que havia uma posição aberta no último dia do regime —
++    cenário comum em qualquer backtest de vários meses.
++    """
++    monkeypatch.setattr("trading_bot.backtest.engine.get_ibov_data", lambda x: None)
++    monkeypatch.setattr("trading_bot.backtest.engine.compute_signal", mock_compute_signal)
++
++    # 205 dias úteis: >=200 necessários para liberar o sinal mockado (checagem
++    # de histórico mínimo é feita pelo engine, não pelo mock), e poucos dias
++    # sobrando após a entrada para garantir que a posição siga aberta até o
++    # fim do período (stop/target amplos no mock; sem timeout em 15 dias).
++    rows = []
++    d = date(2023, 1, 2)
++    price = 100.0
++    n = 0
++    while n < 205:
++        if d.weekday() < 5:
++            rows.append({"ts": d, "o": price, "h": price + 1, "l": price - 1, "c": price, "v": 1000})
++            n += 1
++        d += timedelta(days=1)
++
++    data = {"A": pd.DataFrame(rows)}
++    start, end = rows[0]["ts"], rows[-1]["ts"]
++
++    result = run_regime_backtest(
++        data=data, regime_name="teste_fim_periodo", start=start, end=end,
++        capital=1000.0, max_positions=1, max_hold_days=15,
++    )
++
++    assert len(result.trades) >= 1
++    last_trade = result.trades[-1]
++    assert last_trade.exit_reason == "end_of_period"
++    # Capital tem que ter sido devolvido ao capital_cash (final_capital != 0)
++    assert result.final_capital > 0
+diff --git a/tests/test_signals.py b/tests/test_signals.py
+index 4c99ef7..ef246b6 100644
+--- a/tests/test_signals.py
++++ b/tests/test_signals.py
+@@ -1,7 +1,88 @@
+ import pytest
+ import pandas as pd
+ import numpy as np
+-from trading_bot.signals.engine import _rsi, _sma, _volume_ratio
++from datetime import date, timedelta
++from trading_bot.signals.engine import _rsi, _sma, _volume_ratio, compute_signal
++
++
++def _make_price_history(n_days=200, seed=42, start_price=80.0, drift=0.0006, vol=0.011):
++    """
++    Gera um histórico OHLCV sintético com um random walk realista (ruído +
++    leve tendência), evitando o problema de RSI saturar em 100/0 quando a
++    série só sobe ou só desce artificialmente. Usado como base de 200 dias
++    (mínimo exigido pela SMA-200) para os testes de compute_signal.
++    """
++    rng = np.random.default_rng(seed)
++    rows = []
++    d = date(2023, 1, 2)
++    price = start_price
++    n = 0
++    while n < n_days:
++        if d.weekday() < 5:
++            price = max(price * (1 + rng.normal(drift, vol)), 1.0)
++            rows.append({
++                "ts": d, "o": price, "h": price * 1.008, "l": price * 0.992,
++                "c": price, "adj_close": price, "v": int(rng.normal(500_000, 50_000)),
++            })
++            n += 1
++        d += timedelta(days=1)
++    return rows, d
++
++
++def test_compute_signal_detects_breakout():
++    """
++    Exemplo/hipótese: um dia com fechamento 3% acima da máxima Donchian(20),
++    volume 2.5x a média e RSI dentro da faixa deve gerar um Candidate válido.
++    Este cenário (compute_signal) estava com 0% de cobertura antes deste teste.
++    """
++    rows, next_day = _make_price_history()
++    while next_day.weekday() >= 5:
++        next_day += timedelta(days=1)
++
++    last_close = rows[-1]["c"]
++    donchian_high = max(r["h"] for r in rows[-20:])
++    breakout_price = donchian_high * 1.03
++    rows.append({
++        "ts": next_day, "o": last_close, "h": breakout_price * 1.01,
++        "l": last_close * 0.99, "c": breakout_price, "adj_close": breakout_price,
++        "v": 1_300_000,
++    })
++    df = pd.DataFrame(rows)
++
++    cand = compute_signal(df, "TESTE3")
++
++    assert cand is not None
++    assert cand.entry_price > donchian_high
++    assert cand.stop < cand.entry_price < cand.target
++    assert 50 <= cand.rsi <= 75
++    assert cand.volume_ratio >= 2.0
++
++
++def test_compute_signal_no_breakout_returns_none():
++    """Sem breakout (dia normal de random walk), compute_signal deve retornar None."""
++    rows, next_day = _make_price_history()
++    while next_day.weekday() >= 5:
++        next_day += timedelta(days=1)
++
++    # Dia comum: variação pequena, não configura breakout de 20 dias
++    last_close = rows[-1]["c"]
++    rows.append({
++        "ts": next_day, "o": last_close, "h": last_close * 1.002,
++        "l": last_close * 0.998, "c": last_close * 1.001, "adj_close": last_close * 1.001,
++        "v": 480_000,
++    })
++    df = pd.DataFrame(rows)
++
++    cand = compute_signal(df, "TESTE3")
++
++    assert cand is None
++
++
++def test_compute_signal_insufficient_history_returns_none():
++    """Menos de 200 dias de histórico (mínimo p/ SMA-200) deve retornar None, não lançar exceção."""
++    rows, _ = _make_price_history(n_days=50)
++    df = pd.DataFrame(rows)
++    assert compute_signal(df, "TESTE3") is None
+ 
+ def test_rsi_normal():
+     # Série simples alternando altos e baixos
+diff --git a/tests/test_storage.py b/tests/test_storage.py
+new file mode 100644
+index 0000000..1ea5d9d
+--- /dev/null
++++ b/tests/test_storage.py
+@@ -0,0 +1,69 @@
++import pandas as pd
++from datetime import date
++from trading_bot.data import storage
++
++
++def _sample_df(ticker="PETR4"):
++    return pd.DataFrame([
++        {"ticker": ticker, "ts": date(2024, 1, 2), "o": 10.0, "h": 11.0, "l": 9.0, "c": 10.5, "v": 1000.0, "adj_close": 10.5},
++        {"ticker": ticker, "ts": date(2024, 1, 3), "o": 10.5, "h": 11.0, "l": 10.0, "c": 10.8, "v": 1200.0, "adj_close": 10.8},
++    ])
++
++
++def test_save_and_load_round_trip(tmp_path):
++    db_path = str(tmp_path / "test.db")
++    storage.initialize_db(db_path)
++
++    inserted = storage.save_ohlcv(_sample_df(), source="yfinance", db_path=db_path)
++    assert inserted == 2
++
++    loaded = storage.load_ohlcv("PETR4", db_path=db_path)
++    assert len(loaded) == 2
++    assert list(loaded["ts"]) == [date(2024, 1, 2), date(2024, 1, 3)]
++    assert loaded["c"].iloc[-1] == 10.8
++
++
++def test_save_ohlcv_ignores_duplicates(tmp_path):
++    """INSERT OR IGNORE: salvar o mesmo (ticker, ts) duas vezes não deve duplicar nem lançar erro."""
++    db_path = str(tmp_path / "test.db")
++    storage.initialize_db(db_path)
++
++    storage.save_ohlcv(_sample_df(), db_path=db_path)
++    inserted_again = storage.save_ohlcv(_sample_df(), db_path=db_path)
++
++    assert inserted_again == 0
++    loaded = storage.load_ohlcv("PETR4", db_path=db_path)
++    assert len(loaded) == 2  # não duplicou
++
++
++def test_load_ohlcv_empty_ticker_returns_empty_df(tmp_path):
++    db_path = str(tmp_path / "test.db")
++    storage.initialize_db(db_path)
++    loaded = storage.load_ohlcv("INEXISTENTE", db_path=db_path)
++    assert loaded.empty
++
++
++def test_get_last_date(tmp_path):
++    db_path = str(tmp_path / "test.db")
++    storage.initialize_db(db_path)
++    storage.save_ohlcv(_sample_df(), db_path=db_path)
++
++    assert storage.get_last_date("PETR4", db_path=db_path) == date(2024, 1, 3)
++    assert storage.get_last_date("SEM_DADOS", db_path=db_path) is None
++
++
++def test_get_missing_tickers(tmp_path):
++    db_path = str(tmp_path / "test.db")
++    storage.initialize_db(db_path)
++    storage.save_ohlcv(_sample_df("PETR4"), db_path=db_path)
++
++    missing = storage.get_missing_tickers(
++        ["PETR4", "VALE3"], required_start=date(2024, 1, 1), db_path=db_path
++    )
++    assert missing == ["VALE3"]
++
++    # PETR4 só tem dado até 2024-01-03: exigir a partir de 2024-06-01 deve marcá-lo como "faltando" também
++    missing_strict = storage.get_missing_tickers(
++        ["PETR4"], required_start=date(2024, 6, 1), db_path=db_path
++    )
++    assert missing_strict == ["PETR4"]
+diff --git a/trading_bot/backtest/engine.py b/trading_bot/backtest/engine.py
+index e2cf37c..fce29dd 100644
+--- a/trading_bot/backtest/engine.py
++++ b/trading_bot/backtest/engine.py
+@@ -342,7 +342,7 @@ def run_regime_backtest(
+         df_t = regime_data.get(ticker)
+         if df_t is not None and not df_t.empty:
+             last = df_t.iloc[-1]
+-            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - ROUND_TRIP
++            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - round_trip
+             pnl_abs = pos.capital * pnl_pct
+             capital_cash += pos.capital + pnl_abs   # ← devolve capital
+ 
