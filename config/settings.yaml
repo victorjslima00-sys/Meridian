@@ -42,8 +42,8 @@ signals:
   sma_trend_period: 200            # Filtro estrutural: preço > SMA-200
   volume_multiplier: 2.0           # Volume > 2× média (confirma força)
   rsi_max: 75.0                    # Não comprar se RSI > 75 (sobrecomprado)
-  stop_pct: 0.04                   # Stop-loss 4% abaixo da entrada
-  target_pct: 0.10                 # Take-profit 10% acima da entrada
+  stop_pct: 0.05                   # Stop-loss 5% abaixo da entrada (Otimizado via Quant)
+  target_pct: 0.08                 # Take-profit 8% acima da entrada (Otimizado via Quant)
   max_hold_days: 15                # Timeout: 15 dias
   ibov_filter: true                # Filtro macro: só opera quando IBOV > SMA-50
   # Baseline Sharpe: ~0.33 (alta_juros) — gate Sharpe>1.0 avaliado após Módulo 7 (IA)

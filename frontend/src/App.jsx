@@ -219,7 +219,7 @@ export default function App() {
                   </thead>
                   <tbody>
                     {positions.active_positions.map((pos, i) => (
-                      <tr key={i}>
+                      <tr key={i} onClick={() => setSelectedTicker(pos.ticker)} style={{ cursor: 'pointer' }}>
                         <td className="ticker-cell">{pos.ticker}</td>
                         <td><span className="side-badge">{pos.side}</span></td>
                         <td>R$ {pos.entry_price.toFixed(2)}</td>
@@ -231,12 +231,6 @@ export default function App() {
                         </td>
                       </tr>
                     ))}
-                    {positions.active_positions.length === 0 && (
-                      <tr>
-                        <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
-                          Nenhuma posição aberta. Capital protegido.
-                        </td>
-                      </tr>
                     )}
                   </tbody>
                 </table>

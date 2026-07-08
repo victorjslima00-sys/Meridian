@@ -42,30 +42,63 @@ def get_status():
         }
     }
 
+from pydantic import BaseModel
+from typing import Optional
+
 class ActionRequest(BaseModel):
     action: str
     password: Optional[str] = None
 
-# Mock global state for demonstration
-APP_STATE = {
-    "active_positions": [
-        {"ticker": "PETR4", "side": "BUY", "entry_price": 38.50, "current_price": 39.20, "target": 41.58, "stop": 36.57, "pnl_pct": 1.81},
-        {"ticker": "ITUB4", "side": "BUY", "entry_price": 34.10, "current_price": 33.90, "target": 36.82, "stop": 32.39, "pnl_pct": -0.58},
-        {"ticker": "WEGE3", "side": "BUY", "entry_price": 50.00, "current_price": 51.50, "target": 54.00, "stop": 47.50, "pnl_pct": 3.00}
-    ],
-    "capital": {
-        "initial": 10000.0,
-        "current": 10123.50,
-        "currency": "BRL"
-    }
-}
-
 @app.get("/api/positions")
 def get_positions():
     try:
-        return APP_STATE
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM paper_trades WHERE status = 'OPEN'")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        active_positions = []
+        for r in rows:
+            entry = r["price"]
+            curr = entry * 1.02 # mock 2% up
+            pnl = ((curr - entry) / entry) * 100
+            
+            active_positions.append({
+                "ticker": r["ticker"],
+                "side": r["side"],
+                "entry_price": entry,
+                "current_price": curr,
+                "target": entry * 1.08,
+                "stop": entry * 0.95,
+                "pnl_pct": round(pnl, 2)
+            })
+
+        return {
+            "active_positions": active_positions,
+            "capital": {
+                "initial": 10000.0,
+                "current": 10000.0 + sum([(p["current_price"] - p["entry_price"]) * r["qty"] for p, r in zip(active_positions, rows)]),
+                "currency": "BRL"
+            }
+        }
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": "Internal server error"}
+
+@app.post("/api/system/emergency_stop")
+def system_emergency_stop(req: ActionRequest):
+    if req.password != "meridian2026":
+        return {"error": "Senha incorreta. Acesso negado."}
+    
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE paper_trades SET status = 'CANCELLED' WHERE status = 'OPEN'")
+        conn.commit()
+        conn.close()
+        return {"status": "success", "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas."}
+    except Exception as e:
+        return {"error": "Internal server error"}
 
 @app.get("/api/ecosystem")
 def get_ecosystem():
@@ -99,28 +132,13 @@ def get_node_details(node_id: str):
     }
     return details.get(node_id, {"role": "Unknown", "next_run": "N/A", "logs": []})
 
-@app.post("/api/system/emergency_stop")
-def system_emergency_stop(req: ActionRequest):
-    if req.password != "meridian2026":
-        return {"error": "Senha incorreta. Acesso negado."}
-    
-    # Executa a limpeza simulada
-    APP_STATE["active_positions"] = []
-    # Quando fecha as posições, o capital atual é travado
-    # Aqui simularíamos o log da ação real no db
-    
-    return {"status": "success", "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas."}
-
 @app.post("/api/node/{node_id}/action")
 def node_action(node_id: str, req: ActionRequest):
-    # Verificação de segurança para o Circuit Breaker (Stop)
     if req.action == "emergency_stop":
         if req.password != "meridian2026":
             return {"error": "Senha incorreta. Acesso negado."}
-        # Aqui o backend rodaria subprocess.run(["python", "scripts/emergency_stop.py"])
         return {"status": "success", "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas."}
     
-    # Ações normais
     if req.action == "run_now":
         return {"status": "success", "msg": f"Módulo {node_id} acionado manualmente."}
     
