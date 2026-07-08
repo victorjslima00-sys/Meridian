@@ -2,7 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import datetime
+import os
 from pathlib import Path
+
+# Senha do Emergency Stop — definida em .env, nunca no código
+# Se não estiver configurada, bloqueia tudo por segurança
+EMERGENCY_PASSWORD = os.environ.get("EMERGENCY_PASSWORD", "")
 
 app = FastAPI(title="Meridian Command Center API", version="1.0.0")
 
@@ -87,7 +92,9 @@ def get_positions():
 
 @app.post("/api/system/emergency_stop")
 def system_emergency_stop(req: ActionRequest):
-    if req.password != "meridian2026":
+    if not EMERGENCY_PASSWORD:
+        return {"error": "Emergency password not configured on server."}
+    if req.password != EMERGENCY_PASSWORD:
         return {"error": "Senha incorreta. Acesso negado."}
     
     try:
@@ -135,7 +142,9 @@ def get_node_details(node_id: str):
 @app.post("/api/node/{node_id}/action")
 def node_action(node_id: str, req: ActionRequest):
     if req.action == "emergency_stop":
-        if req.password != "meridian2026":
+        if not EMERGENCY_PASSWORD:
+            return {"error": "Emergency password not configured on server."}
+        if req.password != EMERGENCY_PASSWORD:
             return {"error": "Senha incorreta. Acesso negado."}
         return {"status": "success", "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas."}
     
