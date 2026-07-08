@@ -64,6 +64,8 @@ export default function App() {
   // Interactive Panel State
   const [selectedNode, setSelectedNode] = useState(null);
   const [nodeDetails, setNodeDetails] = useState(null);
+  
+  // Global Emergency Stop State
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
 
@@ -105,12 +107,6 @@ export default function App() {
   };
 
   const handleAction = async (actionType) => {
-    if (actionType === 'emergency_stop') {
-      setShowPasswordModal(true);
-      return;
-    }
-    
-    // Normal action
     try {
       const res = await axios.post(`${API_BASE}/node/${selectedNode.id}/action`, { action: actionType });
       alert(res.data.msg);
@@ -121,7 +117,7 @@ export default function App() {
 
   const handleEmergencyStop = async () => {
     try {
-      const res = await axios.post(`${API_BASE}/node/${selectedNode.id}/action`, { 
+      const res = await axios.post(`${API_BASE}/system/emergency_stop`, { 
         action: 'emergency_stop', 
         password: passwordInput 
       });
@@ -131,6 +127,10 @@ export default function App() {
         alert(res.data.msg);
         setShowPasswordModal(false);
         setPasswordInput('');
+        
+        // Refresh positions immediately to show the cleared table
+        const posRes = await axios.get(`${API_BASE}/positions`);
+        setPositions(posRes.data);
       }
     } catch (e) {
       alert("Erro ao conectar com API.");
@@ -153,12 +153,31 @@ export default function App() {
           <div className="status-badge"><div className="status-dot"></div><span>SQLite DB</span></div>
           <div className="status-badge"><div className="status-dot"></div><span>AWS EC2</span></div>
           <div className="status-badge"><div className="status-dot"></div><span>Guard-Rail</span></div>
+          
+          {/* Global Emergency Stop Button */}
+          <button 
+            onClick={() => setShowPasswordModal(true)} 
+            style={{ 
+              background: 'rgba(239, 68, 68, 0.15)', 
+              color: 'var(--danger)', 
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              borderRadius: '999px',
+              padding: '0.5rem 1rem',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}
+          >
+            <ShieldAlert size={16} /> EMERGENCY STOP
+          </button>
         </div>
       </header>
 
       <div className="tabs">
         <button className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`} onClick={() => setActiveTab('overview')}>
-          <BarChart2 size={18} /> Visão Geral
+          <BarChart2 size={18} /> Visão Geral (Carteira)
         </button>
         <button className={`tab-btn ${activeTab === 'neural' ? 'active' : ''}`} onClick={() => setActiveTab('neural')}>
           <Globe size={18} /> Mapa Neural Interativo
@@ -193,7 +212,7 @@ export default function App() {
               </div>
 
               <div className="glass-card">
-                <h2 className="card-title">Carteira de Operações</h2>
+                <h2 className="card-title">Carteira de Operações (MTM)</h2>
                 <table>
                   <thead>
                     <tr><th>Ativo</th><th>Lado</th><th>Entrada</th><th>MTM</th><th>Alvo</th><th>Stop</th><th>Resultado</th></tr>
@@ -212,6 +231,13 @@ export default function App() {
                         </td>
                       </tr>
                     ))}
+                    {positions.active_positions.length === 0 && (
+                      <tr>
+                        <td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                          Nenhuma posição aberta. Capital protegido.
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -267,11 +293,6 @@ export default function App() {
                   <button className="btn btn-primary" onClick={() => handleAction('run_now')}>
                     ▶ Forçar Execução Imediata
                   </button>
-                  {selectedNode.id === 'guardrail' && (
-                    <button className="btn btn-danger" onClick={() => handleAction('emergency_stop')}>
-                      🛑 EMERGENCY STOP (CIRCUIT BREAKER)
-                    </button>
-                  )}
                 </div>
               </>
             ) : (
@@ -287,7 +308,7 @@ export default function App() {
           <div className="modal-content">
             <h3 style={{ color: 'var(--danger)', marginBottom: '1rem' }}>Autenticação Necessária</h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Esta ação travará a corretora e liquidará todas as posições. Insira a senha de CEO para confirmar o Emergency Stop.
+              Esta ação travará a corretora e liquidará todas as posições IMEDIATAMENTE. Insira a senha de CEO para confirmar o Circuit Breaker.
             </p>
             <input 
               type="password" 
@@ -297,7 +318,7 @@ export default function App() {
             />
             <div className="modal-actions">
               <button className="btn btn-primary" style={{ background: '#333', borderColor: '#555', color: '#fff' }} onClick={() => setShowPasswordModal(false)}>Cancelar</button>
-              <button className="btn btn-danger" onClick={handleEmergencyStop}>Confirmar Parada</button>
+              <button className="btn btn-danger" onClick={handleEmergencyStop}>Confirmar Liquidação</button>
             </div>
           </div>
         </div>
