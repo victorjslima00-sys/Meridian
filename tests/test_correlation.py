@@ -1,3 +1,4 @@
+from unittest.mock import patch
 from trading_bot.risk.correlation import build_returns_matrix
 from trading_bot.risk.circuit_breaker import check_correlation
 
@@ -7,7 +8,8 @@ def test_build_returns_matrix_basic():
     rows = [{"ticker": "A", "ts": date(2024,1,1)+timedelta(days=i),
              "adj_close": 100.0 + i} for i in range(20)]
     df = pd.DataFrame(rows)
-    matrix = build_returns_matrix({"A": df}, window=10)
+    with patch("trading_bot.risk.correlation.load_ohlcv", return_value=df):
+        matrix = build_returns_matrix(["A"], start=date(2024,1,1), end=date(2024,1,20))
     assert "A" in matrix
     assert len(matrix["A"]) > 0
 
