@@ -100,7 +100,15 @@ def get_ibov_data(start: date) -> Optional[pd.DataFrame]:
         else:
             df.columns = [c.lower() for c in df.columns]
         df = df.reset_index()
-        df = df.rename(columns={"date": "ts", "close": "c"})
+        # Normalizar de novo para pegar a coluna de data gerada pelo reset_index
+        df.columns = [str(c).lower() for c in df.columns]
+        
+        # O yfinance pode chamar de "date" ou "datetime" dependendo da versao
+        if "datetime" in df.columns and "date" not in df.columns:
+            df = df.rename(columns={"datetime": "ts", "close": "c"})
+        else:
+            df = df.rename(columns={"date": "ts", "close": "c"})
+            
         df["ts"] = pd.to_datetime(df["ts"]).dt.date
         df["sma50"] = _sma(df["c"], 50)
         _ibov_cache[key] = df

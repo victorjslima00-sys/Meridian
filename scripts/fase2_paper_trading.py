@@ -13,7 +13,7 @@ sys.path.insert(0, ".")
 from trading_bot.data.ingestion import fetch_universe_yfinance
 from trading_bot.signals.engine import scan_universe, get_ibov_data
 from trading_bot.risk.circuit_breaker import CircuitBreaker
-from trading_bot.risk.position_sizing import PositionSizing
+from trading_bot.risk.position_sizing import calculate_position_size
 from trading_bot.core.config import AppConfig, setup_logging
 from trading_bot.core.telegram import TelegramNotifier
 from trading_bot.broker.cedro import CedroBroker
@@ -66,46 +66,50 @@ def main():
         return
 
     capital = risk_cfg.get("capital_initial", 300.0) # Simulado
-    ps = PositionSizing(cfg, capital=capital)
+    kelly = risk_cfg.get("kelly_fraction", 0.25)
+    max_pos = risk_cfg.get("max_positions", 3)
     
     print(f"\n{len(candidates)} candidatos encontrados. Aplicando filtro Kelly e Solicitando Aprovação...")
     
     for cand in candidates:
         # Filtro de risco (Kelly)
-        qty = ps.calculate_quantity(cand.entry_price, cand.stop)
+        allocation = calculate_position_size(
+            capital_cash=capital,
+            open_positions_capital=0.0, # Simulado sem posições abertas
+            kelly_fraction=kelly,
+            max_positions=max_pos,
+            current_open_count=0
+        )
+        qty = int(allocation / cand.entry_price) if allocation > 0 else 0
         if qty <= 0:
             logger.info("[%s] Rejeitado pelo Position Sizing (Qty 0)", cand.ticker)
             continue
             
         # Formata mensagem para Telegram
         msg = (
-            f"🚨 <b>NOVO SINAL (PAPER TRADING)</b> 🚨\n\n"
+            f"🚨 <b>EXECUÇÃO AUTOMÁTICA (PAPER TRADING)</b> 🚨\n\n"
             f"📈 Ativo: <b>{cand.ticker}</b>\n"
             f"💵 Entrada: R$ {cand.entry_price:.2f}\n"
             f"🛑 Stop Loss: R$ {cand.stop:.2f}\n"
             f"🎯 Target: R$ {cand.target:.2f}\n"
-            f"📦 Qtd Recomendada: {qty} ações\n\n"
-            f"RSI: {cand.rsi:.1f} | Vol: {cand.volume_ratio}x\n"
-            f"Escolha uma ação abaixo para confirmar ou rejeitar:"
+            f"📦 Qtd Comprada: {qty} ações\n\n"
+            f"RSI: {cand.rsi:.1f} | Vol: {cand.volume_ratio}x"
         )
         
-        print(f"Enviando solicitação de aprovação para {cand.ticker} via Telegram...")
-        # Aguarda resposta por 10 min
-        is_approved = notifier.ask_for_approval(text=msg, timeout_minutes=10)
+        print(f"Executando ordem automática para {cand.ticker} e notificando Telegram...")
         
-        if is_approved:
-            print(f"✅ Trade APROVADO! Enviando ordem simulada para {cand.ticker}...")
-            order = broker.submit_order(
-                ticker=cand.ticker,
-                side="BUY",
-                qty=qty,
-                price=cand.entry_price,
-                stop=cand.stop,
-                target=cand.target
-            )
-            print(f"Ordem {order.id} registrada no SQLite com sucesso!")
-        else:
-            print(f"❌ Trade REJEITADO (ou timeout) para {cand.ticker}.")
+        order = broker.submit_order(
+            ticker=cand.ticker,
+            side="BUY",
+            qty=qty,
+            price=cand.entry_price,
+            stop=cand.stop,
+            target=cand.target
+        )
+        print(f"✅ Ordem {order.id} registrada no SQLite com sucesso!")
+        
+        # Notificação assíncrona (não-bloqueante)
+        notifier.send_message(text=msg)
 
 if __name__ == "__main__":
     main()

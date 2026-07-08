@@ -1,0 +1,43 @@
+name: Deploy Meridian Bot to AWS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup SSH Key
+      run: |
+        mkdir -p ~/.ssh/
+        echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key.pem
+        chmod 600 ~/.ssh/deploy_key.pem
+        ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
+      env:
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        SERVER_IP: ${{ secrets.SERVER_IP }}
+
+    - name: Copy files to AWS
+      run: |
+        rsync -avz --exclude '.git' --exclude '.github' --exclude 'infra' -e "ssh -i ~/.ssh/deploy_key.pem" ./ ubuntu@$SERVER_IP:/app/Meridian/
+      env:
+        SERVER_IP: ${{ secrets.SERVER_IP }}
+
+    - name: Inject Secrets & Restart Docker
+      run: |
+        ssh -i ~/.ssh/deploy_key.pem ubuntu@$SERVER_IP << 'EOF'
+          cd /app/Meridian
+          echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" > .env
+          echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
+          sudo docker-compose down
+          sudo docker-compose build
+          sudo docker-compose up -d
+        EOF
+      env:
+        SERVER_IP: ${{ secrets.SERVER_IP }}
