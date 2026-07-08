@@ -57,21 +57,31 @@ class ActionRequest(BaseModel):
 @app.get("/api/positions")
 def get_positions():
     try:
+        # Lê o capital inicial real do settings.yaml
+        from trading_bot.core.config import AppConfig
+        cfg = AppConfig.load()
+        capital_initial = cfg.get("risk", "capital_initial", default=300.0)
+
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM paper_trades WHERE status = 'OPEN'")
         rows = cursor.fetchall()
         conn.close()
-        
+
         active_positions = []
         for r in rows:
-            entry = r["price"]
-            curr = entry * 1.02 # mock 2% up
-            pnl = ((curr - entry) / entry) * 100
-            
+            entry = r["price"] or 0.0
+            if entry == 0.0:
+                continue
+            # TODO Fase 4: substituir por preço real via brapi.dev
+            # Por ora usa o preço de entrada como MTM (sem variação simulada)
+            curr = entry
+            pnl = 0.0
+
             active_positions.append({
                 "ticker": r["ticker"],
                 "side": r["side"],
+                "qty": r["qty"],
                 "entry_price": entry,
                 "current_price": curr,
                 "target": entry * 1.08,
@@ -79,16 +89,20 @@ def get_positions():
                 "pnl_pct": round(pnl, 2)
             })
 
+        invested = sum(p["entry_price"] * p["qty"] for p in active_positions)
+        current_capital = capital_initial - invested  # caixa disponível
+
         return {
             "active_positions": active_positions,
             "capital": {
-                "initial": 10000.0,
-                "current": 10000.0 + sum([(p["current_price"] - p["entry_price"]) * r["qty"] for p, r in zip(active_positions, rows)]),
+                "initial": capital_initial,
+                "current": current_capital,
+                "invested": invested,
                 "currency": "BRL"
             }
         }
     except Exception as e:
-        return {"error": "Internal server error"}
+        return {"error": f"Internal server error: {str(e)}"}
 
 @app.post("/api/system/emergency_stop")
 def system_emergency_stop(req: ActionRequest):
