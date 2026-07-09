@@ -8,9 +8,9 @@ CORRELATED_GROUPS: List[List[str]] = [
 
 
 class RiskManager:
-    def __init__(self, current_capital: float, win_rate: float = 0.55,
+    def __init__(self, saldo_livre: float, win_rate: float = 0.55,
                  win_loss_ratio: float = 1.5):
-        self.current_capital = current_capital
+        self.saldo_livre = saldo_livre
         self.win_rate = win_rate
         self.win_loss_ratio = win_loss_ratio
 
@@ -24,12 +24,12 @@ class RiskManager:
         return False
 
     def calculate_position_size(self, risk_per_trade: float = 0.02) -> float:
-        """Uses the Kelly Criterion (simplified) to determine optimal position size."""
+        """Uses the Kelly Criterion (simplified) to determine optimal position size based on free balance."""
         kelly_pct = self.win_rate - ((1 - self.win_rate) / self.win_loss_ratio)
         safe_kelly = min(kelly_pct * 0.5, risk_per_trade)
         if safe_kelly < 0:
             return 0.0
-        return self.current_capital * safe_kelly
+        return self.saldo_livre * safe_kelly
 
     def evaluate_trade(self, analyst_signal: Dict[str, Any],
                        ticker: str = "", open_tickers: List[str] = None) -> Dict[str, Any]:

@@ -71,7 +71,7 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
 );
 
 // ─── Position Row com mini-sparkline ─────────────────────────────────────────
-const PositionRow = ({ pos, onClick }) => {
+const PositionRow = ({ pos, onClick, onClose }) => {
   const current_price = pos.exit_price || pos.entry_price * (1 + (pos.pnl_pct / 100));
   const target = pos.target_price || 0;
   const stop = pos.stop_loss || 0;
@@ -107,6 +107,16 @@ const PositionRow = ({ pos, onClick }) => {
         <span className={`pnl-chip ${isGain ? 'gain' : 'loss'}`}>
           {isGain ? '+' : ''}{pos.pnl_pct}%
         </span>
+      </td>
+      <td>
+        <button 
+          className="close-trade-btn"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', opacity: 0.8 }}
+          onClick={(e) => { e.stopPropagation(); if (onClose) onClose(pos.id); }}
+          title="Encerrar Manualmente"
+        >
+          <X size={16} color="#f43f5e" />
+        </button>
       </td>
       <td>
         <ChevronRight size={14} color="#8b9bb4" />
@@ -576,6 +586,21 @@ export default function App() {
     const iv = setInterval(load, 5000);
     return () => clearInterval(iv);
   }, []);
+  
+  const handleCloseTrade = async (tradeId) => {
+    try {
+      setApiError(null);
+      await axios.post(`${API_BASE}/trades/${tradeId}/close`);
+      setOmniResult({ type: 'success', text: `Ordem ${tradeId} encerrada com sucesso!` });
+      
+      // Force refresh positions
+      const p = await axios.get(`${API_BASE}/positions`);
+      setPositions(p.data);
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message;
+      setApiError(`Erro ao encerrar trade: ${msg}`);
+    }
+  };
 
   // Fetch candle data when a ticker is selected for modal
   useEffect(() => {
@@ -626,9 +651,16 @@ export default function App() {
     );
   }
 
-  const roi = ((positions.capital.current - positions.capital.initial) / positions.capital.initial * 100).toFixed(2);
+  const cap = positions.capital || {};
+  const patTotal = cap.patrimonio_total || 0;
+  const saldoDisp = cap.saldo_disponivel || 0;
+  const emPos = cap.em_posicoes || 0;
+  const saldoLivre = cap.saldo_livre || 0;
+  
+  const totalAbsoluto = patTotal + saldoDisp;
+  const roi = (((totalAbsoluto - 100) / 100) * 100).toFixed(2);
   const roiNum = parseFloat(roi);
-  const tickers = positions.active_positions.map(p => p.ticker);
+  const tickers = (positions.active_positions || []).map(p => p.ticker);
 
   return (
     <div className="shell">
@@ -775,10 +807,10 @@ export default function App() {
               </div>
 
               <div className="kpi-row">
-                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${positions.capital.current.toFixed(2)}`} sub={`Inicial: R$ ${positions.capital.initial.toFixed(2)}`} />
-                <KpiCard title="Saldo Disponível" icon={Briefcase} color="#10b981" value={`R$ ${(positions.capital.current - (positions.capital.invested ?? 0)).toFixed(2)}`} sub="Livre para novas operações" />
-                <KpiCard title="ROI" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="desde o início" trend={roiNum} />
-                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${(positions.capital.invested ?? 0).toFixed(2)} alocado`} />
+                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Capital protegido (fora de risco)" />
+                <KpiCard title="Saldo Disponível" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub={`Limite Total: R$ ${saldoDisp.toFixed(2)}`} />
+                <KpiCard title="ROI Global" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="desde o início (base R$ 100)" trend={roiNum} />
+                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions?.length || 0} sub={`R$ ${emPos.toFixed(2)} alocado`} />
               </div>
 
 
@@ -786,10 +818,10 @@ export default function App() {
                   <div className="left-col">
                     <div className="glass-panel">
                       <div className="panel-header">
-                        <h3>Evolução do Portfólio</h3>
-                        <span className="muted-tag">30 dias · BRL</span>
+                        <h3>Evolução do Portfólio (Trades Reais)</h3>
+                        <span className="muted-tag">Histórico de PnL</span>
                       </div>
-                      <SimplePortfolio capital={positions.capital} />
+                      <SimplePortfolio capital={positions.capital} closed_positions={positions.closed_positions} />
                     </div>
 
                     <div className="glass-panel">
@@ -807,11 +839,11 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody>
-                            {positions.active_positions.length === 0 ? (
+                            {!(positions.active_positions && positions.active_positions.length > 0) ? (
                               <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta — capital protegido</td></tr>
                             ) : (
                               positions.active_positions.map((p, i) => (
-                                <PositionRow key={i} pos={p} onClick={() => { setSelectedTrade(p); }} />
+                                <PositionRow key={i} pos={p} onClick={() => { setSelectedTrade(p); }} onClose={handleCloseTrade} />
                               ))
                             )}
                           </tbody>
@@ -1035,7 +1067,7 @@ export default function App() {
                     <span className="muted-tag">Projeção 60 dias · Sharpe Base 2.1</span>
                   </div>
                   <div style={{ padding: '1rem' }}>
-                    <MonteCarloChart initialCapital={positions?.capital?.current || 300} days={60} paths={25} />
+                    <MonteCarloChart initialCapital={cap.saldo_disponivel || 100} days={60} paths={25} />
                   </div>
                 </div>
                 <div className="glass-panel">
@@ -1047,7 +1079,7 @@ export default function App() {
                 <div className="glass-panel" style={{ gridColumn: 'span 2' }}>
                   <div className="panel-header"><h3>Calculadora de Position Sizing</h3></div>
                   <div style={{ padding: '1.25rem' }}>
-                    <PositionSizingCalc capital={positions?.capital?.current || 300} />
+                    <PositionSizingCalc capital={cap.saldo_livre || 100} />
                   </div>
                 </div>
               </div>

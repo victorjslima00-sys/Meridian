@@ -52,13 +52,15 @@ def _init_in_memory_db() -> sqlite3.Connection:
     conn.execute("""
         CREATE TABLE portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            initial_capital REAL, current_capital REAL,
-            invested_capital REAL, updated_at TIMESTAMP
+            patrimonio_total REAL DEFAULT 0.0,
+            saldo_disponivel REAL DEFAULT 100.0,
+            em_posicoes REAL DEFAULT 0.0,
+            updated_at TIMESTAMP
         )
     """)
     conn.execute(
-        "INSERT INTO portfolio (initial_capital, current_capital, invested_capital, updated_at) "
-        "VALUES (100.0, 100.0, 0.0, ?)", (datetime.now(),)
+        "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) "
+        "VALUES (0.0, 100.0, 0.0, ?)", (datetime.now(),)
     )
     conn.commit()
     return conn
@@ -156,7 +158,7 @@ class TestRiskManager:
 
     def test_approves_trade_with_sufficient_capital(self):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "BUY", "last_price": 50000.0}, ticker="BTC-USD", open_tickers=[]
         )
         assert result["approved"] is True
@@ -164,14 +166,14 @@ class TestRiskManager:
 
     def test_rejects_hold_signal(self):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "HOLD", "last_price": 50000.0}, ticker="BTC-USD", open_tickers=[]
         )
         assert result["approved"] is False
 
     def test_rejects_trade_with_zero_capital(self):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(current_capital=0.0).evaluate_trade(
+        result = RiskManager(saldo_livre=0.0).evaluate_trade(
             {"signal": "BUY", "last_price": 50000.0}, ticker="BTC-USD", open_tickers=[]
         )
         assert result["approved"] is False
@@ -179,7 +181,7 @@ class TestRiskManager:
     def test_sell_sets_correct_stop_and_target(self):
         from backend.app.agents.risk_manager import RiskManager
         price = 3000.0
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "SELL", "last_price": price}, ticker="ETH-USD", open_tickers=[]
         )
         if result["approved"]:
@@ -189,7 +191,7 @@ class TestRiskManager:
     def test_buy_sets_correct_stop_and_target(self):
         from backend.app.agents.risk_manager import RiskManager
         price = 50000.0
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "BUY", "last_price": price}, ticker="BTC-USD", open_tickers=[]
         )
         if result["approved"]:
@@ -198,7 +200,7 @@ class TestRiskManager:
 
     def test_blocks_correlated_asset_when_btc_open(self):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "BUY", "last_price": 3000.0},
             ticker="ETH-USD", open_tickers=["BTC-USD"]
         )
@@ -207,7 +209,7 @@ class TestRiskManager:
 
     def test_allows_uncorrelated_asset_when_btc_open(self):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "BUY", "last_price": 150.0},
             ticker="SOL-USD", open_tickers=["BTC-USD"]
         )
@@ -215,7 +217,7 @@ class TestRiskManager:
 
     def test_allows_eth_when_no_open_positions(self):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(current_capital=1000.0).evaluate_trade(
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade(
             {"signal": "BUY", "last_price": 3000.0},
             ticker="ETH-USD", open_tickers=[]
         )
@@ -253,12 +255,14 @@ class TestExecutorAgent:
             conn_setup.execute("""
                 CREATE TABLE portfolio (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    initial_capital REAL, current_capital REAL,
-                    invested_capital REAL, updated_at TIMESTAMP
+                    patrimonio_total REAL DEFAULT 0.0,
+                    saldo_disponivel REAL DEFAULT 100.0,
+                    em_posicoes REAL DEFAULT 0.0,
+                    updated_at TIMESTAMP
                 )
             """)
             conn_setup.execute(
-                "INSERT INTO portfolio VALUES (1, 100.0, 100.0, 0.0, ?)",
+                "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (0.0, 100.0, 0.0, ?)",
                 (datetime.now(),)
             )
             conn_setup.commit()

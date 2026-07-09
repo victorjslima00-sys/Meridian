@@ -33,14 +33,21 @@ class ExecutorAgent:
         ''', (ticker, side, shares, current_price, target_price, stop_loss, datetime.datetime.now(), rationale))
         
         # Deduct from portfolio
-        cursor.execute("SELECT current_capital, invested_capital FROM portfolio ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT id, saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1")
         row = cursor.fetchone()
         if row:
-            new_current = row[0]
-            new_invested = row[1] + allocated
+            pid, disponivel, em_pos = row
+            livre = disponivel - em_pos
+            if allocated > livre:
+                # Caso extremo onde a alocação excede o livre no momento exato da execução
+                # Na prática o risk_manager deveria ter barrado, mas barramos aqui por segurança
+                conn.close()
+                return {"status": "rejected", "reason": f"Capital livre insuficiente (Livre: {livre:.2f}, Req: {allocated:.2f})"}
+                
+            new_em_pos = em_pos + allocated
             cursor.execute('''
-            UPDATE portfolio SET invested_capital = ?, updated_at = ? WHERE id = (SELECT MAX(id) FROM portfolio)
-            ''', (new_invested, datetime.datetime.now()))
+            UPDATE portfolio SET em_posicoes = ?, updated_at = ? WHERE id = ?
+            ''', (new_em_pos, datetime.datetime.now(), pid))
             
         conn.commit()
         conn.close()
@@ -84,22 +91,22 @@ class ExecutorAgent:
         ''', (current_price, datetime.datetime.now(), pnl_pct, reason, trade_id))
         
         # Update portfolio
-        cursor.execute("SELECT current_capital, invested_capital FROM portfolio ORDER BY id DESC LIMIT 1")
+        cursor.execute("SELECT id, saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1")
         pf_row = cursor.fetchone()
         if pf_row:
-            current_cap = pf_row[0]
-            invested_cap = pf_row[1]
+            pid, disponivel, em_pos = pf_row
             
             # PnL logic on capital
             original_allocation = shares * entry_price
-            pnl_value = gross_value - original_allocation
+            return_value = gross_value
             
-            new_current = current_cap + pnl_value
-            new_invested = invested_cap - original_allocation
+            # Devolve o capital alocado e o lucro/prejuízo para o saldo disponível
+            new_em_pos = max(0.0, em_pos - original_allocation)
+            new_disponivel = disponivel - original_allocation + return_value
             
             cursor.execute('''
-            UPDATE portfolio SET current_capital = ?, invested_capital = ?, updated_at = ? WHERE id = (SELECT MAX(id) FROM portfolio)
-            ''', (new_current, new_invested, datetime.datetime.now()))
+            UPDATE portfolio SET saldo_disponivel = ?, em_posicoes = ?, updated_at = ? WHERE id = ?
+            ''', (new_disponivel, new_em_pos, datetime.datetime.now(), pid))
             
         conn.commit()
         conn.close()

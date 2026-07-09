@@ -1,8 +1,9 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import random
 from typing import Dict, Any
+from pydantic import BaseModel
 
 app = FastAPI(title="Meridian AI Core")
 
@@ -30,7 +31,7 @@ def get_status():
         "active_agents": 3
     }
 
-from .data.database import get_portfolio, get_trades, init_db
+from .data.database import get_portfolio, get_trades, init_db, depositar_no_disponivel, retirar_do_disponivel
 from .data.feed import get_current_price
 from .agents.market_analyst import MarketAnalyst
 from .agents.risk_manager import RiskManager
@@ -62,14 +63,30 @@ async def ai_committee_worker():
             cursor = conn.cursor()
             
             # --- PHASE 1: EXIT LOOP (Manage Open Positions) ---
-            cursor.execute("SELECT id, side, target_price, stop_loss FROM trades WHERE ticker = ? AND status = 'active'", (ticker,))
+            cursor.execute("SELECT id, side, entry_price, target_price, stop_loss FROM trades WHERE ticker = ? AND status = 'active'", (ticker,))
             active_trade = cursor.fetchone()
             
             if active_trade:
-                trade_id, side, target_price, stop_loss = active_trade
+                trade_id, side, entry_price, target_price, stop_loss = active_trade
                 
                 close_trade = False
                 close_reason = ""
+                
+                # Breakeven Logic (50% to target)
+                if side == "BUY" and target_price > entry_price and stop_loss < entry_price:
+                    halfway = entry_price + (target_price - entry_price) * 0.5
+                    if current_price >= halfway:
+                        cursor.execute("UPDATE trades SET stop_loss = ? WHERE id = ?", (entry_price, trade_id))
+                        conn.commit()
+                        stop_loss = entry_price
+                        await broadcast_log("RiskManager", f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}", "success")
+                elif side == "SELL" and target_price < entry_price and stop_loss > entry_price:
+                    halfway = entry_price - (entry_price - target_price) * 0.5
+                    if current_price <= halfway:
+                        cursor.execute("UPDATE trades SET stop_loss = ? WHERE id = ?", (entry_price, trade_id))
+                        conn.commit()
+                        stop_loss = entry_price
+                        await broadcast_log("RiskManager", f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}", "success")
                 
                 # Basic Stop Loss / Take Profit Logic
                 if side == "BUY":
@@ -109,7 +126,7 @@ async def ai_committee_worker():
             if analysis['signal'] != "HOLD":
                 await broadcast_log("RiskManager", f"Evaluating {analysis['signal']} on {ticker}...", "warning")
                 pf = get_portfolio()
-                current_capital = pf.get('current_capital', 0.0)
+                saldo_livre = pf.get('saldo_livre', 0.0)
 
                 # Buscar todos os tickers com posição ativa para checar correlação
                 import sqlite3 as _sqlite3
@@ -120,7 +137,7 @@ async def ai_committee_worker():
                 ).fetchall()]
                 _conn.close()
 
-                rm = RiskManager(current_capital=current_capital)
+                rm = RiskManager(saldo_livre=saldo_livre)
                 decision = rm.evaluate_trade(analysis, ticker=ticker, open_tickers=open_tickers)
                 await asyncio.sleep(2)
 
@@ -153,22 +170,75 @@ def get_positions_route():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM trades WHERE status = 'active' OR status = 'closed'")
-    rows = cursor.fetchall()
     
-    active_positions = []
-    for r in rows:
-        active_positions.append(dict(r))
+    cursor.execute("SELECT * FROM trades WHERE status = 'active'")
+    active_rows = cursor.fetchall()
+    active_positions = [dict(r) for r in active_rows]
+    
+    cursor.execute("SELECT * FROM trades WHERE status = 'closed' ORDER BY exit_date DESC")
+    closed_rows = cursor.fetchall()
+    closed_positions = [dict(r) for r in closed_rows]
+    
     conn.close()
     
     return {
         "capital": {
-            "initial": pf.get('initial_capital', 10000.0),
-            "current": pf.get('current_capital', 10500.0),
-            "invested": pf.get('invested_capital', 1200.0)
+            "patrimonio_total": pf.get('patrimonio_total', 0.0),
+            "saldo_disponivel": pf.get('saldo_disponivel', 100.0),
+            "em_posicoes": pf.get('em_posicoes', 0.0),
+            "saldo_livre": pf.get('saldo_livre', 100.0)
         },
-        "active_positions": active_positions
+        "active_positions": active_positions,
+        "closed_positions": closed_positions
     }
+
+@app.post("/api/trades/{trade_id}/close")
+def manual_close_trade(trade_id: int):
+    from .data.feed import get_current_price
+    
+    import sqlite3
+    from .data.database import DB_PATH
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT ticker, status FROM trades WHERE id = ?", (trade_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="Trade não encontrado")
+    
+    ticker, status = row
+    if status != "active":
+        raise HTTPException(status_code=400, detail="Trade não está ativo")
+        
+    current_price = get_current_price(ticker)
+    if current_price <= 0:
+        raise HTTPException(status_code=500, detail="Falha ao obter preço atual do ativo")
+        
+    executor = ExecutorAgent()
+    res = executor.close_order(trade_id, current_price, "Encerrado manualmente pelo usuário")
+    
+    if res.get("status") == "error":
+        raise HTTPException(status_code=500, detail=res.get("reason"))
+        
+    return res
+
+class ValorRequest(BaseModel):
+    valor: float
+
+@app.post("/api/portfolio/depositar")
+def api_depositar(req: ValorRequest):
+    res = depositar_no_disponivel(req.valor)
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+@app.post("/api/portfolio/retirar")
+def api_retirar(req: ValorRequest):
+    res = retirar_do_disponivel(req.valor)
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
 
 @app.get("/api/candles/{ticker}")
 def get_candles(ticker: str):

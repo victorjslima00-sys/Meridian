@@ -177,34 +177,46 @@ export const VolumeBar = ({ data }) => {
 };
 
 // Chart de Performance do Portfólio ao longo do tempo (série simulada com capital)
-export const PortfolioChart = ({ capital }) => {
-  // Gera dados históricos simulados baseados no capital atual
-  const baseCapital = capital?.initial || 300;
-  const currentCapital = capital?.current || 300;
-
-  // Simula 30 dias de evolução usando os valores reais como âncoras
-  const data = Array.from({ length: 30 }, (_, i) => {
-    const progress = i / 29;
-    const noise = (Math.sin(i * 0.8) * 0.02 + Math.cos(i * 1.3) * 0.01);
-    const value = baseCapital + (currentCapital - baseCapital) * progress + baseCapital * noise;
+export const PortfolioChart = ({ capital, closed_positions = [] }) => {
+  const baseCapital = 100;
+  
+  let data = [];
+  if (closed_positions.length === 0) {
+    // Generate a flat line if no trades
+    data = Array.from({ length: 30 }, (_, i) => ({
+      day: `D${i + 1}`, capital: baseCapital, benchmark: baseCapital, drawdown: 0, baseline: baseCapital
+    }));
+  } else {
+    let currentVal = baseCapital;
+    // We want some padding at the start
+    data.push({ day: 'Início', capital: currentVal, benchmark: currentVal, drawdown: 0, baseline: baseCapital });
     
-    // Calcula Drawdown simulado a partir de um pico
-    const peak = Math.max(baseCapital, value + (baseCapital * 0.02)); 
-    const drawdown = value - peak < 0 ? ((value - peak)/peak)*100 : 0;
+    // Sort chronologically (it comes DESC from API)
+    const chronological = [...closed_positions].reverse();
     
-    // Simula Benchmark (IBOV) com crescimento ligeiramente inferior e noise
-    const benchValue = baseCapital * (1 + (progress * 0.05) + (Math.cos(i*0.5)*0.01));
+    let peak = currentVal;
+    chronological.forEach((trade, i) => {
+      // Calculate monetary PnL
+      const pnlValue = trade.side === 'BUY' 
+        ? (trade.exit_price - trade.entry_price) * trade.shares
+        : (trade.entry_price - trade.exit_price) * trade.shares;
+        
+      currentVal += pnlValue;
+      if (currentVal > peak) peak = currentVal;
+      const drawdown = currentVal - peak < 0 ? ((currentVal - peak)/peak)*100 : 0;
+      
+      data.push({
+        day: `T${i+1}`,
+        capital: parseFloat(currentVal.toFixed(2)),
+        benchmark: baseCapital,
+        drawdown: parseFloat(drawdown.toFixed(2)),
+        baseline: baseCapital,
+      });
+    });
+  }
 
-    return {
-      day: `D${i + 1}`,
-      capital: parseFloat(value.toFixed(2)),
-      benchmark: parseFloat(benchValue.toFixed(2)),
-      drawdown: parseFloat(drawdown.toFixed(2)),
-      baseline: baseCapital,
-    };
-  });
-
-  const isGain = currentCapital >= baseCapital;
+  const lastCapital = data[data.length - 1].capital;
+  const isGain = lastCapital >= baseCapital;
   const color = isGain ? '#10b981' : '#f43f5e';
 
   return (
