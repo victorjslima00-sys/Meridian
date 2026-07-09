@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+axios.defaults.headers.common['X-API-Key'] = "MERIDIAN_DEV_KEY";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 import ActiveTradeDetails from './ActiveTradeDetails';import {
   Activity, ShieldAlert, Cpu, Database,

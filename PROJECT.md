@@ -1,7 +1,9 @@
 # Project: Meridian Swing Trading System
 
 ## Architecture
-Meridian is an automated swing trading bot for the B3 exchange with execution via Cedro. It consists of the following packages/modules:
+Meridian is an automated swing trading bot for the B3 exchange. 
+**NOTA IMPORTANTE:** A execução via Corretora Cedro é atualmente uma simulação local (Paper Trading). Nenhuma ordem real é enviada à B3.
+It consists of the following packages/modules:
 - `trading_bot/core/`: Configuration, clock, and core utility infrastructure.
 - `trading_bot/data/`: Data ingestion, validation, storage, and cross-validation.
 - `trading_bot/signals/`: Technical analysis, break-out breakout, and signal calculation.

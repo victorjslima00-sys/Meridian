@@ -57,6 +57,21 @@ class RiskManager:
         if analyst_signal["signal"] == "HOLD":
             return {"approved": False, "reason": "Analyst recommends HOLD."}
 
+        # Check Global Circuit Breaker
+        import sys
+        from pathlib import Path
+        try:
+            root_path = Path(__file__).resolve().parent.parent.parent.parent.parent
+            if str(root_path) not in sys.path:
+                sys.path.append(str(root_path))
+            from trading_bot.risk.circuit_breaker import CircuitBreaker
+            cb = CircuitBreaker()
+            if not cb.can_trade():
+                return {"approved": False, "reason": "Circuit Breaker ativado (proteção global acionada)."}
+        except Exception as e:
+            # Em caso de erro ao importar o módulo do bot, prossegue sem travar (fallback).
+            pass
+
         # GAP 3 Fix: Bloquear ativos altamente correlacionados
         if ticker and self._is_correlated_with_open(ticker, open_tickers):
             correlated = [

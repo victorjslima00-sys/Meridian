@@ -29,7 +29,7 @@ class ExecutorAgent:
         rationale = f"{analyst_reason} | {rm_reason}"
         side = analysis.get("signal", "BUY")
 
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, isolation_level="IMMEDIATE")
         try:
             cursor = conn.cursor()
 
@@ -90,7 +90,7 @@ class ExecutorAgent:
         """
         Closes an active order.
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, isolation_level="IMMEDIATE")
         try:
             cursor = conn.cursor()
 

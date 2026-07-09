@@ -114,7 +114,7 @@ def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
     if valor <= 0:
         return {"ok": False, "error": "Valor deve ser positivo."}
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -150,7 +150,7 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
     if valor <= 0:
         return {"ok": False, "error": "Valor deve ser positivo."}
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(

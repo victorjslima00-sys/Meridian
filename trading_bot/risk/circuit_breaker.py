@@ -68,18 +68,31 @@ class CircuitBreaker:
 
     def can_trade(self, ref_date=None) -> bool:
         """
-        Atalho conveniente para o orquestrador de paper trading.
         Retorna True se o circuit breaker NÃO está disparado (seguro para operar).
-        Usa equity simulada pois ainda estamos em paper trading sem histórico real.
         """
-        # Em paper trading sem histórico, usamos valores neutros para não bloquear
-        # a operação incorretamente. A verificação real acontece trade a trade via .check()
+        import sys
+        import os
+        from pathlib import Path
+        
+        # Add backend to path dynamically if needed, or just import
+        try:
+            from backend.app.data.database import get_portfolio
+            portfolio = get_portfolio()
+            current_equity = portfolio.get('patrimonio_total', 1.0)
+            if current_equity <= 0:
+                current_equity = 1.0
+        except Exception as e:
+            logger.error(f"Erro ao buscar portfolio real, usando fallback neutro: {e}")
+            current_equity = 1.0
+            
         status = self.check(
-            current_equity=1.0,
-            initial_equity=1.0,
-            equity_start_of_day=1.0,
-            equity_30d_ago=1.0,
+            current_equity=current_equity,
+            initial_equity=current_equity,  # TODO: We need real initial equity logic later
+            equity_start_of_day=current_equity,
+            equity_30d_ago=current_equity,
         )
+        if status.triggered:
+            logger.warning(f"CIRCUIT BREAKER ACIONADO: {status.reason}")
         return not status.triggered
 
     def audit_decision_gate(

@@ -13,6 +13,10 @@ ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173"  # dev local
 ).split(",")
 
+from fastapi import Depends, Security
+from fastapi.security import APIKeyHeader
+import hmac
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -20,6 +24,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+API_KEY = os.environ.get("API_KEY", "MERIDIAN_DEV_KEY")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
+def verify_api_key(api_key: str = Security(api_key_header)):
+    if not hmac.compare_digest(api_key, API_KEY):
+        raise HTTPException(
+            status_code=403,
+            detail="Could not validate credentials",
+        )
+    return api_key
 
 
 @app.get("/api/status")
@@ -62,7 +77,7 @@ async def ai_committee_worker():
             # Use data feed to get the latest price directly for evaluation
             from .data.feed import fetch_recent_data
 
-            df_recent = fetch_recent_data(ticker, period="1d", interval="15m")
+            df_recent = await asyncio.to_thread(fetch_recent_data, ticker, period="1d", interval="15m")
             if df_recent is None or len(df_recent) == 0:
                 continue
             current_price = df_recent.iloc[-1]["close"]
@@ -292,7 +307,7 @@ def get_positions_route():
 
 
 @app.post("/api/trades/{trade_id}/close")
-def manual_close_trade(trade_id: int):
+def manual_close_trade(trade_id: int, api_key: str = Depends(verify_api_key)):
 
     import sqlite3
     from .data.database import DB_PATH
@@ -334,7 +349,7 @@ class TradeRequest(BaseModel):
 
 
 @app.post("/api/trades/execute")
-def execute_manual_trade(req: TradeRequest):
+def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_key)):
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantidade deve ser maior que 0")
 
@@ -392,7 +407,7 @@ class ValorRequest(BaseModel):
 
 
 @app.post("/api/portfolio/depositar")
-def api_depositar(req: ValorRequest):
+def api_depositar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
     res = depositar_no_disponivel(req.valor)
     if not res["ok"]:
         raise HTTPException(status_code=400, detail=res["error"])
@@ -400,7 +415,7 @@ def api_depositar(req: ValorRequest):
 
 
 @app.post("/api/portfolio/retirar")
-def api_retirar(req: ValorRequest):
+def api_retirar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
     res = retirar_do_disponivel(req.valor)
     if not res["ok"]:
         raise HTTPException(status_code=400, detail=res["error"])
@@ -486,7 +501,9 @@ class ActionRequest(BaseModel):
 def system_emergency_stop(req: ActionRequest):
     if not EMERGENCY_PASSWORD:
         return {"error": "Emergency password not configured on server."}
-    if req.password != EMERGENCY_PASSWORD:
+    
+    import hmac
+    if not hmac.compare_digest(req.password, EMERGENCY_PASSWORD):
         return {"error": "Senha incorreta. Acesso negado."}
 
     try:

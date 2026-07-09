@@ -62,6 +62,8 @@ O repositório possui Integração Contínua (CI) configurada com:
 
 ## Notas de Segurança (Arquitetura Atual)
 
+- **Aviso Legal:** A integração com a corretora (Cedro) no momento atua estritamente em **Paper Trading** (simulação local). Nenhuma ordem real é executada em produção até configuração futura explícita.
+
 - **Comitê de IA Ativo**: Agente Guard-Rail avalia e barra qualquer otimização ou trade baseado em Fake News ou alucinação algorítmica. Triangulação obrigatória em fontes Tier-1.
 - **Autonomia Total**: O bot foi destravado da dependência humana. Confirmação manual de ordens via Telegram foi **revogada**.
 - **Stop-loss Nativo**: Ordem STOP disparada e gerenciada no momento da entrada.
