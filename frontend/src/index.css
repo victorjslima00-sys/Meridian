@@ -608,8 +608,10 @@ td {
 .neural-canvas {
   position: relative;
   width: 100%; height: 500px;
-  background:
-    radial-gradient(ellipse at 50% 50%, rgba(30,41,59,0.5) 0%, rgba(7,9,15,1) 100%);
+  background-color: var(--bg);
+  background-image: radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+  border-radius: 8px;
 }
 
 .neural-svg {
@@ -618,55 +620,59 @@ td {
   z-index: 1; overflow: visible;
 }
 
-.neural-edge { stroke: rgba(255,255,255,0.08); stroke-width: 1.5; }
+.neural-edge { stroke: rgba(255,255,255,0.05); stroke-width: 2; }
 .neural-edge.live {
-  stroke: rgba(0,243,255,0.4);
-  stroke-dasharray: 6 4;
-  animation: dashFlow 2s linear infinite;
+  stroke: var(--primary);
+  stroke-dasharray: 8 6;
+  animation: dashFlow 4s linear infinite;
 }
-@keyframes dashFlow { to { stroke-dashoffset: -20; } }
+@keyframes dashFlow { to { stroke-dashoffset: -40; } }
 
 .neural-node {
   position: absolute; z-index: 2;
   transform: translate(-50%, -50%);
   display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
   background: none; border: none; cursor: pointer;
-  transition: filter 0.2s, transform 0.2s;
+  transition: transform 0.2s;
 }
-.neural-node:hover { transform: translate(-50%, -50%) scale(1.1); filter: brightness(1.3); }
+.neural-node:hover { transform: translate(-50%, -50%) scale(1.05); }
 
 .neural-ring {
   position: absolute;
-  width: 56px; height: 56px;
+  width: 52px; height: 52px;
   border-radius: 50%;
-  border: 2px solid var(--node-color, var(--cyan));
-  opacity: 0.4;
+  border: 1px solid var(--border);
+  transition: all 0.2s;
 }
 .neural-node.active .neural-ring {
-  opacity: 1;
-  animation: ringPulse 2s ease-in-out infinite;
-  box-shadow: 0 0 20px var(--node-color, var(--cyan));
-}
-@keyframes ringPulse {
-  0%,100% { transform: scale(1); opacity: 0.8; }
-  50%      { transform: scale(1.2); opacity: 0.3; }
+  border: 2px solid var(--node-color, var(--primary));
 }
 
 .neural-node svg {
-  width: 48px; height: 48px;
-  background: var(--bg-3);
-  border: 2px solid var(--node-color, var(--cyan));
+  width: 44px; height: 44px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
   border-radius: 50%;
-  padding: 12px;
-  color: var(--node-color, var(--cyan));
+  padding: 10px;
+  color: var(--text-muted);
+  transition: all 0.2s;
+}
+.neural-node.active svg {
+  border-color: var(--node-color, var(--primary));
+  color: #fff;
 }
 
 .neural-label {
-  font-size: 0.65rem; font-weight: 600;
-  background: rgba(0,0,0,0.7);
-  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem; font-weight: 600;
+  background: var(--bg-2);
+  color: var(--text-muted);
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
   border-radius: 4px; white-space: nowrap;
-  backdrop-filter: blur(4px);
+}
+.neural-node.active .neural-label {
+  color: #fff;
+  border-color: var(--border-focus);
 }
 
 /* ═══════════════════════════════════════════════════════
