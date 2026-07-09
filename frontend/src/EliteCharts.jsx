@@ -482,3 +482,34 @@ export const DepthOfMarket = () => {
     </div>
   );
 };
+
+export const AcademyWidget = () => {
+  const courses = [
+    { title: 'Fundamentos do Swing Trade', level: 'Iniciante', duration: '2h 45m', c1: '#4338ca', c2: '#312e81', icon: '📈' },
+    { title: 'Gestão de Risco com Kelly Criterion', level: 'Intermediário', duration: '1h 20m', c1: '#b91c1c', c2: '#7f1d1d', icon: '🛡️' },
+    { title: 'IA Aplicada ao Mercado Financeiro', level: 'Avançado', duration: '4h 10m', c1: '#047857', c2: '#064e3b', icon: '🤖' },
+    { title: 'Psicologia do Trader Institucional', level: 'Todos', duration: '3h 00m', c1: '#b45309', c2: '#78350f', icon: '🧠' }
+  ];
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', width: '100%' }}>
+      {courses.map((c, i) => (
+        <div key={i} style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'transform 0.2s, box-shadow 0.2s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
+          <div style={{ height: '80px', background: `linear-gradient(135deg, ${c.c1}, ${c.c2})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem' }}>
+            {c.icon}
+          </div>
+          <div style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', flex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.65rem', background: 'rgba(255,255,255,0.1)', padding: '0.2rem 0.4rem', borderRadius: '4px', color: '#cbd5e1', fontWeight: 600 }}>{c.level}</span>
+              <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>{c.duration}</span>
+            </div>
+            <h4 style={{ fontSize: '0.85rem', margin: 0, color: '#fff', lineHeight: 1.3 }}>{c.title}</h4>
+            <div style={{ marginTop: 'auto', paddingTop: '0.5rem' }}>
+              <button style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#fff', padding: '0.4rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', transition: 'background 0.2s' }} onMouseEnter={e => e.currentTarget.style.background = 'var(--primary)'} onMouseLeave={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}>Assistir Grátis ➔</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};

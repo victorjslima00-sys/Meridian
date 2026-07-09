@@ -11,7 +11,7 @@ import {
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
   RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge,
-  MarketHeatmap, EconomicCalendar, DepthOfMarket
+  MarketHeatmap, EconomicCalendar, DepthOfMarket, AcademyWidget
 } from './EliteCharts';
 import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
 import './index.css';
@@ -579,6 +579,7 @@ export default function App() {
               </div>
 
               {(homeTab === 'dashboard' || homeTab === 'portfolio') && (
+                <React.Fragment>
                 <div className="content-grid">
                   <div className="left-col">
                     <div className="glass-panel">
@@ -694,6 +695,16 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+                
+                {/* ACADEMY WIDGET ROW */}
+                <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0 0.5rem' }}>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: '#fff' }}>Meridian Academy</h3>
+                    <span style={{ fontSize: '0.7rem', background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '0.2rem 0.5rem', borderRadius: '4px', fontWeight: 700 }}>CURSOS GRATUITOS</span>
+                  </div>
+                  <AcademyWidget />
+                </div>
+              </React.Fragment>
               )}
 
               {homeTab === 'ai' && (
