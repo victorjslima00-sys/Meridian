@@ -273,6 +273,7 @@ const AgentOfficeView = () => {
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState('overview');
+  const [homeTab, setHomeTab] = useState('portfolio');
   const [status, setStatus] = useState(null);
   const [positions, setPositions] = useState(null);
   const [ecosystem, setEcosystem] = useState(null);
@@ -517,8 +518,24 @@ export default function App() {
                 <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${positions.capital.invested?.toFixed(2) || '0.00'} investido`} />
               </div>
 
-              <div className="content-grid">
-                <div className="left-col">
+              {/* INNER TABS */}
+              <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.25rem' }}>
+                <button 
+                  style={{ background: 'none', border: 'none', color: homeTab === 'portfolio' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'portfolio' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
+                  onClick={() => setHomeTab('portfolio')}
+                >Portfólio & Posições</button>
+                <button 
+                  style={{ background: 'none', border: 'none', color: homeTab === 'market' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'market' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
+                  onClick={() => setHomeTab('market')}
+                >Mercado & Notícias</button>
+                <button 
+                  style={{ background: 'none', border: 'none', color: homeTab === 'ai' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'ai' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
+                  onClick={() => setHomeTab('ai')}
+                >Comitê de IA</button>
+              </div>
+
+              {homeTab === 'portfolio' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.25rem' }}>
                   <div className="glass-panel">
                     <div className="panel-header">
                       <h3>Evolução do Portfólio</h3>
@@ -527,7 +544,7 @@ export default function App() {
                     <SimplePortfolio capital={positions.capital} />
                   </div>
 
-                  <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                  <div className="glass-panel">
                     <div className="panel-header">
                       <h3>Posições Abertas (MTM)</h3>
                       <span className="muted-tag">Clique para ver o gráfico</span>
@@ -554,10 +571,12 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              )}
 
-                <div className="right-col">
+              {homeTab === 'market' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
                   {/* LIVE STREAM WIDGET */}
-                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                  <div className="glass-panel">
                     <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
                       <h3><Globe size={16} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
                       <span className="live-badge">● REC</span>
@@ -576,10 +595,10 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* NEWS WIDGET (MOVIDO DA ABA JOURNAL) */}
-                  <div className="glass-panel" style={{ flex: 1 }}>
+                  {/* NEWS WIDGET */}
+                  <div className="glass-panel" style={{ maxHeight: '600px', display: 'flex', flexDirection: 'column' }}>
                     <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', maxHeight: '300px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', flex: 1 }}>
                       {marketNews ? marketNews.map((n, i) => (
                         <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
@@ -591,13 +610,17 @@ export default function App() {
                       )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
                     </div>
                   </div>
+                </div>
+              )}
 
+              {homeTab === 'ai' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                   <div className="glass-panel terminal-panel">
                     <div className="panel-header">
-                      <h3><Terminal size={16} /> Comitê de IA</h3>
+                      <h3><Terminal size={16} /> Comitê de IA (Terminal Logs)</h3>
                       <span className="live-badge">● LIVE</span>
                     </div>
-                    <div className="terminal-feed" ref={termRef}>
+                    <div className="terminal-feed" ref={termRef} style={{ maxHeight: '250px' }}>
                       {logs.map((l, i) => (
                         <div key={i} className="log-line">
                           <span className="log-time">{l.t}</span>
@@ -607,17 +630,16 @@ export default function App() {
                       ))}
                     </div>
                   </div>
-                </div>
-              </div>
 
-              {/* AGENT OFFICE IN OVERVIEW */}
-              <div className="glass-panel" style={{ marginTop: '1.25rem', overflow: 'hidden' }}>
-                <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <h3><Users size={16} /> Agent Office (Live Thoughts)</h3>
-                  <span className="muted-tag">Monitoramento em tempo real do workflow cognitivo dos Agentes</span>
+                  <div className="glass-panel" style={{ overflow: 'hidden' }}>
+                    <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <h3><Users size={16} /> Agent Office (Live Thoughts)</h3>
+                      <span className="muted-tag">Monitoramento visual do workflow cognitivo dos Agentes</span>
+                    </div>
+                    <AgentOfficeView />
+                  </div>
                 </div>
-                <AgentOfficeView />
-              </div>
+              )}
             </div>
           )}
 
