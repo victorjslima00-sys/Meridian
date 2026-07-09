@@ -6,6 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="google" content="notranslate" />
     <title>Meridian Dashboard</title>
+    <script>
+      window.onerror = function(message, source, lineno, colno, error) {
+        const div = document.createElement('div');
+        div.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:red;color:white;z-index:999999;padding:2rem;font-family:monospace;white-space:pre-wrap;overflow:auto;';
+        div.innerHTML = `<h1>GLOBAL CRASH</h1><p>${message}</p><p>${source}:${lineno}:${colno}</p><pre>${error && error.stack}</pre>`;
+        document.body.appendChild(div);
+      };
+      window.onunhandledrejection = function(event) {
+        const div = document.createElement('div');
+        div.style = 'position:fixed;top:0;left:0;width:100vw;height:100vh;background:red;color:white;z-index:999999;padding:2rem;font-family:monospace;white-space:pre-wrap;overflow:auto;';
+        div.innerHTML = `<h1>UNHANDLED PROMISE REJECTION</h1><pre>${event.reason && event.reason.stack}</pre>`;
+        document.body.appendChild(div);
+      };
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <div id="chart" style="width: 400px; height: 300px;"></div>
+    <script>
+        const chart = LightweightCharts.createChart(document.getElementById('chart'));
+        const series = chart.addCandlestickSeries();
+        try {
+            series.setData([
+                { time: '2026-07-07', open: 10, high: 12, low: 9, close: 11, value: 100 },
+                { time: '2026-07-08', open: 11, high: 13, low: 10, close: 12, value: 200 }
+            ]);
+            console.log("SUCCESS");
+        } catch (e) {
+            console.error("ERROR", e);
+        }
+    </script>
+</body>
+</html>

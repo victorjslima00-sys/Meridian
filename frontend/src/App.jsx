@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import {
+import ActiveTradeDetails from './ActiveTradeDetails';import {
   Activity, ShieldAlert, Cpu, Database,
   BarChart2, Globe, Terminal, Briefcase, X,
   Wifi, WifiOff, TrendingUp, TrendingDown,
@@ -17,6 +17,27 @@ import {
 import AIFlow from './AIFlow';
 import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
 import './index.css';
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null, errorInfo: null };
+  }
+  static getDerivedStateFromError(error) { return { hasError: true }; }
+  componentDidCatch(error, errorInfo) { this.setState({ error, errorInfo }); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '2rem', background: '#f43f5e', color: 'white', fontFamily: 'monospace' }}>
+          <h2>React Crashed!</h2>
+          <p>{this.state.error && this.state.error.toString()}</p>
+          <details style={{ whiteSpace: 'pre-wrap', marginTop: '1rem' }}>{this.state.errorInfo?.componentStack}</details>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const API_BASE = 'http://localhost:8000/api';
 
@@ -51,8 +72,12 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
 
 // ─── Position Row com mini-sparkline ─────────────────────────────────────────
 const PositionRow = ({ pos, onClick }) => {
-  const priceDiff = pos.target - pos.entry_price;
-  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, ((pos.current_price - pos.entry_price) / priceDiff) * 100));
+  const current_price = pos.exit_price || pos.entry_price * (1 + (pos.pnl_pct / 100));
+  const target = pos.target_price || 0;
+  const stop = pos.stop_loss || 0;
+  
+  const priceDiff = target - pos.entry_price;
+  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, ((current_price - pos.entry_price) / priceDiff) * 100));
   const isGain = pos.pnl_pct >= 0;
 
   return (
@@ -65,19 +90,19 @@ const PositionRow = ({ pos, onClick }) => {
           {pos.side === 'BUY' ? '↑ LONG' : '↓ SHORT'}
         </span>
       </td>
-      <td className="mono">R$ {pos.entry_price.toFixed(2)}</td>
+      <td className="mono">R$ {pos.entry_price?.toFixed(2)}</td>
       <td>
         <div className="mtm-cell">
           <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e' }}>
-            R$ {pos.current_price.toFixed(2)}
+            R$ {current_price?.toFixed(2)}
           </span>
           <div className="prog-track">
             <div className="prog-fill" style={{ width: `${progress}%`, background: isGain ? '#10b981' : '#f43f5e' }} />
           </div>
         </div>
       </td>
-      <td className="mono dim">R$ {pos.target.toFixed(2)}</td>
-      <td className="mono dim">R$ {pos.stop.toFixed(2)}</td>
+      <td className="mono dim">R$ {target?.toFixed(2)}</td>
+      <td className="mono dim">R$ {stop?.toFixed(2)}</td>
       <td>
         <span className={`pnl-chip ${isGain ? 'gain' : 'loss'}`}>
           {isGain ? '+' : ''}{pos.pnl_pct}%
@@ -489,6 +514,7 @@ export default function App() {
   const [testingBroker, setTestingBroker] = useState(false);
 
   const [chartModal, setChartModal] = useState(null); // ticker string
+  const [selectedTrade, setSelectedTrade] = useState(null);
   const [nodePanel, setNodePanel] = useState(null);
   const [nodeDetails, setNodeDetails] = useState(null);
   const [showEmergency, setShowEmergency] = useState(false);
@@ -713,8 +739,12 @@ export default function App() {
         {/* ── PAGE CONTENT ── */}
         <div className="page-content">
 
-          {/* OVERVIEW */}
-          {tab === 'overview' && (
+          {/* ACTIVE TRADE DETAILS OR OVERVIEW */}
+          {tab === 'overview' && selectedTrade ? (
+            <ErrorBoundary>
+              <ActiveTradeDetails trade={selectedTrade} onBack={() => setSelectedTrade(null)} />
+            </ErrorBoundary>
+          ) : tab === 'overview' && (
             <div className="overview-layout">
               {/* GLOBAL MACRO & NEWS TICKER */}
               <div style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', marginBottom: '1rem', fontSize: '0.75rem', fontWeight: 600, color: '#8b9bb4', padding: '0.6rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', maskImage: 'linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%)' }}>
@@ -746,9 +776,9 @@ export default function App() {
 
               <div className="kpi-row">
                 <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${positions.capital.current.toFixed(2)}`} sub={`Inicial: R$ ${positions.capital.initial.toFixed(2)}`} />
-                <KpiCard title="Saldo Disponível" icon={Briefcase} color="#10b981" value={`R$ ${(positions.capital.current * 0.65).toFixed(2)}`} sub="Livre para novas operações" />
+                <KpiCard title="Saldo Disponível" icon={Briefcase} color="#10b981" value={`R$ ${(positions.capital.current - (positions.capital.invested ?? 0)).toFixed(2)}`} sub="Livre para novas operações" />
                 <KpiCard title="ROI" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="desde o início" trend={roiNum} />
-                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${positions.capital.invested?.toFixed(2) || '105.00'} alocado`} />
+                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${(positions.capital.invested ?? 0).toFixed(2)} alocado`} />
               </div>
 
 
@@ -781,7 +811,7 @@ export default function App() {
                               <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta — capital protegido</td></tr>
                             ) : (
                               positions.active_positions.map((p, i) => (
-                                <PositionRow key={i} pos={p} onClick={() => { setChartModal(p.ticker); setCandleData(null); }} />
+                                <PositionRow key={i} pos={p} onClick={() => { setSelectedTrade(p); }} />
                               ))
                             )}
                           </tbody>

@@ -34,13 +34,27 @@ async def ai_committee_worker():
     """
     Continuous loop that runs the AI Committee every 60 seconds.
     """
-    tickers_to_watch = ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]
+    tickers_to_watch = ["BTC-USD", "ETH-USD", "SOL-USD"]
     
     while True:
         await asyncio.sleep(5) # start 5s after boot
         print("Starting AI committee scan loop...", flush=True)
         for ticker in tickers_to_watch:
             print(f"Scanning {ticker}...", flush=True)
+            
+            # Check if we already have an active position for this ticker
+            import sqlite3
+            from .data.database import DB_PATH
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM trades WHERE ticker = ? AND status = 'active'", (ticker,))
+            is_active = cursor.fetchone()[0] > 0
+            conn.close()
+            
+            if is_active:
+                await broadcast_log("System", f"{ticker} já possui posição aberta. Pulando scan...", "info")
+                continue
+                
             await broadcast_log("System", f"Scanning {ticker}...", "info")
             await asyncio.sleep(2)
             
@@ -60,11 +74,13 @@ async def ai_committee_worker():
                 
                 if decision['approved']:
                     await broadcast_log("RiskManager", decision['reason'], "success")
+                    await asyncio.sleep(1)
                     
                     # 3. Executor
                     executor = ExecutorAgent()
-                    res = executor.execute_order(ticker, decision, analysis['last_price'])
-                    await broadcast_log("ExecutorAgent", f"Executed! {res['shares']:.0f} shares of {ticker} @ {res['price']}", "success")
+                    res = executor.execute_order(ticker, decision, analysis)
+                    if res['status'] == 'executed':
+                        await broadcast_log("ExecutorAgent", f"Executed! {res['shares']:.0f} shares of {ticker} @ {res['price']}", "success")
                 else:
                     await broadcast_log("RiskManager", decision['reason'], "error")
             
@@ -78,15 +94,62 @@ async def startup_event():
 @app.get("/api/positions")
 def get_positions_route():
     pf = get_portfolio()
-    trades = get_trades()
+    
+    # Fetch active trades directly from db
+    import sqlite3
+    from .data.database import DB_PATH
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM trades WHERE status = 'active' OR status = 'closed'")
+    rows = cursor.fetchall()
+    
+    active_positions = []
+    for r in rows:
+        active_positions.append(dict(r))
+    conn.close()
+    
     return {
         "capital": {
             "initial": pf.get('initial_capital', 10000.0),
             "current": pf.get('current_capital', 10500.0),
             "invested": pf.get('invested_capital', 1200.0)
         },
-        "active_positions": []
+        "active_positions": active_positions
     }
+
+@app.get("/api/candles/{ticker}")
+def get_candles(ticker: str):
+    from .data.feed import fetch_recent_data
+    df = fetch_recent_data(ticker, period="30d", interval="1d")
+    if df is None:
+        return {"ticker": ticker, "candles": []}
+    
+    # Format for lightweight-charts
+    candles = []
+    import pandas as pd
+    for idx, row in df.iterrows():
+        # timestamp to YYYY-MM-DD
+        dt = pd.to_datetime(row['date'])
+        # Fix yfinance bug where current day has 0 for Open/High/Low
+        o = float(row['open'])
+        h = float(row['high'])
+        l = float(row['low'])
+        c = float(row['close'])
+        if o == 0 and h == 0 and l == 0 and c > 0:
+            o = c
+            h = c
+            l = c
+            
+        candles.append({
+            "time": dt.strftime('%Y-%m-%d'),
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c,
+            "value": float(row.get('volume', 0))
+        })
+    return {"ticker": ticker, "candles": candles}
 
 @app.get("/api/ecosystem")
 def get_ecosystem():

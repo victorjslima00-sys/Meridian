@@ -26,28 +26,27 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ticker TEXT,
         side TEXT,
+        shares REAL,
         entry_price REAL,
         exit_price REAL,
+        target_price REAL,
+        stop_loss REAL,
         entry_date TIMESTAMP,
         exit_date TIMESTAMP,
         pnl_pct REAL,
-        exit_reason TEXT
+        exit_reason TEXT,
+        ai_rationale TEXT,
+        status TEXT
     )
     ''')
     
     # Check if portfolio exists, if not initialize mock
-    cursor.execute("SELECT * FROM portfolio")
-    if not cursor.fetchone():
+    cursor.execute("SELECT COUNT(*) FROM portfolio")
+    if cursor.fetchone()[0] == 0:
         cursor.execute('''
-        INSERT INTO portfolio (initial_capital, current_capital, invested_capital, updated_at)
-        VALUES (10000.0, 10500.0, 1200.0, ?)
-        ''', (datetime.datetime.now(),))
-        
-        # Add a fake trade
-        cursor.execute('''
-        INSERT INTO trades (ticker, side, entry_price, exit_price, entry_date, exit_date, pnl_pct, exit_reason)
-        VALUES ('PETR4', 'BUY', 35.50, 36.80, ?, ?, 3.66, 'take_profit')
-        ''', (datetime.datetime.now() - datetime.timedelta(days=2), datetime.datetime.now()))
+        INSERT INTO portfolio (initial_capital, current_capital, invested_capital)
+        VALUES (100.0, 100.0, 0.0)
+        ''')
         
     conn.commit()
     conn.close()
