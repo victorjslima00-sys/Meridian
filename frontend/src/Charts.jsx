@@ -3,7 +3,7 @@ import axios from 'axios';
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  ReferenceLine
+  ReferenceLine, ComposedChart
 } from 'recharts';
 import { TrendingUp, TrendingDown, Clock, Volume2 } from 'lucide-react';
 
@@ -187,9 +187,19 @@ export const PortfolioChart = ({ capital }) => {
     const progress = i / 29;
     const noise = (Math.sin(i * 0.8) * 0.02 + Math.cos(i * 1.3) * 0.01);
     const value = baseCapital + (currentCapital - baseCapital) * progress + baseCapital * noise;
+    
+    // Calcula Drawdown simulado a partir de um pico
+    const peak = Math.max(baseCapital, value + (baseCapital * 0.02)); 
+    const drawdown = value - peak < 0 ? ((value - peak)/peak)*100 : 0;
+    
+    // Simula Benchmark (IBOV) com crescimento ligeiramente inferior e noise
+    const benchValue = baseCapital * (1 + (progress * 0.05) + (Math.cos(i*0.5)*0.01));
+
     return {
       day: `D${i + 1}`,
       capital: parseFloat(value.toFixed(2)),
+      benchmark: parseFloat(benchValue.toFixed(2)),
+      drawdown: parseFloat(drawdown.toFixed(2)),
       baseline: baseCapital,
     };
   });
@@ -198,21 +208,66 @@ export const PortfolioChart = ({ capital }) => {
   const color = isGain ? '#10b981' : '#f43f5e';
 
   return (
-    <ResponsiveContainer width="100%" height={180}>
-      <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-        <defs>
-          <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%" stopColor={color} stopOpacity={0.25} />
-            <stop offset="95%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-        <XAxis dataKey="day" tick={{ fill: '#8b9bb4', fontSize: 9 }} tickLine={false} axisLine={false} interval={4} />
-        <YAxis tick={{ fill: '#8b9bb4', fontSize: 9 }} tickLine={false} axisLine={false} tickFormatter={v => `R$${v.toFixed(0)}`} domain={['auto', 'auto']} />
-        <Tooltip content={<DarkTooltip />} />
-        <ReferenceLine y={baseCapital} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" label={{ value: 'Base', fill: '#8b9bb4', fontSize: 9 }} />
-        <Area type="monotone" dataKey="capital" name="Capital" stroke={color} strokeWidth={2} fill="url(#portfolioGrad)" dot={false} />
-      </AreaChart>
-    </ResponsiveContainer>
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      {/* ─── FLOATING TECHNICAL STATS OVERLAY ─── */}
+      <div style={{ position: 'absolute', top: '15px', left: '20px', zIndex: 10, display: 'flex', gap: '1.25rem', background: 'rgba(10, 14, 23, 0.6)', padding: '0.6rem 1rem', borderRadius: '8px', border: '1px solid rgba(0, 243, 255, 0.1)', backdropFilter: 'blur(8px)', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+          <span style={{ fontSize: '0.6rem', color: '#8b9bb4', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.5px' }}>Sharpe Ratio</span>
+          <span style={{ fontSize: '0.85rem', color: '#00f3ff', fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>2.14</span>
+        </div>
+        <div style={{ width: '1px', background: 'rgba(255,255,255,0.08)' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+          <span style={{ fontSize: '0.6rem', color: '#8b9bb4', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.5px' }}>Max Drawdown</span>
+          <span style={{ fontSize: '0.85rem', color: '#f43f5e', fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>-4.2%</span>
+        </div>
+        <div style={{ width: '1px', background: 'rgba(255,255,255,0.08)' }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+          <span style={{ fontSize: '0.6rem', color: '#8b9bb4', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.5px' }}>Alpha (vs IBOV)</span>
+          <span style={{ fontSize: '0.85rem', color: '#10b981', fontWeight: 800, fontFamily: 'JetBrains Mono, monospace' }}>+1.8%</span>
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={data} margin={{ top: 75, right: 10, left: -20, bottom: 0 }}>
+          <defs>
+            <linearGradient id="portfolioGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor={color} stopOpacity={0.3} />
+              <stop offset="95%" stopColor={color} stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="benchGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#8b9bb4" stopOpacity={0.15} />
+              <stop offset="95%" stopColor="#8b9bb4" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="ddGrad2" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.2} />
+              <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
+          
+          <XAxis dataKey="day" tick={{ fill: '#8b9bb4', fontSize: 9 }} tickLine={false} axisLine={false} interval={4} />
+          
+          <YAxis yAxisId="left" tick={{ fill: '#8b9bb4', fontSize: 9 }} tickLine={false} axisLine={false} tickFormatter={v => `R$${v.toFixed(0)}`} domain={['auto', 'auto']} />
+          <YAxis yAxisId="right" orientation="right" hide domain={[-15, 5]} />
+          
+          <Tooltip 
+            content={<DarkTooltip />} 
+            cursor={{ stroke: 'rgba(0, 243, 255, 0.4)', strokeWidth: 1, strokeDasharray: '4 4' }} 
+          />
+          
+          <ReferenceLine yAxisId="left" y={baseCapital} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" label={{ value: 'Base', fill: '#8b9bb4', fontSize: 9 }} />
+          
+          {/* Drawdown area (right axis) */}
+          <Area yAxisId="right" type="monotone" dataKey="drawdown" name="Drawdown %" stroke="#f43f5e" strokeWidth={1} fill="url(#ddGrad2)" opacity={0.6} />
+          
+          {/* Benchmark line (left axis) */}
+          <Area yAxisId="left" type="monotone" dataKey="benchmark" name="IBOV Benchmark" stroke="#8b9bb4" strokeWidth={1.5} fill="url(#benchGrad)" strokeDasharray="3 3" opacity={0.5} dot={false} activeDot={false} />
+          
+          {/* Main Portfolio line (left axis) */}
+          <Area yAxisId="left" type="monotone" dataKey="capital" name="Capital Total" stroke={color} strokeWidth={3} fill="url(#portfolioGrad)" activeDot={{ r: 6, fill: '#000', stroke: color, strokeWidth: 2 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
   );
 };

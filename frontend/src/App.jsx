@@ -646,7 +646,6 @@ export default function App() {
             { id: 'overview',   Icon: BarChart2,   label: 'Visão Geral' },
             { id: 'risk',       Icon: ShieldAlert, label: 'Risk & Metrics' },
             { id: 'profile',    Icon: BookOpen,    label: 'Perfil' },
-            { id: 'neural',     Icon: Globe,       label: 'Mapa Neural' },
             { id: 'settings',   Icon: Settings,    label: 'Configurações' },
           ].map(({ id, Icon, label }) => (
             <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
@@ -1052,56 +1051,6 @@ export default function App() {
                   Correlação &lt; 0.3: Diversificação eficiente.
                 </p>
               </div>
-            </div>
-          )}
-
-          {/* NEURAL MAP */}
-          {tab === 'neural' && (
-            <div className="page-section" style={{ position: 'relative' }}>
-              <div className="page-title">
-                <Globe size={22} />
-                <div><h2>Mapa Neural do Ecossistema</h2><p>Agentes ativos e fluxo de dados em tempo real</p></div>
-              </div>
-              <div className="glass-panel" style={{ flex: 1, minHeight: 500, display: 'flex' }}>
-                <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={openNode} />
-                
-                {/* Node Side Panel */}
-                {nodePanel && (
-                  <div style={{
-                    width: '350px', borderLeft: '1px solid rgba(0,243,255,0.2)', background: 'rgba(10,14,23,0.95)',
-                    padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem',
-                    animation: 'fadeInRight 0.3s ease-out'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '1rem' }}>
-                      <h3 style={{ margin: 0, color: '#00f3ff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <Terminal size={18} /> {nodePanel.label}
-                      </h3>
-                      <button onClick={() => setNodePanel(null)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer' }}><X size={18} /></button>
-                    </div>
-                    
-                    <div style={{ flex: 1, overflowY: 'auto' }}>
-                      <div style={{ fontSize: '0.8rem', color: '#e2e8f0', marginBottom: '1rem' }}>
-                        <strong>Status:</strong> <span style={{ color: nodePanel.status === 'active' ? '#10b981' : '#f59e0b' }}>{nodePanel.status.toUpperCase()}</span>
-                      </div>
-                      
-                      <h4 style={{ fontSize: '0.75rem', color: '#8b9bb4', textTransform: 'uppercase', marginBottom: '0.5rem' }}>CMD State Logs (Live)</h4>
-                      <div style={{ background: '#000', padding: '1rem', borderRadius: '8px', border: '1px solid #333', fontFamily: 'JetBrains Mono', fontSize: '0.7rem', color: '#00f3ff', height: '250px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <div>[21:14:02] Initializing {nodePanel.id} module...</div>
-                        <div>[21:14:05] Context loaded. Ready.</div>
-                        <div>[21:15:10] Scanning incoming data streams...</div>
-                        <div>[21:15:42] Processing vector embeddings... [OK]</div>
-                        <div style={{ color: '#10b981' }}>[21:16:01] Awaiting new tasks.</div>
-                        {/* Fake animated line */}
-                        <div style={{ opacity: 0.5, animation: 'pulse 1.5s infinite' }}>_</div>
-                      </div>
-                    </div>
-                    <button style={{ padding: '0.75rem', background: 'rgba(0,243,255,0.1)', color: '#00f3ff', border: '1px solid rgba(0,243,255,0.3)', borderRadius: '8px', cursor: 'pointer' }} onClick={() => alert('Diagnostic run initiated.')}>
-                      Executar Diagnóstico
-                    </button>
-                  </div>
-                )}
-              </div>
-              <style>{`@keyframes fadeInRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style>
             </div>
           )}
 
