@@ -492,19 +492,14 @@ export default function App() {
   ]);
   const termRef = useRef(null);
 
-  // Terminal stream simulation
+  // AI Ecosystem Real-time Logs
   useEffect(() => {
-    const msgs = [
-      { sender: 'PESQUISADOR', msg: 'Analisando fluxo institucional em PETR4...' },
-      { sender: 'GUARD-RAIL',  msg: 'Correlação PETR4/VALE3 = 0.61 — dentro do limite.' },
-      { sender: 'QUANT',       msg: 'Sharpe otimizado: 0.87 (regime alta_juros).' },
-      { sender: 'SISTEMA',     msg: 'Sincronização B3 concluída. Latência: 12ms.' },
-    ];
-    const iv = setInterval(() => {
-      const m = msgs[Math.floor(Math.random() * msgs.length)];
-      setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), ...m }]);
-    }, 4000);
-    return () => clearInterval(iv);
+    const ws = new WebSocket('ws://localhost:8000/ws/logs');
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
+    };
+    return () => ws.close();
   }, []);
 
   useEffect(() => {
