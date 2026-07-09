@@ -837,7 +837,6 @@ export default function App() {
 
               {homeTab === 'ai' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                  <AIEcosystemDashboard />
                   <div className="glass-panel">
                     <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                       <h3><BrainCircuit size={16} /> Workflow Lógico do Agente</h3>
@@ -847,6 +846,7 @@ export default function App() {
                       <AIFlow />
                     </div>
                   </div>
+                  <AIEcosystemDashboard />
                 </div>
               )}
             </div>
