@@ -589,7 +589,7 @@ export default function App() {
                       <SimplePortfolio capital={positions.capital} />
                     </div>
 
-                    <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                    <div className="glass-panel">
                       <div className="panel-header">
                         <h3>Posições Abertas (MTM)</h3>
                         <span className="muted-tag">Clique para ver o gráfico</span>
@@ -617,14 +617,14 @@ export default function App() {
                     </div>
 
                     {/* DOM WIDGET */}
-                    <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                    <div className="glass-panel">
                       <div className="panel-header">
                         <h3>Livro Visual de Ofertas (DOM)</h3>
-                        <button onClick={playDing} title="Testar Som de Gain" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                          <Activity size={14} />
+                        <button onClick={playDing} title="Testar Som de Gain" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '2px', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                          <Activity size={12} />
                         </button>
                       </div>
-                      <div style={{ padding: '1rem' }}>
+                      <div style={{ padding: '0.5rem' }}>
                         <DepthOfMarket />
                       </div>
                     </div>
@@ -633,8 +633,8 @@ export default function App() {
                   <div className="right-col">
                     {/* LIVE STREAM WIDGET */}
                     <div className="glass-panel" style={{ flexShrink: 0 }}>
-                      <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
-                        <h3><Globe size={16} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
+                      <div className="panel-header" style={{ padding: '0.5rem 0.75rem' }}>
+                        <h3><Globe size={14} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
                         <span className="live-badge">● REC</span>
                       </div>
                       <div style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}>
@@ -652,31 +652,32 @@ export default function App() {
                     </div>
 
                     {/* NEWS WIDGET */}
-                    <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '300px' }}>
+                    <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '200px' }}>
                       <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', flex: 1 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '0.75rem', overflowY: 'auto', flex: 1 }}>
                         {marketNews ? marketNews.map((n, i) => (
-                          <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
+                          <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem', fontSize: '0.7rem' }}>
                               <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{n.category}</span>
                               <span style={{ color: 'var(--text-muted)' }}>{n.time} • {n.source}</span>
                             </div>
-                            <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
+                            <div style={{ fontSize: '0.8rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
                           </div>
-                        )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
+                        )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Carregando radar de notícias...</div>}
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
+                    {/* BOTTOM RIGHT GRID */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                       {/* ECONOMIC CALENDAR WIDGET */}
                       <div className="glass-panel">
                         <div className="panel-header">
                           <h3>Calendário Econômico</h3>
-                          <button onClick={playBeep} title="Testar Alerta" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                            <Bell size={14} />
+                          <button onClick={playBeep} title="Testar Alerta" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '2px', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                            <Bell size={12} />
                           </button>
                         </div>
-                        <div style={{ padding: '1rem' }}>
+                        <div style={{ padding: '0.5rem' }}>
                           <EconomicCalendar />
                         </div>
                       </div>
@@ -686,7 +687,7 @@ export default function App() {
                         <div className="panel-header">
                           <h3>Mapa de Calor (IBOV)</h3>
                         </div>
-                        <div style={{ padding: '0.5rem' }}>
+                        <div style={{ padding: '0.25rem' }}>
                           <MarketHeatmap />
                         </div>
                       </div>
