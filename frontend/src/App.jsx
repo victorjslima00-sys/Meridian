@@ -502,22 +502,31 @@ export default function App() {
           {/* OVERVIEW */}
           {tab === 'overview' && (
             <div className="overview-layout">
-              {/* GLOBAL MACRO TICKER */}
-              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', fontSize: '0.75rem', fontWeight: 600, color: '#8b9bb4', padding: '0.5rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>S&P 500</span> <span style={{ color: '#10b981' }}>5,123.40 (+0.8%)</span>
-                </div>
-                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>DXY</span> <span style={{ color: '#f43f5e' }}>104.20 (-0.2%)</span>
-                </div>
-                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>VIX</span> <span style={{ color: '#10b981' }}>13.40 (-1.5%)</span>
-                </div>
-                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <span>US10Y</span> <span style={{ color: '#f59e0b' }}>4.23% (+0.02)</span>
+              {/* GLOBAL MACRO & NEWS TICKER */}
+              <div style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', marginBottom: '1rem', fontSize: '0.75rem', fontWeight: 600, color: '#8b9bb4', padding: '0.6rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', maskImage: 'linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%)' }}>
+                <div className="tape-scroll" style={{ gap: '3rem', animationDuration: '60s' }}>
+                  {[...Array(2)].map((_, idx) => (
+                    <React.Fragment key={idx}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>S&P 500</span> <span style={{ color: '#10b981' }}>5,123.40 (+0.8%)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>DXY</span> <span style={{ color: '#e60000' }}>104.20 (-0.2%)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>VIX</span> <span style={{ color: '#10b981' }}>13.40 (-1.5%)</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span>US10Y</span> <span style={{ color: '#f59e0b' }}>4.23% (+0.02)</span>
+                      </div>
+                      {marketNews && marketNews.map((n, i) => (
+                        <div key={`news-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span style={{ color: 'var(--primary)' }}>[{n.source}]</span>
+                          <span style={{ color: '#fff' }}>{n.title}</span>
+                        </div>
+                      ))}
+                    </React.Fragment>
+                  ))}
                 </div>
               </div>
 
