@@ -2,8 +2,11 @@ import sqlite3
 import os
 from typing import Dict, Any, List
 import datetime
+from pathlib import Path
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "meridian.db")
+# Raiz do projeto = 3 níveis acima de backend/app/data/
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+DB_PATH = str(PROJECT_ROOT / "data" / "trading_bot.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)

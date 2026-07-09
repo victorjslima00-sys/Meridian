@@ -62,3 +62,6 @@ reports/
 *.pem
 .terraform.lock.hcl
 *.bak
+patch_*.py
+test_libs*.py
+*.patch

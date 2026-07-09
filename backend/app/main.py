@@ -174,30 +174,48 @@ def get_tape():
         ]
     }
 
-@app.get("/api/history/{ticker}")
-def get_history(ticker: str, limit: int = 60):
-    """
-    Mock endpoint for historical candle data
-    Returns [Open, High, Low, Close, Volume]
-    """
-    base_price = 100.0 if ticker != "WIN" else 130000.0
-    candles = []
-    dates = []
-    
-    current_price = base_price
-    for i in range(limit):
-        # generate fake candle
-        o = current_price
-        c = current_price * (1 + (random.random() * 0.02 - 0.01))
-        h = max(o, c) * (1 + random.random() * 0.005)
-        l = min(o, c) * (1 - random.random() * 0.005)
-        v = random.randint(1000, 50000)
-        
-        candles.append([round(o, 2), round(h, 2), round(l, 2), round(c, 2), v])
-        dates.append(f"Day {i}")
-        current_price = c
+from pydantic import BaseModel
+from typing import Optional
+import os
 
-    return {"ticker": ticker, "candles": candles, "dates": dates}
+EMERGENCY_PASSWORD = os.environ.get("EMERGENCY_PASSWORD", "")
+
+class ActionRequest(BaseModel):
+    action: str
+    password: Optional[str] = None
+
+@app.post("/api/system/emergency_stop")
+def system_emergency_stop(req: ActionRequest):
+    if not EMERGENCY_PASSWORD:
+        return {"error": "Emergency password not configured on server."}
+    if req.password != EMERGENCY_PASSWORD:
+        return {"error": "Senha incorreta. Acesso negado."}
+    
+    try:
+        import sqlite3
+        from .data.database import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE trades SET status = 'CANCELLED' WHERE status = 'active'")
+        conn.commit()
+        conn.close()
+        return {"status": "success", "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas."}
+    except Exception as e:
+        return {"error": "Internal server error"}
+
+@app.get('/api/elite/risk_metrics')
+def get_risk_metrics():
+    # Retorna métricas hardcoded temporárias, simulando os resultados dos backtests em settings
+    return {
+        'sharpe': 0.87,
+        'sortino': 1.12,
+        'calmar': 0.65,
+        'max_drawdown_pct': -8.3,
+        'var_95_daily': -9.40,
+        'win_rate': 0.41,
+        'avg_win': 3.2,
+        'avg_loss': -1.8
+    }
 
 # WebSocket for real-time agent logs
 active_connections = []
