@@ -52,3 +52,62 @@ class ExecutorAgent:
             "price": current_price,
             "total_value": allocated
         }
+        
+    def close_order(self, trade_id: int, current_price: float, reason: str):
+        """
+        Closes an active order.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT ticker, side, shares, entry_price FROM trades WHERE id = ?", (trade_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return {"status": "error", "reason": "Trade not found."}
+            
+        ticker, side, shares, entry_price = row
+        
+        # Calculate PnL
+        if side == "BUY":
+            pnl_pct = ((current_price - entry_price) / entry_price) * 100
+        else:
+            pnl_pct = ((entry_price - current_price) / entry_price) * 100
+            
+        gross_value = shares * current_price
+        
+        # Update trade
+        cursor.execute('''
+        UPDATE trades 
+        SET status = 'closed', exit_price = ?, exit_date = ?, pnl_pct = ?, exit_reason = ?
+        WHERE id = ?
+        ''', (current_price, datetime.datetime.now(), pnl_pct, reason, trade_id))
+        
+        # Update portfolio
+        cursor.execute("SELECT current_capital, invested_capital FROM portfolio ORDER BY id DESC LIMIT 1")
+        pf_row = cursor.fetchone()
+        if pf_row:
+            current_cap = pf_row[0]
+            invested_cap = pf_row[1]
+            
+            # PnL logic on capital
+            original_allocation = shares * entry_price
+            pnl_value = gross_value - original_allocation
+            
+            new_current = current_cap + pnl_value
+            new_invested = invested_cap - original_allocation
+            
+            cursor.execute('''
+            UPDATE portfolio SET current_capital = ?, invested_capital = ?, updated_at = ? WHERE id = (SELECT MAX(id) FROM portfolio)
+            ''', (new_current, new_invested, datetime.datetime.now()))
+            
+        conn.commit()
+        conn.close()
+        
+        return {
+            "status": "closed",
+            "trade_id": trade_id,
+            "ticker": ticker,
+            "exit_price": current_price,
+            "pnl_pct": pnl_pct
+        }

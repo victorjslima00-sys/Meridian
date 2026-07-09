@@ -48,25 +48,60 @@ async def ai_committee_worker():
         for ticker in tickers_to_watch:
             print(f"Scanning {ticker}...", flush=True)
             
-            # Check if we already have an active position for this ticker
+            # Use data feed to get the latest price directly for evaluation
+            from .data.feed import fetch_recent_data
+            df_recent = fetch_recent_data(ticker, period="1d", interval="15m")
+            if df_recent is None or len(df_recent) == 0:
+                continue
+            current_price = df_recent.iloc[-1]['close']
+
+            # Database connection
             import sqlite3
             from .data.database import DB_PATH
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM trades WHERE ticker = ? AND status = 'active'", (ticker,))
-            is_active = cursor.fetchone()[0] > 0
-            conn.close()
             
-            if is_active:
-                await broadcast_log("System", f"{ticker} já possui posição aberta. Pulando scan...", "info")
-                continue
+            # --- PHASE 1: EXIT LOOP (Manage Open Positions) ---
+            cursor.execute("SELECT id, side, target_price, stop_loss FROM trades WHERE ticker = ? AND status = 'active'", (ticker,))
+            active_trade = cursor.fetchone()
+            
+            if active_trade:
+                trade_id, side, target_price, stop_loss = active_trade
                 
-            await broadcast_log("System", f"Scanning {ticker}...", "info")
+                close_trade = False
+                close_reason = ""
+                
+                # Basic Stop Loss / Take Profit Logic
+                if side == "BUY":
+                    if target_price > 0 and current_price >= target_price:
+                        close_trade, close_reason = True, f"Take Profit hit at {current_price}"
+                    elif stop_loss > 0 and current_price <= stop_loss:
+                        close_trade, close_reason = True, f"Stop Loss hit at {current_price}"
+                elif side == "SELL":
+                    if target_price > 0 and current_price <= target_price:
+                        close_trade, close_reason = True, f"Take Profit hit at {current_price}"
+                    elif stop_loss > 0 and current_price >= stop_loss:
+                        close_trade, close_reason = True, f"Stop Loss hit at {current_price}"
+                        
+                if close_trade:
+                    await broadcast_log("System", f"Closing active trade on {ticker}: {close_reason}", "warning")
+                    executor = ExecutorAgent()
+                    res = executor.close_order(trade_id, current_price, close_reason)
+                    await broadcast_log("ExecutorAgent", f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%", "success")
+                else:
+                    await broadcast_log("System", f"{ticker} já possui posição aberta. Monitorando (Current: {current_price})...", "info")
+                
+                conn.close()
+                continue
+            conn.close()
+                
+            # --- PHASE 2: ENTRY LOOP (Find New Opportunities) ---
+            await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
             await asyncio.sleep(2)
             
-            # 1. Analyst
+            # 1. Analyst (now uses Gemini async)
             analyst = MarketAnalyst(ticker)
-            analysis = analyst.analyze()
+            analysis = await analyst.analyze()
             await broadcast_log("MarketAnalyst", f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}", "info")
             await asyncio.sleep(2)
             
@@ -74,7 +109,10 @@ async def ai_committee_worker():
             if analysis['signal'] != "HOLD":
                 await broadcast_log("RiskManager", f"Evaluating {analysis['signal']} on {ticker}...", "warning")
                 pf = get_portfolio()
-                rm = RiskManager(current_capital=pf.get('current_capital', 10000.0))
+                # GAP 4 Fix: Don't default to 10000.0, use actual DB value
+                current_capital = pf.get('current_capital', 0.0)
+                
+                rm = RiskManager(current_capital=current_capital)
                 decision = rm.evaluate_trade(analysis)
                 await asyncio.sleep(2)
                 
