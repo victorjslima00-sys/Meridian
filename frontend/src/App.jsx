@@ -432,7 +432,6 @@ export default function App() {
             { id: 'journal',    Icon: BookOpen,    label: 'Trade Journal' },
             { id: 'correlation',Icon: Database,    label: 'Correlação' },
             { id: 'neural',     Icon: Globe,       label: 'Mapa Neural' },
-            { id: 'office',     Icon: Terminal,    label: 'Agent Office' },
             { id: 'settings',   Icon: Settings,    label: 'Configurações' },
           ].map(({ id, Icon, label }) => (
             <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
@@ -555,6 +554,15 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* AGENT OFFICE IN OVERVIEW */}
+              <div className="glass-panel" style={{ marginTop: '1.25rem', overflow: 'hidden' }}>
+                <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <h3><Users size={16} /> Agent Office (Live Thoughts)</h3>
+                  <span className="muted-tag">Monitoramento em tempo real do workflow cognitivo dos Agentes</span>
+                </div>
+                <AgentOfficeView />
               </div>
             </div>
           )}
@@ -740,20 +748,6 @@ export default function App() {
                 )}
               </div>
               <style>{`@keyframes fadeInRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style>
-            </div>
-          )}
-
-          {/* AGENT OFFICE (NEW) */}
-          {tab === 'office' && (
-            <div className="page-section">
-              <div className="page-title">
-                <Terminal size={22} />
-                <div>
-                  <h2>Agent Office (CMD View)</h2>
-                  <p>Acompanhe em tempo real as deliberações em linguagem natural do Comitê de IA</p>
-                </div>
-              </div>
-              <AgentOfficeView />
             </div>
           )}
 
