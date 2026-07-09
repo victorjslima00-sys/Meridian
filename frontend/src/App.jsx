@@ -6,13 +6,14 @@ import {
   Wifi, WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Bell, Settings, RefreshCw,
   DollarSign, Percent, BookOpen, History,
-  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send
+  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send, BrainCircuit
 } from 'lucide-react';
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
   RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge,
   MarketHeatmap, EconomicCalendar, DepthOfMarket, AcademyWidget, FastExecutionWidget
 } from './EliteCharts';
+import AIFlow from './AIFlow';
 import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
 import './index.css';
 
@@ -837,6 +838,15 @@ export default function App() {
               {homeTab === 'ai' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                   <AIEcosystemDashboard />
+                  <div className="glass-panel">
+                    <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                      <h3><BrainCircuit size={16} /> Workflow Lógico do Agente</h3>
+                      <span className="muted-tag">Estrutura Node-Based do Raciocínio (Langflow)</span>
+                    </div>
+                    <div style={{ padding: '1rem' }}>
+                      <AIFlow />
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
