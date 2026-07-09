@@ -105,26 +105,34 @@ async def ai_committee_worker():
             await broadcast_log("MarketAnalyst", f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}", "info")
             await asyncio.sleep(2)
             
-            # 2. Risk Manager
+            # 2. Risk Manager (com checagem de correlação)
             if analysis['signal'] != "HOLD":
                 await broadcast_log("RiskManager", f"Evaluating {analysis['signal']} on {ticker}...", "warning")
                 pf = get_portfolio()
-                # GAP 4 Fix: Don't default to 10000.0, use actual DB value
                 current_capital = pf.get('current_capital', 0.0)
-                
+
+                # Buscar todos os tickers com posição ativa para checar correlação
+                import sqlite3 as _sqlite3
+                from .data.database import DB_PATH as _DB_PATH
+                _conn = _sqlite3.connect(_DB_PATH)
+                open_tickers = [row[0] for row in _conn.execute(
+                    "SELECT DISTINCT ticker FROM trades WHERE status='active'"
+                ).fetchall()]
+                _conn.close()
+
                 rm = RiskManager(current_capital=current_capital)
-                decision = rm.evaluate_trade(analysis)
+                decision = rm.evaluate_trade(analysis, ticker=ticker, open_tickers=open_tickers)
                 await asyncio.sleep(2)
-                
+
                 if decision['approved']:
                     await broadcast_log("RiskManager", decision['reason'], "success")
                     await asyncio.sleep(1)
-                    
+
                     # 3. Executor
                     executor = ExecutorAgent()
                     res = executor.execute_order(ticker, decision, analysis)
                     if res['status'] == 'executed':
-                        await broadcast_log("ExecutorAgent", f"Executed! {res['shares']:.0f} shares of {ticker} @ {res['price']}", "success")
+                        await broadcast_log("ExecutorAgent", f"Executed! {res['shares']:.6f} shares of {ticker} @ {res['price']}", "success")
                 else:
                     await broadcast_log("RiskManager", decision['reason'], "error")
             
