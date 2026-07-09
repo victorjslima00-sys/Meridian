@@ -4,20 +4,34 @@
    TOKENS DE DESIGN
 ═══════════════════════════════════════════════════════ */
 :root {
-  --bg:        #07090f;
-  --bg-2:      #0d1117;
-  --bg-3:      #111827;
+  /* Toro Investimentos Inspired Palette */
+  --bg: #000000;
+  --bg-2: #111111;
+  --bg-3: #1a1a1a;
+  
+  --border: #262626;
+  --border-focus: #404040;
+  
+  --text: #ffffff;
+  --text-muted: #a3a3a3;
+  
+  --primary: #e60000; /* Toro Red */
+  
+  --cyan: #e60000; /* Re-routing cyan to red for the main accent */
+  --green: #22c55e;
+  --red: #e60000;
+  --purple: #ffffff;
+  --orange: #f59e0b;
+  
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --sidebar-w: 220px;
   --panel:     rgba(17,24,39,0.8);
-  --border:    rgba(255,255,255,0.07);
   --border-hi: rgba(0,243,255,0.2);
-  --text:      #e2e8f0;
   --muted:     #6b7280;
   --dim:       #4b5563;
-  --cyan:      #00f3ff;
   --blue:      #3b82f6;
-  --purple:    #8b5cf6;
-  --green:     #10b981;
-  --red:       #f43f5e;
   --amber:     #f59e0b;
   --radius-sm: 6px;
   --radius-md: 10px;

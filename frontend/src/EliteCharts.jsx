@@ -338,9 +338,9 @@ export const MarketRegimeBadge = ({ regime }) => {
   
   const styles = {
     bull: { bg: 'rgba(16,185,129,0.15)', color: '#10b981', label: 'BULL MARKET' },
-    bear: { bg: 'rgba(244,63,94,0.15)', color: '#f43f5e', label: 'BEAR MARKET' },
+    bear: { bg: 'rgba(230,0,0,0.15)', color: '#e60000', label: 'BEAR MARKET' },
     volatile: { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b', label: 'HIGH VOLATILITY' },
-    lateral: { bg: 'rgba(139,92,246,0.15)', color: '#8b5cf6', label: 'LATERAL / RANGING' }
+    lateral: { bg: 'rgba(255,255,255,0.1)', color: '#a3a3a3', label: 'LATERAL / RANGING' }
   };
   
   const s = styles[regime.regime] || styles.lateral;

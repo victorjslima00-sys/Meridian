@@ -88,12 +88,12 @@ const PositionRow = ({ pos, onClick }) => {
 // ─── Neural Map ───────────────────────────────────────────────────────────────
 const NeuralMap = ({ nodes, edges, onNodeClick }) => {
   const layout = {
-    data:      { top: '15%', left: '15%', icon: Globe, color: '#3b82f6' },
-    db:        { top: '40%', left: '35%', icon: Database, color: '#8b5cf6' },
-    quant:     { top: '15%', left: '58%', icon: BarChart2, color: '#00f3ff' },
-    research:  { top: '75%', left: '35%', icon: Cpu, color: '#f59e0b' },
-    guardrail: { top: '75%', left: '65%', icon: ShieldAlert, color: '#f43f5e' },
-    broker:    { top: '40%', left: '85%', icon: Briefcase, color: '#10b981' },
+    data:      { top: '15%', left: '15%', icon: Globe, color: '#ffffff' },
+    db:        { top: '40%', left: '35%', icon: Database, color: '#ffffff' },
+    quant:     { top: '15%', left: '58%', icon: BarChart2, color: 'var(--primary)' },
+    research:  { top: '75%', left: '35%', icon: Cpu, color: '#a3a3a3' },
+    guardrail: { top: '75%', left: '65%', icon: ShieldAlert, color: 'var(--primary)' },
+    broker:    { top: '40%', left: '85%', icon: Briefcase, color: '#ffffff' },
   };
 
   return (
@@ -429,8 +429,7 @@ export default function App() {
           {[
             { id: 'overview',   Icon: BarChart2,   label: 'Visão Geral' },
             { id: 'risk',       Icon: ShieldAlert, label: 'Risk & Metrics' },
-            { id: 'journal',    Icon: BookOpen,    label: 'Trade Journal' },
-            { id: 'correlation',Icon: Database,    label: 'Correlação' },
+            { id: 'profile',    Icon: BookOpen,    label: 'Perfil' },
             { id: 'neural',     Icon: Globe,       label: 'Mapa Neural' },
             { id: 'settings',   Icon: Settings,    label: 'Configurações' },
           ].map(({ id, Icon, label }) => (
@@ -557,6 +556,22 @@ export default function App() {
                 </div>
 
                 <div className="right-col">
+                  {/* NEWS WIDGET (MOVIDO DA ABA JOURNAL) */}
+                  <div className="glass-panel" style={{ flex: 1 }}>
+                    <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', maxHeight: '300px' }}>
+                      {marketNews ? marketNews.map((n, i) => (
+                        <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
+                            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{n.category}</span>
+                            <span style={{ color: 'var(--text-muted)' }}>{n.time} • {n.source}</span>
+                          </div>
+                          <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
+                        </div>
+                      )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
+                    </div>
+                  </div>
+
                   <div className="glass-panel terminal-panel">
                     <div className="panel-header">
                       <h3><Terminal size={16} /> Comitê de IA</h3>
@@ -619,80 +634,78 @@ export default function App() {
             </div>
           )}
 
-          {/* TRADE JOURNAL */}
-          {tab === 'journal' && (
+          {/* PROFILE */}
+          {tab === 'profile' && (
             <div className="page-section">
               <div className="page-title">
-                <BookOpen size={22} />
+                <Users size={22} />
                 <div>
-                  <h2>Trade Journal</h2>
-                  <p>Histórico detalhado das operações fechadas</p>
+                  <h2>Perfil & Histórico de Operações</h2>
+                  <p>Dados da conta e registro detalhado de negociações</p>
                 </div>
               </div>
               
+              {/* Perfil Info */}
+              <div className="glass-panel" style={{ padding: '1.5rem', marginBottom: '1.25rem', display: 'flex', gap: '2rem', alignItems: 'center' }}>
+                <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'rgba(230,0,0,0.1)', border: '2px solid var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Users size={32} color="var(--primary)" />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.2rem', marginBottom: '0.2rem' }}>Trader Elite</h3>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>ID: 10492-MERIDIAN • Conta {brokerSettings.mode.toUpperCase()}</p>
+                  <div style={{ display: 'flex', gap: '1rem' }}>
+                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Plano: Institucional</span>
+                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Corretora: Cedro Tech</span>
+                  </div>
+                </div>
+              </div>
+
               {tradeJournal?.summary && (
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
-                  <div className="kpi-card" style={{ flex: 1 }}>
-                    <div className="kpi-label">Total de Trades</div>
+                  <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
+                    <div className="kpi-title">Total de Trades</div>
                     <div className="kpi-value">{tradeJournal.summary.total_trades}</div>
                   </div>
-                  <div className="kpi-card" style={{ flex: 1 }}>
-                    <div className="kpi-label">Winning / Losing</div>
-                    <div className="kpi-value" style={{ color: '#10b981' }}>
-                      {tradeJournal.summary.winning} <span style={{ color: '#f43f5e', fontSize: '1rem' }}>/ {tradeJournal.summary.losing}</span>
+                  <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
+                    <div className="kpi-title">Winning / Losing</div>
+                    <div className="kpi-value" style={{ color: 'var(--green)' }}>
+                      {tradeJournal.summary.winning} <span style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>/ {tradeJournal.summary.losing}</span>
                     </div>
                   </div>
-                  <div className="kpi-card" style={{ flex: 1 }}>
-                    <div className="kpi-label">PnL Total (BRL)</div>
-                    <div className="kpi-value" style={{ color: tradeJournal.summary.total_pnl_brl >= 0 ? '#10b981' : '#f43f5e' }}>
+                  <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
+                    <div className="kpi-title">PnL Total (BRL)</div>
+                    <div className="kpi-value" style={{ color: tradeJournal.summary.total_pnl_brl >= 0 ? 'var(--green)' : 'var(--red)' }}>
                       R$ {tradeJournal.summary.total_pnl_brl.toFixed(2)}
                     </div>
                   </div>
                 </div>
               )}
 
-              <div className="content-grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '1.25rem' }}>
-                <div className="glass-panel">
-                  <div className="panel-header"><h3>Histórico de Operações</h3></div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
-                          <th>Data Início</th><th>Duração</th><th>PnL %</th><th>Motivo</th>
+              <div className="glass-panel">
+                <div className="panel-header"><h3>Histórico de Operações Fechadas</h3></div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
+                        <th>Data Início</th><th>Duração</th><th>PnL %</th><th>Motivo</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tradeJournal?.trades?.map((t, i) => (
+                        <tr key={i}>
+                          <td><span className="ticker-badge">{t.ticker}</span></td>
+                          <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
+                          <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
+                          <td className="mono">R$ {t.exit_price.toFixed(2)}</td>
+                          <td className="dim">{t.entry_date}</td>
+                          <td className="dim">{t.duration_days} d</td>
+                          <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct}%</span></td>
+                          <td className="dim">{t.exit_reason.toUpperCase()}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {tradeJournal?.trades?.map((t, i) => (
-                          <tr key={i}>
-                            <td><span className="ticker-badge">{t.ticker}</span></td>
-                            <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
-                            <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
-                            <td className="mono">R$ {t.exit_price.toFixed(2)}</td>
-                            <td className="dim">{t.entry_date}</td>
-                            <td className="dim">{t.duration_days} d</td>
-                            <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct}%</span></td>
-                            <td className="dim">{t.exit_reason.toUpperCase()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="glass-panel">
-                  <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
-                    {marketNews ? marketNews.map((n, i) => (
-                      <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
-                          <span style={{ color: '#00f3ff', fontWeight: 600 }}>{n.category}</span>
-                          <span style={{ color: '#8b9bb4' }}>{n.time} • {n.source}</span>
-                        </div>
-                        <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: '#e2e8f0' }}>{n.title}</div>
-                      </div>
-                    )) : <div style={{ color: '#8b9bb4', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
-                  </div>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
