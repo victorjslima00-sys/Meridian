@@ -556,6 +556,26 @@ export default function App() {
                 </div>
 
                 <div className="right-col">
+                  {/* LIVE STREAM WIDGET */}
+                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
+                      <h3><Globe size={16} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
+                      <span className="live-badge">● REC</span>
+                    </div>
+                    <div style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}>
+                      <iframe 
+                        width="100%" 
+                        height="100%" 
+                        src="https://www.youtube.com/embed/live_stream?channel=UCXwZGs_2hH9AEvSExnQicZw&autoplay=1&mute=1" 
+                        title="Live de Mercado" 
+                        frameBorder="0" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                        allowFullScreen
+                        style={{ display: 'block' }}
+                      ></iframe>
+                    </div>
+                  </div>
+
                   {/* NEWS WIDGET (MOVIDO DA ABA JOURNAL) */}
                   <div className="glass-panel" style={{ flex: 1 }}>
                     <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
