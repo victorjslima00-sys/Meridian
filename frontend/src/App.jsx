@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Bell, Settings, RefreshCw,
   DollarSign, Percent, BookOpen, History,
-  Key, ToggleLeft, ToggleRight
+  Key, ToggleLeft, ToggleRight, Users
 } from 'lucide-react';
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
