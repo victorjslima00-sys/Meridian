@@ -389,22 +389,22 @@ export const MarketRegimeBadge = ({ regime }) => {
 
 export const MarketHeatmap = () => {
   const blocks = [
-    { ticker: 'PETR4', col: 'span 2', row: 'span 2', c: '#10b981', perf: '+2.4%' },
-    { ticker: 'VALE3', col: 'span 2', row: 'span 2', c: '#f43f5e', perf: '-1.8%' },
-    { ticker: 'ITUB4', col: 'span 1', row: 'span 2', c: '#059669', perf: '+1.1%' },
+    { ticker: 'PETR4', col: 'span 2', row: 'span 2', c: '#059669', perf: '+2.4%' },
+    { ticker: 'VALE3', col: 'span 2', row: 'span 2', c: '#9f1239', perf: '-1.8%' },
+    { ticker: 'ITUB4', col: 'span 1', row: 'span 2', c: '#10b981', perf: '+1.1%' },
     { ticker: 'BBDC4', col: 'span 1', row: 'span 1', c: '#10b981', perf: '+3.2%' },
-    { ticker: 'BBAS3', col: 'span 1', row: 'span 1', c: '#e60000', perf: '-2.1%' },
+    { ticker: 'BBAS3', col: 'span 1', row: 'span 1', c: '#e11d48', perf: '-2.1%' },
     { ticker: 'ELET3', col: 'span 1', row: 'span 1', c: '#34d399', perf: '+0.5%' },
-    { ticker: 'WEGE3', col: 'span 1', row: 'span 1', c: '#f43f5e', perf: '-0.9%' },
-    { ticker: 'RENT3', col: 'span 1', row: 'span 1', c: '#e60000', perf: '-3.4%' }
+    { ticker: 'WEGE3', col: 'span 1', row: 'span 1', c: '#9f1239', perf: '-0.9%' },
+    { ticker: 'RENT3', col: 'span 1', row: 'span 1', c: '#be123c', perf: '-3.4%' }
   ];
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gridAutoRows: '70px', gap: '4px', width: '100%', background: 'var(--bg-2)' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gridAutoRows: '70px', gap: '2px', width: '100%', background: 'var(--bg)' }}>
       {blocks.map((b, i) => (
-        <div key={i} style={{ gridColumn: b.col, gridRow: b.row, background: b.c, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.75rem', fontWeight: 700, borderRadius: '4px', cursor: 'pointer', transition: 'filter 0.2s', overflow: 'hidden' }} onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.2)'} onMouseLeave={e => e.currentTarget.style.filter = 'none'}>
-          <div>{b.ticker}</div>
-          <div style={{ fontSize: '0.65rem', opacity: 0.9 }}>{b.perf}</div>
+        <div key={i} style={{ gridColumn: b.col, gridRow: b.row, background: b.c, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff', borderRadius: '2px', cursor: 'pointer', transition: 'all 0.2s', overflow: 'hidden', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.2)' }} onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.15)'} onMouseLeave={e => e.currentTarget.style.filter = 'none'}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 800, letterSpacing: '0.5px' }}>{b.ticker}</div>
+          <div style={{ fontSize: '0.65rem', fontWeight: 600, opacity: 0.8 }}>{b.perf}</div>
         </div>
       ))}
     </div>
@@ -413,21 +413,24 @@ export const MarketHeatmap = () => {
 
 export const EconomicCalendar = () => {
   const events = [
-    { time: '09:30', flag: '🇺🇸', name: 'Pedidos Iniciais por Seguro-Desemprego', impact: 3 },
-    { time: '10:00', flag: '🇧🇷', name: 'Produção Industrial (MoM)', impact: 2 },
-    { time: '11:30', flag: '🇺🇸', name: 'Estoques de Petróleo Bruto', impact: 3 },
-    { time: '15:00', flag: '🇺🇸', name: 'Discurso de Powell (Fed)', impact: 3 }
+    { time: '09:30', flag: '🇺🇸', name: 'Pedidos Iniciais de Seguro', impact: 3 },
+    { time: '10:00', flag: '🇧🇷', name: 'Produção Industrial', impact: 2 },
+    { time: '11:30', flag: '🇺🇸', name: 'Estoques de Petróleo', impact: 3 },
+    { time: '15:00', flag: '🇺🇸', name: 'Discurso de Powell', impact: 3 }
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: '0.5rem', borderLeft: '2px solid rgba(255,255,255,0.1)', gap: '1.2rem', marginTop: '0.5rem' }}>
       {events.map((e, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, width: '40px' }}>{e.time}</div>
-          <div style={{ fontSize: '1.2rem' }}>{e.flag}</div>
-          <div style={{ flex: 1, fontSize: '0.8rem', fontWeight: 500 }}>{e.name}</div>
-          <div style={{ color: '#f59e0b', fontSize: '0.7rem', letterSpacing: '1px' }}>
-            {'★'.repeat(e.impact)}{'☆'.repeat(3 - e.impact)}
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
+          <div style={{ position: 'absolute', left: '-13px', width: '8px', height: '8px', borderRadius: '50%', background: e.impact === 3 ? '#f59e0b' : 'var(--text-muted)', boxShadow: e.impact === 3 ? '0 0 8px rgba(245,158,11,0.5)' : 'none' }} />
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, width: '40px', fontFamily: 'JetBrains Mono, monospace' }}>{e.time}</div>
+          <div style={{ fontSize: '1.1rem' }}>{e.flag}</div>
+          <div style={{ flex: 1, fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)' }}>{e.name}</div>
+          <div style={{ display: 'flex', gap: '3px' }}>
+            {[1, 2, 3].map(star => (
+              <div key={star} style={{ width: '6px', height: '6px', borderRadius: '50%', background: star <= e.impact ? '#f59e0b' : 'rgba(255,255,255,0.1)' }} />
+            ))}
           </div>
         </div>
       ))}
@@ -436,49 +439,46 @@ export const EconomicCalendar = () => {
 };
 
 export const DepthOfMarket = () => {
-  const asks = [
-    { price: '34.52', vol: 1500, w: '85%' },
-    { price: '34.51', vol: 800,  w: '45%' },
-    { price: '34.50', vol: 2400, w: '100%' },
-    { price: '34.49', vol: 300,  w: '15%' },
-  ];
-  const bids = [
-    { price: '34.48', vol: 500,  w: '30%' },
-    { price: '34.47', vol: 2100, w: '90%' },
-    { price: '34.46', vol: 1200, w: '60%' },
-    { price: '34.45', vol: 4000, w: '100%' },
+  const domLevels = [
+    { price: '34.52', ask: 1500, askW: '85%', bid: null, bidW: '0%' },
+    { price: '34.51', ask: 800,  askW: '45%', bid: null, bidW: '0%' },
+    { price: '34.50', ask: 2400, askW: '100%',bid: null, bidW: '0%' },
+    { price: '34.49', ask: 300,  askW: '15%', bid: null, bidW: '0%' },
+    // Spread
+    { price: '34.48', ask: null, askW: '0%',  bid: 500,  bidW: '30%' },
+    { price: '34.47', ask: null, askW: '0%',  bid: 2100, bidW: '90%' },
+    { price: '34.46', ask: null, askW: '0%',  bid: 1200, bidW: '60%' },
+    { price: '34.45', ask: null, askW: '0%',  bid: 4000, bidW: '100%' },
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', marginBottom: '0.5rem', paddingBottom: '0.25rem', borderBottom: '1px solid var(--border)' }}>
-        <span>Compradores (Bids)</span>
-        <span>Vendedores (Asks)</span>
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace', background: '#0a0a0a', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', background: 'var(--bg-2)', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 600 }}>
+        <div style={{ textAlign: 'left', paddingLeft: '0.5rem' }}>Bids (C)</div>
+        <div>Price</div>
+        <div style={{ textAlign: 'right', paddingRight: '0.5rem' }}>Asks (V)</div>
       </div>
       
-      {/* Vendedores (Vermelho, em cima) */}
-      <div style={{ display: 'flex', flexDirection: 'column-reverse' }}>
-        {asks.map((a, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', height: '24px', position: 'relative', justifyContent: 'flex-end' }}>
-            <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: a.w, background: 'rgba(230,0,0,0.15)', zIndex: 1 }} />
-            <span style={{ zIndex: 2, marginRight: '1rem', color: '#e60000' }}>{a.vol}</span>
-            <strong style={{ zIndex: 2, width: '50px', textAlign: 'right' }}>{a.price}</strong>
+      {domLevels.map((lvl, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', height: '26px', alignItems: 'center', borderBottom: i === 3 ? '2px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.02)' }}>
+          {/* Bid Side */}
+          <div style={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', paddingLeft: '0.5rem' }}>
+            {lvl.bid && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: lvl.bidW, background: 'rgba(16,185,129,0.2)' }} />}
+            <span style={{ color: '#10b981', zIndex: 1, fontWeight: 500 }}>{lvl.bid || ''}</span>
           </div>
-        ))}
-      </div>
-      
-      <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '0.25rem 0' }} />
-      
-      {/* Compradores (Verde, embaixo) */}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        {bids.map((b, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', height: '24px', position: 'relative' }}>
-            <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: b.w, background: 'rgba(16,185,129,0.15)', zIndex: 1 }} />
-            <strong style={{ zIndex: 2, width: '50px' }}>{b.price}</strong>
-            <span style={{ zIndex: 2, marginLeft: '1rem', color: '#10b981' }}>{b.vol}</span>
+          
+          {/* Price Center */}
+          <div style={{ textAlign: 'center', fontWeight: 700, color: lvl.ask ? '#f43f5e' : '#10b981', background: 'rgba(255,255,255,0.02)', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {lvl.price}
           </div>
-        ))}
-      </div>
+
+          {/* Ask Side */}
+          <div style={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '0.5rem' }}>
+            {lvl.ask && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: lvl.askW, background: 'rgba(244,63,94,0.2)' }} />}
+            <span style={{ color: '#f43f5e', zIndex: 1, fontWeight: 500 }}>{lvl.ask || ''}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 };
