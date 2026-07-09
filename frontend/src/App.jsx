@@ -131,81 +131,140 @@ const NeuralMap = ({ nodes, edges, onNodeClick }) => {
 };
 
 const AgentOfficeView = () => {
-  const agents = [
-    { id: 'quant', name: 'Quant Engine', role: 'Análise Técnica & ML', icon: BarChart2, x: 20, y: 20, color: '#00f3ff' },
-    { id: 'research', name: 'Pesquisador', role: 'Sentimento & Notícias', icon: Globe, x: 70, y: 20, color: '#f59e0b' },
-    { id: 'guardrail', name: 'Guard-Rail', role: 'Risco & Compliance', icon: ShieldAlert, x: 20, y: 70, color: '#f43f5e' },
-    { id: 'broker', name: 'Mesa de Operações', role: 'Roteamento Cedro', icon: Briefcase, x: 70, y: 70, color: '#10b981' },
-    { id: 'db', name: 'Memória Central', role: 'SQLite', icon: Database, x: 45, y: 45, color: '#8b5cf6' }
+  const agents = {
+    news: { id: 'news', emoji: '🧑‍💼', name: 'Agente de Notícias', role: 'Sentimento Macro', x: 20, y: 30, color: '#f59e0b' },
+    quant: { id: 'quant', emoji: '🧑‍🔬', name: 'Agente Quant', role: 'Análise Gráfica', x: 80, y: 30, color: '#00f3ff' },
+    guardrail: { id: 'guardrail', emoji: '👮', name: 'Agente de Verificação', role: 'Compliance', x: 50, y: 70, color: '#f43f5e' },
+    broker: { id: 'broker', emoji: '🤖', name: 'Agente de Execução', role: 'Roteamento Cedro', x: 80, y: 70, color: '#10b981' }
+  };
+
+  const script = [
+    { from: 'news', to: 'guardrail', text: 'Estou lendo notícias sobre mercado e acredito que isso pode influenciar o preço. Vou encaminhar para o Agente de Verificação.' },
+    { from: 'guardrail', to: 'quant', text: 'Recebi o alerta macro. Agente Quant, favor rodar análise técnica para confirmar se há setup de entrada alinhado ao sentimento.' },
+    { from: 'quant', to: 'guardrail', text: 'Análise concluída. O ativo rompeu a SMA-50 com volume. Setup confirmado. Retornando para aprovação final de risco.' },
+    { from: 'guardrail', to: 'broker', text: 'Risco aprovado. Correlação do portfólio controlada. Agente de Execução, pode disparar a ordem para a B3.' },
+    { from: 'broker', to: 'news', text: 'Ordem executada na Cedro com sucesso a mercado. Retornando ao modo de monitoramento.' }
   ];
 
-  const [activeChats, setActiveChats] = useState([]);
+  const [step, setStep] = useState(0);
+  const [phase, setPhase] = useState('thinking'); // thinking | traveling | received
 
   useEffect(() => {
-    const dialogs = [
-      { from: 'research', to: 'quant', msg: 'Fluxo estrangeiro forte em PETR4. Recomendo revisar alvos.' },
-      { from: 'quant', to: 'guardrail', msg: 'Ajustando target de PETR4 para R$ 42.10. Solicito aprovação de risco.' },
-      { from: 'guardrail', to: 'quant', msg: 'Aprovado. Correlação do portfólio permanece em 0.38.' },
-      { from: 'quant', to: 'broker', msg: 'Gerando ordem LIMIT de compra PETR4 @ R$ 38.50.' },
-      { from: 'broker', to: 'db', msg: 'Ordem envidada via FIX/REST. Aguardando fill.' },
-      { from: 'research', to: 'guardrail', msg: 'Alerta macro: IPCA-15 acima do consenso.' },
-      { from: 'guardrail', to: 'broker', msg: 'Atenção: Aperto de stops acionado para posições long.' }
-    ];
-    
-    let step = 0;
-    const iv = setInterval(() => {
-      const d = dialogs[step % dialogs.length];
-      setActiveChats(prev => [...prev.slice(-3), { ...d, id: Date.now() }]);
-      step++;
-    }, 3500);
-    return () => clearInterval(iv);
-  }, []);
+    let timer;
+    if (phase === 'thinking') {
+      timer = setTimeout(() => setPhase('traveling'), 4000);
+    } else if (phase === 'traveling') {
+      timer = setTimeout(() => setPhase('received'), 2000);
+    } else if (phase === 'received') {
+      timer = setTimeout(() => {
+        setStep((s) => (s + 1) % script.length);
+        setPhase('thinking');
+      }, 3000);
+    }
+    return () => clearTimeout(timer);
+  }, [phase, step]);
+
+  const currentLine = script[step];
+  const fromAgent = agents[currentLine.from];
+  const toAgent = agents[currentLine.to];
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '600px', background: 'var(--bg-2)', borderRadius: '12px', border: '1px solid rgba(0,243,255,0.1)', overflow: 'hidden' }}>
-      {/* Grade do chão do escritório */}
-      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+      {/* Grid Floor */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)', backgroundSize: '50px 50px', transform: 'perspective(500px) rotateX(45deg) scale(2)', transformOrigin: 'top center' }} />
       
-      {/* Agentes (Mesas) */}
-      {agents.map(a => (
-        <div key={a.id} style={{
-          position: 'absolute', top: `${a.y}%`, left: `${a.x}%`, transform: 'translate(-50%, -50%)',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', zIndex: 10
-        }}>
-          <div style={{
-            width: '60px', height: '60px', borderRadius: '12px', background: `rgba(0,0,0,0.5)`,
-            border: `2px solid ${a.color}`, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: `0 0 20px ${a.color}40`, position: 'relative'
-          }}>
-            <a.icon size={24} color={a.color} />
-            <div style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981', animation: 'pulse 2s infinite' }} />
-          </div>
-          <div style={{ textAlign: 'center', background: 'rgba(10,14,23,0.8)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: a.color }}>{a.name}</div>
-            <div style={{ fontSize: '0.6rem', color: '#8b9bb4' }}>{a.role}</div>
-          </div>
-        </div>
-      ))}
+      {/* Central Hologram / Brain */}
+      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '150px', height: '150px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(0,243,255,0.1) 0%, transparent 70%)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Globe size={40} color="#00f3ff" opacity={0.3} style={{ animation: 'spin 20s linear infinite' }} />
+      </div>
 
-      {/* Chat Bubbles */}
-      {activeChats.map((chat, i) => {
-        const fromAgent = agents.find(a => a.id === chat.from);
-        if (!fromAgent) return null;
+      {/* Agents Avatars */}
+      {Object.values(agents).map(a => {
+        const isSpeaking = currentLine.from === a.id && phase === 'thinking';
+        const isReceiving = currentLine.to === a.id && phase === 'received';
+        const isActive = isSpeaking || isReceiving;
+
         return (
-          <div key={chat.id} style={{
-            position: 'absolute', top: `calc(${fromAgent.y}% - 50px)`, left: `calc(${fromAgent.x}% + 40px)`,
-            background: 'rgba(15,23,42,0.9)', border: `1px solid ${fromAgent.color}`, borderRadius: '8px',
-            padding: '0.75rem', maxWidth: '220px', zIndex: 20, boxShadow: `0 4px 20px rgba(0,0,0,0.5)`,
-            animation: 'fadeInUp 0.3s ease-out forwards', color: '#e2e8f0', fontSize: '0.75rem', lineHeight: 1.4
+          <div key={a.id} style={{
+            position: 'absolute', top: `${a.y}%`, left: `${a.x}%`, transform: 'translate(-50%, -50%)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', zIndex: 10
           }}>
-            <strong style={{ color: fromAgent.color, display: 'block', marginBottom: '0.2rem', fontSize: '0.65rem' }}>@{fromAgent.id.toUpperCase()} → {chat.to.toUpperCase()}</strong>
-            {chat.msg}
+            <div style={{
+              width: '70px', height: '70px', borderRadius: '50%', background: `rgba(10,14,23,0.9)`,
+              border: `2px solid ${isActive ? a.color : 'rgba(255,255,255,0.1)'}`, 
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem',
+              boxShadow: isActive ? `0 0 30px ${a.color}80` : 'none',
+              transition: 'all 0.5s ease',
+              position: 'relative'
+            }}>
+              {a.emoji}
+              {isActive && (
+                <div style={{ position: 'absolute', inset: -6, border: `1px solid ${a.color}`, borderRadius: '50%', animation: 'ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite' }} />
+              )}
+            </div>
+            <div style={{ textAlign: 'center', background: 'rgba(0,0,0,0.6)', padding: '0.3rem 0.6rem', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', backdropFilter: 'blur(4px)' }}>
+              <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: isActive ? a.color : '#e2e8f0', transition: 'color 0.5s' }}>{a.name}</div>
+              <div style={{ fontSize: '0.65rem', color: '#8b9bb4' }}>{a.role}</div>
+            </div>
           </div>
         );
       })}
-      
+
+      {/* Thinking Bubble */}
+      {phase === 'thinking' && (
+        <div style={{
+          position: 'absolute', top: `calc(${fromAgent.y}% - 100px)`, left: `calc(${fromAgent.x}% + 50px)`,
+          background: 'rgba(15,23,42,0.95)', border: `1px solid ${fromAgent.color}`, borderRadius: '12px', borderBottomLeftRadius: '0',
+          padding: '1rem', width: '280px', zIndex: 20, boxShadow: `0 10px 30px rgba(0,0,0,0.8)`,
+          animation: 'popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', color: '#e2e8f0', fontSize: '0.85rem', lineHeight: 1.5
+        }}>
+          <strong style={{ color: fromAgent.color, display: 'block', marginBottom: '0.4rem', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+            {fromAgent.emoji} {fromAgent.name} pensando...
+          </strong>
+          {currentLine.text}
+        </div>
+      )}
+
+      {/* Traveling Particle & Trail */}
+      {phase === 'traveling' && (
+        <div style={{
+          position: 'absolute', zIndex: 15,
+          left: `${fromAgent.x}%`, top: `${fromAgent.y}%`,
+          width: '100px', padding: '0.4rem 0.8rem', background: `linear-gradient(90deg, ${fromAgent.color}, ${toAgent.color})`,
+          borderRadius: '20px', color: '#fff', fontSize: '0.7rem', fontWeight: 'bold', textAlign: 'center',
+          boxShadow: `0 0 20px ${fromAgent.color}`, whiteSpace: 'nowrap',
+          transform: 'translate(-50%, -50%)',
+          animation: 'travel 2s cubic-bezier(0.4, 0, 0.2, 1) forwards'
+        }}>
+          Encaminhando... ⚡
+        </div>
+      )}
+
+      {/* Received Bubble */}
+      {phase === 'received' && (
+        <div style={{
+          position: 'absolute', top: `calc(${toAgent.y}% - 60px)`, left: `calc(${toAgent.x}% + 50px)`,
+          background: 'rgba(15,23,42,0.95)', border: `1px solid ${toAgent.color}`, borderRadius: '12px', borderBottomLeftRadius: '0',
+          padding: '0.75rem 1rem', zIndex: 20, boxShadow: `0 10px 30px rgba(0,0,0,0.8)`,
+          animation: 'popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards', color: '#10b981', fontSize: '0.85rem', fontWeight: 'bold'
+        }}>
+          ✓ Mensagem Recebida
+        </div>
+      )}
+
       <style>{`
-        @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes popIn { 
+          from { opacity: 0; transform: scale(0.8) translateY(20px); } 
+          to { opacity: 1; transform: scale(1) translateY(0); } 
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @keyframes ping { 75%, 100% { transform: scale(1.5); opacity: 0; } }
+        @keyframes travel {
+          0% { left: ${fromAgent.x}%; top: ${fromAgent.y}%; opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+          10% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+          90% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+          100% { left: ${toAgent.x}%; top: ${toAgent.y}%; opacity: 0; transform: translate(-50%, -50%) scale(0.5); }
+        }
       `}</style>
     </div>
   );

@@ -179,6 +179,8 @@ body {
   height: 100%;
   display: flex;
   align-items: center;
+  mask-image: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);
 }
 
 .tape-scroll {
