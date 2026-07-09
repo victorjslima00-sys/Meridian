@@ -100,6 +100,14 @@ class MarketAnalyst:
                 logger.warning(
                     f"Failed to parse LLM response for {self.ticker}: {e}. Falling back to basic math."
                 )
+                try:
+                    import sys; from pathlib import Path
+                    root = Path(__file__).resolve().parent.parent.parent.parent.parent
+                    if str(root) not in sys.path: sys.path.append(str(root))
+                    from trading_bot.core.telegram import TelegramClient
+                    TelegramClient().send_message(f"⚠️ [MarketAnalyst] LLM Parse Fallback acionado para {self.ticker}. Resposta inválida da IA.")
+                except Exception:
+                    pass
                 signal = (
                     "BUY"
                     if trend == "Uptrend"
@@ -114,6 +122,14 @@ class MarketAnalyst:
                     target_price = last_close - (last_std * 3)
                     stop_loss = last_close + (last_std * 1.5)
         else:
+            try:
+                import sys; from pathlib import Path
+                root = Path(__file__).resolve().parent.parent.parent.parent.parent
+                if str(root) not in sys.path: sys.path.append(str(root))
+                from trading_bot.core.telegram import TelegramClient
+                TelegramClient().send_message(f"⚠️ [MarketAnalyst] LLM Offline Fallback acionado para {self.ticker}. IA não respondeu.")
+            except Exception:
+                pass
             signal = (
                 "BUY"
                 if trend == "Uptrend"

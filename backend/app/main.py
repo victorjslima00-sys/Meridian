@@ -274,25 +274,10 @@ async def startup_event():
 def get_positions_route():
     pf = get_portfolio()
 
-    # Fetch active trades directly from db
-    import sqlite3
-    from .data.database import DB_PATH
+    from .data.database import get_active_trades, get_closed_trades
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM trades WHERE status = 'active'")
-    active_rows = cursor.fetchall()
-    active_positions = [dict(r) for r in active_rows]
-
-    cursor.execute(
-        "SELECT * FROM trades WHERE status = 'closed' ORDER BY exit_date DESC"
-    )
-    closed_rows = cursor.fetchall()
-    closed_positions = [dict(r) for r in closed_rows]
-
-    conn.close()
+    active_positions = get_active_trades()
+    closed_positions = get_closed_trades()
 
     return {
         "capital": {
@@ -309,19 +294,15 @@ def get_positions_route():
 @app.post("/api/trades/{trade_id}/close")
 def manual_close_trade(trade_id: int, api_key: str = Depends(verify_api_key)):
 
-    import sqlite3
-    from .data.database import DB_PATH
+    from .data.database import get_trade_by_id
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT ticker, status FROM trades WHERE id = ?", (trade_id,))
-    row = cursor.fetchone()
-    conn.close()
+    row = get_trade_by_id(trade_id)
 
     if not row:
         raise HTTPException(status_code=404, detail="Trade não encontrado")
 
-    ticker, status = row
+    ticker = row["ticker"]
+    status = row["status"]
     if status != "active":
         raise HTTPException(status_code=400, detail="Trade não está ativo")
 
@@ -443,6 +424,9 @@ def get_candles(ticker: str):
         l = float(row["low"])
         c = float(row["close"])
         if o == 0 and h == 0 and l == 0 and c > 0:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Patching broken yfinance data for {ticker} on {dt.strftime('%Y-%m-%d')}: replacing zeroed O/H/L with Close ({c})")
             o = c
             h = c
             l = c
@@ -507,18 +491,14 @@ def system_emergency_stop(req: ActionRequest):
         return {"error": "Senha incorreta. Acesso negado."}
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, entry_price FROM trades WHERE status = 'active'")
-            active_trades = cursor.fetchall()
+        from .data.database import get_active_trades
+        active_trades = get_active_trades()
 
-            executor = ExecutorAgent()
-            for row in active_trades:
-                trade_id, entry_price = row
-                executor.close_order(trade_id, entry_price, "EMERGENCY STOP")
-        finally:
-            conn.close()
+        executor = ExecutorAgent()
+        for row in active_trades:
+            trade_id = row["id"]
+            entry_price = row["entry_price"]
+            executor.close_order(trade_id, entry_price, "EMERGENCY STOP")
         return {
             "status": "success",
             "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas.",
@@ -528,18 +508,9 @@ def system_emergency_stop(req: ActionRequest):
 
 
 @app.get("/api/elite/risk_metrics")
-def get_risk_metrics():
-    # Retorna métricas hardcoded temporárias, simulando os resultados dos backtests em settings
-    return {
-        "sharpe": 0.87,
-        "sortino": 1.12,
-        "calmar": 0.65,
-        "max_drawdown_pct": -8.3,
-        "var_95_daily": -9.40,
-        "win_rate": 0.41,
-        "avg_win": 3.2,
-        "avg_loss": -1.8,
-    }
+def get_risk_metrics_route():
+    from .data.database import get_risk_metrics
+    return get_risk_metrics()
 
 
 # WebSocket for real-time agent logs

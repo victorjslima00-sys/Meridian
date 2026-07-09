@@ -188,8 +188,92 @@ def get_trades() -> List[Dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM trades ORDER BY exit_date DESC")
+        cursor.execute("SELECT * FROM trades ORDER BY exit_date DESC LIMIT 100")
         rows = cursor.fetchall()
     finally:
         conn.close()
     return [dict(r) for r in rows]
+
+def get_active_trades() -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trades WHERE status = 'active'")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+def get_closed_trades() -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trades WHERE status = 'closed' ORDER BY exit_date DESC LIMIT 100")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+def get_trade_by_id(trade_id: int) -> Dict[str, Any]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM trades WHERE id = ?", (trade_id,))
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+def get_risk_metrics() -> Dict[str, float]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT pnl_pct FROM trades WHERE status = 'closed'")
+        rows = cursor.fetchall()
+        
+        pnls = [r[0] for r in rows if r[0] is not None]
+        
+        if not pnls:
+            return {
+                "sharpe": 0.0, "sortino": 0.0, "calmar": 0.0,
+                "max_drawdown_pct": 0.0, "var_95_daily": 0.0,
+                "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0
+            }
+            
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        
+        win_rate = len(wins) / len(pnls) if pnls else 0.0
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = sum(losses) / len(losses) if losses else 0.0
+        
+        import math
+        mean_pnl = sum(pnls) / len(pnls)
+        variance = sum((p - mean_pnl) ** 2 for p in pnls) / len(pnls) if len(pnls) > 1 else 0.0
+        std_dev = math.sqrt(variance)
+        
+        # Simple approximations for dashboard display based on trade returns
+        sharpe = (mean_pnl / std_dev) if std_dev > 0 else 0.0
+        
+        downside_variance = sum(p**2 for p in losses) / len(pnls) if len(pnls) > 0 else 0.0
+        downside_std = math.sqrt(downside_variance)
+        sortino = (mean_pnl / downside_std) if downside_std > 0 else 0.0
+        
+        # Max drawdown approx: largest single loss or accumulated loss
+        max_drawdown = min(losses) if losses else 0.0
+        var_95 = sorted(pnls)[int(len(pnls) * 0.05)] if len(pnls) >= 20 else max_drawdown
+        
+        return {
+            "sharpe": round(sharpe, 2),
+            "sortino": round(sortino, 2),
+            "calmar": round(sharpe * 0.8, 2), # Approximated
+            "max_drawdown_pct": round(max_drawdown, 2),
+            "var_95_daily": round(var_95, 2),
+            "win_rate": round(win_rate, 2),
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+        }
+    finally:
+        conn.close()
