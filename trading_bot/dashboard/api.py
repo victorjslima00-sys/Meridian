@@ -237,6 +237,9 @@ def node_action(node_id: str, req: ActionRequest):
 from trading_bot.dashboard.api_elite import router as elite_router
 app.include_router(elite_router)
 
+from trading_bot.dashboard.api_settings import router as settings_router
+app.include_router(settings_router)
+
 
 @app.get("/api/history/{ticker}")
 def get_ticker_history(ticker: str, limit: int = 60):

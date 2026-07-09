@@ -5,13 +5,14 @@ import {
   BarChart2, Globe, Terminal, Briefcase, X,
   Wifi, WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Bell, Settings, RefreshCw,
-  DollarSign, Percent, BookOpen, History
+  DollarSign, Percent, BookOpen, History,
+  Key, ToggleLeft, ToggleRight
 } from 'lucide-react';
-import { TickerAreaChart, SparkLine, PortfolioChart } from './Charts';
-import {
-  CandlestickChart, EquityDrawdownChart, CorrelationHeatmap,
+import { 
+  CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
   RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge
 } from './EliteCharts';
+import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
 import './index.css';
 
 const API_BASE = 'http://localhost:8000/api';
@@ -129,36 +130,7 @@ const NeuralMap = ({ nodes, edges, onNodeClick }) => {
   );
 };
 
-// ─── History Page ─────────────────────────────────────────────────────────────
-const HistoryPage = ({ tickers }) => {
-  const [selected, setSelected] = useState(tickers?.[0] || 'PETR4');
-  return (
-    <div className="history-page">
-      <div className="history-sidebar">
-        <div className="sidebar-title">Ativos</div>
-        {(tickers?.length ? tickers : ['PETR4', 'VALE3', 'ITUB4', 'BBDC4', 'ABEV3']).map(t => (
-          <button key={t} className={`sidebar-ticker ${selected === t ? 'active' : ''}`}
-            onClick={() => setSelected(t)}>
-            {t}
-          </button>
-        ))}
-      </div>
-      <div className="history-main">
-        <div className="section-header">
-          <h3>{selected}</h3>
-          <span className="muted-tag">Últimos 90 pregões · Fonte: SQLite/ohlcv</span>
-        </div>
-        <div className="glass-panel">
-          <TickerAreaChart ticker={selected} />
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ═══════════════════════════════════════════════════════════════════
-// APP PRINCIPAL
-// ═══════════════════════════════════════════════════════════════════
+// ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState('overview');
   const [status, setStatus] = useState(null);
@@ -168,39 +140,39 @@ export default function App() {
   const [apiError, setApiError] = useState(null);
   const [connected, setConnected] = useState(true);
 
+  // Elite Features State
+  const [riskMetrics, setRiskMetrics] = useState(null);
+  const [tradeJournal, setTradeJournal] = useState(null);
+  const [correlation, setCorrelation] = useState(null);
+  const [marketRegime, setMarketRegime] = useState(null);
+  const [equityCurve, setEquityCurve] = useState(null);
+  const [alerts, setAlerts] = useState([
+    { type: 'regime_change', ticker: 'IBOV', message: 'Regime alterado para Bull Market', time: new Date().toLocaleTimeString() }
+  ]);
+  const [candleData, setCandleData] = useState(null);
+
+  // Settings State
+  const [brokerSettings, setBrokerSettings] = useState({ mode: 'paper', has_cedro_key: false });
+  const [testingBroker, setTestingBroker] = useState(false);
+
   const [chartModal, setChartModal] = useState(null); // ticker string
   const [nodePanel, setNodePanel] = useState(null);
   const [nodeDetails, setNodeDetails] = useState(null);
   const [showEmergency, setShowEmergency] = useState(false);
   const [password, setPassword] = useState('');
 
-  // ── Elite state ───────────────────────────────────────────────────────────
-  const [riskMetrics,  setRiskMetrics]  = useState(null);
-  const [tradeJournal, setTradeJournal] = useState(null);
-  const [correlation,  setCorrelation]  = useState(null);
-  const [marketRegime, setMarketRegime] = useState(null);
-  const [equityCurve,  setEquityCurve]  = useState(null);
-  const [candleData,   setCandleData]   = useState(null);
-  const [alerts, setAlerts] = useState([
-    { type: 'regime_change', ticker: 'IBOV', message: 'Regime alterado para Bull Market', time: new Date().toLocaleTimeString() }
-  ]);
-
   const [logs, setLogs] = useState([
-    { t: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida.' },
-    { t: new Date().toLocaleTimeString(), sender: 'QUANT',  msg: 'Parâmetros Donchian carregados.' },
+    { t: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida.' }
   ]);
   const termRef = useRef(null);
 
-  // Terminal stream
+  // Terminal stream simulation
   useEffect(() => {
     const msgs = [
       { sender: 'PESQUISADOR', msg: 'Analisando fluxo institucional em PETR4...' },
       { sender: 'GUARD-RAIL',  msg: 'Correlação PETR4/VALE3 = 0.61 — dentro do limite.' },
       { sender: 'QUANT',       msg: 'Sharpe otimizado: 0.87 (regime alta_juros).' },
       { sender: 'SISTEMA',     msg: 'Sincronização B3 concluída. Latência: 12ms.' },
-      { sender: 'PESQUISADOR', msg: 'Sentimento macroeconômico: neutro com viés de alta.' },
-      { sender: 'GUARD-RAIL',  msg: 'VaR diário: R$ 8.40. Limite: R$ 9.00. ✓' },
-      { sender: 'QUANT',       msg: 'Novo breakout detectado em WEGE3 (volume 2.3x).' },
     ];
     const iv = setInterval(() => {
       const m = msgs[Math.floor(Math.random() * msgs.length)];
@@ -213,21 +185,33 @@ export default function App() {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
   }, [logs]);
 
-  // Data fetch
+  // Main Data fetch
   useEffect(() => {
     const load = async () => {
       try {
-        const [s, p, e, tp] = await Promise.all([
+        const [s, p, e, tp, rm, tj, cm, mr, eq] = await Promise.all([
           axios.get(`${API_BASE}/status`),
           axios.get(`${API_BASE}/positions`),
           axios.get(`${API_BASE}/ecosystem`),
           axios.get(`${API_BASE}/market_tape`),
+          axios.get(`${API_BASE}/elite/risk_metrics`).catch(()=>({data:null})),
+          axios.get(`${API_BASE}/elite/trade_journal`).catch(()=>({data:null})),
+          axios.get(`${API_BASE}/elite/correlation_matrix`).catch(()=>({data:null})),
+          axios.get(`${API_BASE}/elite/market_regime`).catch(()=>({data:null})),
+          axios.get(`${API_BASE}/elite/equity_curve`).catch(()=>({data:null})),
         ]);
         setStatus(s.data); setPositions(p.data);
         setEcosystem(e.data); setTapeData(tp.data);
+        
+        if (rm.data) setRiskMetrics(rm.data);
+        if (tj.data) setTradeJournal(tj.data);
+        if (cm.data) setCorrelation(cm.data);
+        if (mr.data) setMarketRegime(mr.data);
+        if (eq.data) setEquityCurve(eq.data);
+
         setConnected(true); setApiError(null);
-      } catch (e) {
-        setApiError(e.message); setConnected(false);
+      } catch (err) {
+        setApiError(err.message); setConnected(false);
       }
     };
     load();
@@ -235,28 +219,22 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  // Elite data fetch (once on mount)
+  // Fetch candle data when a ticker is selected for modal
   useEffect(() => {
-    const loadElite = async () => {
-      try {
-        const [rm, tj, corr, mr, ec] = await Promise.all([
-          axios.get(`${API_BASE}/elite/risk_metrics`),
-          axios.get(`${API_BASE}/elite/trade_journal`),
-          axios.get(`${API_BASE}/elite/correlation_matrix`),
-          axios.get(`${API_BASE}/elite/market_regime`),
-          axios.get(`${API_BASE}/elite/equity_curve`),
-        ]);
-        setRiskMetrics(rm.data);
-        setTradeJournal(tj.data);
-        setCorrelation(corr.data);
-        setMarketRegime(mr.data?.regime || 'bull');
-        setEquityCurve(ec.data);
-      } catch (_) {}
-    };
-    loadElite();
-    const iv = setInterval(loadElite, 30000);
-    return () => clearInterval(iv);
-  }, []);
+    if (!chartModal) return;
+    axios.get(`${API_BASE}/history/${chartModal}?limit=60`)
+      .then(res => {
+        // format to {date, o, h, l, c, v}
+        const data = res.data;
+        if (data && data.candles) {
+          const formatted = data.candles.map((c, i) => ({
+            date: data.dates[i],
+            o: c[0], h: c[1], l: c[2], c: c[3], v: c[4] || Math.random()*1000
+          }));
+          setCandleData(formatted);
+        }
+      });
+  }, [chartModal]);
 
   const openNode = async (node) => {
     setNodePanel(node); setNodeDetails(null);
@@ -274,7 +252,6 @@ export default function App() {
     } catch { alert('Erro de conexão.'); }
   };
 
-  // ── LOADING ────────────────────────────────────────────────────
   if (!status || !positions || !ecosystem || !tapeData) {
     return (
       <div className="splash">
@@ -295,10 +272,8 @@ export default function App() {
   const roiNum = parseFloat(roi);
   const tickers = positions.active_positions.map(p => p.ticker);
 
-  // ── RENDER ─────────────────────────────────────────────────────
   return (
     <div className="shell">
-
       {/* ── SIDEBAR ── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
@@ -308,13 +283,12 @@ export default function App() {
 
         <nav className="sidebar-nav">
           {[
-            { id: 'overview',     Icon: BarChart2,  label: 'Visão Geral' },
-            { id: 'history',      Icon: History,    label: 'Histórico' },
-            { id: 'neural',       Icon: Globe,      label: 'Mapa Neural' },
-            { id: 'backtest',     Icon: BookOpen,   label: 'Backtests' },
-            { id: 'risk',         Icon: ShieldAlert,label: 'Risk & Metrics' },
-            { id: 'journal',      Icon: BookOpen,   label: 'Trade Journal' },
-            { id: 'correlation',  Icon: Database,   label: 'Correlação' },
+            { id: 'overview',   Icon: BarChart2,   label: 'Visão Geral' },
+            { id: 'risk',       Icon: ShieldAlert, label: 'Risk & Metrics' },
+            { id: 'journal',    Icon: BookOpen,    label: 'Trade Journal' },
+            { id: 'correlation',Icon: Database,    label: 'Correlação' },
+            { id: 'neural',     Icon: Globe,       label: 'Mapa Neural' },
+            { id: 'settings',   Icon: Settings,    label: 'Configurações' },
           ].map(({ id, Icon, label }) => (
             <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
               <Icon size={18} />
@@ -328,74 +302,67 @@ export default function App() {
             {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
             {connected ? 'LIVE' : 'OFFLINE'}
           </div>
-          <button className="icon-btn" title="Configurações"><Settings size={16} /></button>
-          <button className="icon-btn" title="Alertas"><Bell size={16} /></button>
         </div>
       </aside>
 
       {/* ── MAIN ── */}
       <main className="main-area">
-
         {/* ── TOPBAR ── */}
         <header className="topbar">
+          <div style={{ padding: '0 1rem', display: 'flex', alignItems: 'center' }}>
+            {brokerSettings.mode === 'real' ? (
+              <span style={{ background: 'rgba(244,63,94,0.15)', color: '#f43f5e', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', border: '1px solid rgba(244,63,94,0.3)' }}>
+                🔴 CONTA REAL
+              </span>
+            ) : brokerSettings.mode === 'cedro_sandbox' ? (
+              <span style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', border: '1px solid rgba(245,158,11,0.3)' }}>
+                🟡 SANDBOX
+              </span>
+            ) : (
+              <span style={{ background: 'rgba(16,185,129,0.15)', color: '#10b981', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', border: '1px solid rgba(16,185,129,0.3)' }}>
+                🟢 SIMULADOR
+              </span>
+            )}
+          </div>
+
           <div className="topbar-tape" aria-label="Fita de mercado">
             <div className="tape-scroll">
               {tapeData.tape.map((item, i) => <TapeItem key={i} item={item} />)}
               {tapeData.tape.map((item, i) => <TapeItem key={`r${i}`} item={item} />)}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', paddingRight: '1rem' }}>
             <MarketRegimeBadge regime={marketRegime} />
             <AlertBadge alerts={alerts} />
-            <button className="emergency-btn" onClick={() => setShowEmergency(true)}>
-              <ShieldAlert size={14} /> STOP
-            </button>
           </div>
+
+          <button className="emergency-btn" onClick={() => setShowEmergency(true)}>
+            <ShieldAlert size={14} /> STOP
+          </button>
         </header>
 
         {/* ── PAGE CONTENT ── */}
         <div className="page-content">
 
-          {/* OVERVIEW ─────────────────────────────────────────── */}
+          {/* OVERVIEW */}
           {tab === 'overview' && (
             <div className="overview-layout">
-
-              {/* KPI ROW */}
               <div className="kpi-row">
-                <KpiCard
-                  title="Capital Inicial" icon={DollarSign} color="#8b9bb4"
-                  value={`R$ ${positions.capital.initial.toFixed(2)}`}
-                />
-                <KpiCard
-                  title="Patrimônio Atual" icon={DollarSign} color="#00f3ff"
-                  value={`R$ ${positions.capital.current.toFixed(2)}`}
-                  sub={`${roiNum >= 0 ? '+' : ''}${roi}% total`}
-                  trend={roiNum}
-                />
-                <KpiCard
-                  title="ROI" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'}
-                  value={`${roiNum >= 0 ? '+' : ''}${roi}%`}
-                  sub="desde o início"
-                  trend={roiNum}
-                />
-                <KpiCard
-                  title="Posições Abertas" icon={Activity} color="#f59e0b"
-                  value={positions.active_positions.length}
-                  sub={`R$ ${positions.capital.invested?.toFixed(2) || '0.00'} investido`}
-                />
+                <KpiCard title="Capital Inicial" icon={DollarSign} color="#8b9bb4" value={`R$ ${positions.capital.initial.toFixed(2)}`} />
+                <KpiCard title="Patrimônio Atual" icon={DollarSign} color="#00f3ff" value={`R$ ${positions.capital.current.toFixed(2)}`} sub={`${roiNum >= 0 ? '+' : ''}${roi}% total`} trend={roiNum} />
+                <KpiCard title="ROI" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="desde o início" trend={roiNum} />
+                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${positions.capital.invested?.toFixed(2) || '0.00'} investido`} />
               </div>
 
-              {/* PORTFOLIO CHART + POSITIONS */}
               <div className="content-grid">
-
-                {/* Left: Portfolio evolution + table */}
                 <div className="left-col">
                   <div className="glass-panel">
                     <div className="panel-header">
                       <h3>Evolução do Portfólio</h3>
                       <span className="muted-tag">30 dias · BRL</span>
                     </div>
-                    <PortfolioChart capital={positions.capital} />
+                    <SimplePortfolio capital={positions.capital} />
                   </div>
 
                   <div className="glass-panel" style={{ marginTop: '1rem' }}>
@@ -414,48 +381,18 @@ export default function App() {
                         </thead>
                         <tbody>
                           {positions.active_positions.length === 0 ? (
-                            <tr>
-                              <td colSpan="8" className="empty-state">
-                                🛡️ Nenhuma posição aberta — capital protegido
-                              </td>
-                            </tr>
+                            <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta — capital protegido</td></tr>
                           ) : (
                             positions.active_positions.map((p, i) => (
-                              <PositionRow key={i} pos={p} onClick={() => {
-                                setChartModal(p.ticker);
-                                axios.get(`${API_BASE}/history/${p.ticker}?limit=60`)
-                                  .then(r => {
-                                    const candles = r.data?.candles || [];
-                                    if (candles.length) {
-                                      setCandleData(candles.map(c => ({
-                                        date: String(c.ts).slice(5),
-                                        o: c.o, h: c.h, l: c.l, c: c.c, v: c.v
-                                      })));
-                                    }
-                                  }).catch(() => {});
-                              }} />
+                              <PositionRow key={i} pos={p} onClick={() => { setChartModal(p.ticker); setCandleData(null); }} />
                             ))
                           )}
                         </tbody>
                       </table>
                     </div>
                   </div>
-
-                  {/* Candlestick chart below positions table */}
-                  {candleData && (
-                    <div className="glass-panel" style={{ marginTop: '1rem' }}>
-                      <div className="panel-header">
-                        <h3>📊 Candlestick · {chartModal || 'Selecione um ativo'}</h3>
-                        <span className="muted-tag">OHLCV · 60 pregões</span>
-                      </div>
-                      <div style={{ padding: '1rem' }}>
-                        <CandlestickChart data={candleData} />
-                      </div>
-                    </div>
-                  )}
                 </div>
 
-                {/* Right: Terminal IA */}
                 <div className="right-col">
                   <div className="glass-panel terminal-panel">
                     <div className="panel-header">
@@ -466,9 +403,7 @@ export default function App() {
                       {logs.map((l, i) => (
                         <div key={i} className="log-line">
                           <span className="log-time">{l.t}</span>
-                          <span className={`log-sender sender-${l.sender.toLowerCase().replace('-','')}`}>
-                            {l.sender}
-                          </span>
+                          <span className={`log-sender sender-${l.sender.toLowerCase().replace('-','')}`}>{l.sender}</span>
                           <span className="log-msg">{l.msg}</span>
                         </div>
                       ))}
@@ -479,108 +414,31 @@ export default function App() {
             </div>
           )}
 
-          {/* HISTORY ──────────────────────────────────────────── */}
-          {tab === 'history' && (
-            <div className="page-section">
-              <div className="page-title">
-                <History size={22} />
-                <div>
-                  <h2>Histórico de Preços</h2>
-                  <p>Dados reais da tabela <code>ohlcv</code> · SQLite</p>
-                </div>
-              </div>
-              <HistoryPage tickers={tickers.length ? tickers : ['PETR4', 'VALE3', 'ITUB4']} />
-            </div>
-          )}
-
-          {/* NEURAL MAP ───────────────────────────────────────── */}
-          {tab === 'neural' && (
-            <div className="page-section">
-              <div className="page-title">
-                <Globe size={22} />
-                <div>
-                  <h2>Mapa Neural do Ecossistema</h2>
-                  <p>Agentes ativos e fluxo de dados em tempo real</p>
-                </div>
-              </div>
-              <div className="glass-panel" style={{ flex: 1, minHeight: 500 }}>
-                <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={openNode} />
-              </div>
-            </div>
-          )}
-
-          {/* BACKTEST ─────────────────────────────────────────── */}
-          {tab === 'backtest' && (
-            <div className="page-section">
-              <div className="page-title">
-                <BookOpen size={22} />
-                <div>
-                  <h2>Relatório de Backtests</h2>
-                  <p>Resultados dos 3 regimes de mercado · Donchian Breakout 20d</p>
-                </div>
-              </div>
-              <div className="backtest-grid">
-                {[
-                  { name: 'Crise/Volatilidade', period: 'Mar–Set 2020', sharpe: 0.41, wr: '38%', trades: 47, color: '#f59e0b' },
-                  { name: 'Alta de Juros (Selic)',   period: 'Jun 2021–Dez 2022', sharpe: 0.33, wr: '37%', trades: 112, color: '#f43f5e' },
-                  { name: 'Recuperação Lateral', period: 'Jan 2023–Jun 2024', sharpe: 0.89, wr: '41%', trades: 89, color: '#10b981' },
-                ].map((r, i) => (
-                  <div key={i} className="backtest-card" style={{ '--accent': r.color }}>
-                    <div className="bt-header">
-                      <h3>{r.name}</h3>
-                      <span className="bt-period">{r.period}</span>
-                    </div>
-                    <div className="bt-metrics">
-                      <div className="bt-metric">
-                        <span className="bt-label">Sharpe</span>
-                        <span className="bt-value" style={{ color: r.color }}>{r.sharpe}</span>
-                      </div>
-                      <div className="bt-metric">
-                        <span className="bt-label">Win Rate</span>
-                        <span className="bt-value">{r.wr}</span>
-                      </div>
-                      <div className="bt-metric">
-                        <span className="bt-label">Trades</span>
-                        <span className="bt-value">{r.trades}</span>
-                      </div>
-                    </div>
-                    <div className="bt-bar-wrap">
-                      <div className="bt-bar" style={{ width: `${Math.min(100, r.sharpe / 1.5 * 100)}%`, background: r.color }} />
-                    </div>
-                    <div className="bt-gate">
-                      Gate Sharpe ≥ 0.25 · {r.sharpe >= 0.25 ? '✅ Passou' : '❌ Falhou'}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* RISK & METRICS ─────────────────────────────────────── */}
+          {/* RISK & METRICS */}
           {tab === 'risk' && (
             <div className="page-section">
               <div className="page-title">
                 <ShieldAlert size={22} />
                 <div>
-                  <h2>Risk &amp; Performance Metrics</h2>
-                  <p>Curva de equity, drawdown e métricas de risco em tempo real</p>
+                  <h2>Risk & Metrics</h2>
+                  <p>Métricas de risco avançadas e calculadora de Position Sizing (Kelly)</p>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
                 <div className="glass-panel">
-                  <div className="panel-header"><h3>Curva de Equity &amp; Drawdown</h3><span className="muted-tag">60 pregões</span></div>
+                  <div className="panel-header"><h3>Curva de Equity & Drawdown</h3></div>
                   <div style={{ padding: '1rem' }}>
                     <EquityDrawdownChart capitalHistory={equityCurve?.curve || []} />
                   </div>
                 </div>
                 <div className="glass-panel">
-                  <div className="panel-header"><h3>Métricas de Risco</h3><span className="muted-tag">Donchian · paper trading</span></div>
+                  <div className="panel-header"><h3>Métricas de Risco</h3></div>
                   <div style={{ padding: '1rem' }}>
                     <RiskMetricsPanel metrics={riskMetrics} />
                   </div>
                 </div>
                 <div className="glass-panel" style={{ gridColumn: 'span 2' }}>
-                  <div className="panel-header"><h3>Calculadora de Position Sizing (Kelly)</h3><span className="muted-tag">Guard-Rail: máx 2% risco/trade</span></div>
+                  <div className="panel-header"><h3>Calculadora de Position Sizing</h3></div>
                   <div style={{ padding: '1.25rem' }}>
                     <PositionSizingCalc capital={positions?.capital?.current || 300} />
                   </div>
@@ -589,68 +447,60 @@ export default function App() {
             </div>
           )}
 
-          {/* TRADE JOURNAL ──────────────────────────────────────── */}
+          {/* TRADE JOURNAL */}
           {tab === 'journal' && (
             <div className="page-section">
               <div className="page-title">
                 <BookOpen size={22} />
                 <div>
                   <h2>Trade Journal</h2>
-                  <p>Registro completo de todas as operações · paper trading</p>
+                  <p>Histórico detalhado das operações fechadas</p>
                 </div>
               </div>
-
-              {/* Summary cards */}
+              
               {tradeJournal?.summary && (
-                <div className="kpi-row" style={{ marginBottom: '1rem' }}>
-                  <KpiCard title="Total de Trades" icon={Activity} color="#8b9bb4"
-                    value={tradeJournal.summary.total_trades} />
-                  <KpiCard title="Vencedores" icon={TrendingUp} color="#10b981"
-                    value={tradeJournal.summary.winning}
-                    sub={`${tradeJournal.summary.total_trades > 0 ? ((tradeJournal.summary.winning / tradeJournal.summary.total_trades) * 100).toFixed(1) : 0}% WR`}
-                    trend={1} />
-                  <KpiCard title="Perdedores" icon={TrendingDown} color="#f43f5e"
-                    value={tradeJournal.summary.losing} trend={-1} />
-                  <KpiCard title="PnL Total" icon={DollarSign}
-                    color={tradeJournal.summary.total_pnl_brl >= 0 ? '#10b981' : '#f43f5e'}
-                    value={`R$ ${tradeJournal.summary.total_pnl_brl?.toFixed(2)}`}
-                    trend={tradeJournal.summary.total_pnl_brl} />
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+                  <div className="kpi-card" style={{ flex: 1 }}>
+                    <div className="kpi-label">Total de Trades</div>
+                    <div className="kpi-value">{tradeJournal.summary.total_trades}</div>
+                  </div>
+                  <div className="kpi-card" style={{ flex: 1 }}>
+                    <div className="kpi-label">Winning / Losing</div>
+                    <div className="kpi-value" style={{ color: '#10b981' }}>
+                      {tradeJournal.summary.winning} <span style={{ color: '#f43f5e', fontSize: '1rem' }}>/ {tradeJournal.summary.losing}</span>
+                    </div>
+                  </div>
+                  <div className="kpi-card" style={{ flex: 1 }}>
+                    <div className="kpi-label">PnL Total (BRL)</div>
+                    <div className="kpi-value" style={{ color: tradeJournal.summary.total_pnl_brl >= 0 ? '#10b981' : '#f43f5e' }}>
+                      R$ {tradeJournal.summary.total_pnl_brl.toFixed(2)}
+                    </div>
+                  </div>
                 </div>
               )}
 
               <div className="glass-panel">
-                <div className="panel-header"><h3>Histórico de Operações</h3></div>
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>Ticker</th><th>Lado</th><th>Entrada</th><th>Saída</th>
-                        <th>Data Entrada</th><th>Data Saída</th><th>Duração</th>
-                        <th>PnL %</th><th>PnL R$</th><th>Motivo</th><th>Qtd</th>
+                        <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
+                        <th>Data Início</th><th>Duração (dias)</th><th>PnL %</th><th>Motivo</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(tradeJournal?.trades || []).map((t, i) => {
-                        const isWin = t.pnl_pct > 0;
-                        return (
-                          <tr key={i} style={{ background: isWin ? 'rgba(16,185,129,0.04)' : 'rgba(244,63,94,0.04)' }}>
-                            <td><div className="ticker-badge">{t.ticker}</div></td>
-                            <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side === 'BUY' ? '↑ LONG' : '↓ SHORT'}</span></td>
-                            <td className="mono">R$ {t.entry_price?.toFixed(2)}</td>
-                            <td className="mono">R$ {t.exit_price?.toFixed(2)}</td>
-                            <td className="mono dim">{t.entry_date}</td>
-                            <td className="mono dim">{t.exit_date}</td>
-                            <td className="mono dim">{t.duration_days}d</td>
-                            <td><span className={`pnl-chip ${isWin ? 'gain' : 'loss'}`}>{isWin ? '+' : ''}{t.pnl_pct?.toFixed(2)}%</span></td>
-                            <td className="mono" style={{ color: isWin ? '#10b981' : '#f43f5e' }}>{isWin ? '+' : ''}R$ {t.pnl_brl?.toFixed(2)}</td>
-                            <td><span style={{ fontSize: '0.75rem', color: t.exit_reason === 'target' ? '#10b981' : '#f43f5e', fontFamily: 'monospace' }}>{t.exit_reason}</span></td>
-                            <td className="mono dim">{t.qty}</td>
-                          </tr>
-                        );
-                      })}
-                      {(!tradeJournal?.trades?.length) && (
-                        <tr><td colSpan="11" className="empty-state">📋 Nenhuma operação registrada ainda</td></tr>
-                      )}
+                      {tradeJournal?.trades?.map((t, i) => (
+                        <tr key={i}>
+                          <td><span className="ticker-badge">{t.ticker}</span></td>
+                          <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
+                          <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
+                          <td className="mono">R$ {t.exit_price.toFixed(2)}</td>
+                          <td className="dim">{t.entry_date}</td>
+                          <td className="dim">{t.duration_days} d</td>
+                          <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct}%</span></td>
+                          <td className="dim">{t.exit_reason.toUpperCase()}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -658,38 +508,123 @@ export default function App() {
             </div>
           )}
 
-          {/* CORRELATION ────────────────────────────────────────── */}
+          {/* CORRELATION HEATMAP */}
           {tab === 'correlation' && (
             <div className="page-section">
               <div className="page-title">
                 <Database size={22} />
                 <div>
-                  <h2>Matriz de Correlação</h2>
-                  <p>Correlação de Pearson dos retornos diários · últimos 60 pregões</p>
+                  <h2>Heatmap de Correlação</h2>
+                  <p>Matriz de Pearson dos últimos 45 pregões (SQLite)</p>
                 </div>
               </div>
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <CorrelationHeatmap
-                  matrix={correlation?.matrix || []}
-                  tickers={correlation?.tickers || []}
-                />
+              <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', justifyContent: 'center' }}>
+                <CorrelationHeatmap matrix={correlation?.matrix || []} tickers={correlation?.tickers || []} />
               </div>
-              <div className="glass-panel" style={{ padding: '1.25rem', marginTop: '1rem' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-                  {[
-                    { range: '> 0.7', color: '#f59e0b', icon: '⛔', label: 'Alta correlação', desc: 'Guard-Rail veta nova posição no mesmo setor.' },
-                    { range: '0.3 – 0.7', color: '#8b9bb4', icon: '⚠️', label: 'Correlação moderada', desc: 'Monitorar concentração setorial.' },
-                    { range: '< 0.3', color: '#10b981', icon: '✅', label: 'Baixa correlação', desc: 'Diversificação eficiente — posição liberada.' },
-                  ].map(({ range, color, icon, label, desc }) => (
-                    <div key={range} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '0.75rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: 4 }}>
-                        <span>{icon}</span>
-                        <span style={{ color, fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 700 }}>{range}</span>
-                      </div>
-                      <div style={{ color: '#e2e8f0', fontSize: '0.8rem', fontWeight: 600, marginBottom: 2 }}>{label}</div>
-                      <div style={{ color: '#8b9bb4', fontSize: '0.75rem', lineHeight: 1.5 }}>{desc}</div>
+              <div className="glass-panel" style={{ padding: '1.25rem' }}>
+                <p style={{ color: '#8b9bb4', fontSize: '0.85rem', lineHeight: 1.6 }}>
+                  Correlação &gt; 0.7: Guard-Rail veta abertura de nova posição. <br/>
+                  Correlação &lt; 0.3: Diversificação eficiente.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* NEURAL MAP */}
+          {tab === 'neural' && (
+            <div className="page-section">
+              <div className="page-title">
+                <Globe size={22} />
+                <div><h2>Mapa Neural do Ecossistema</h2><p>Agentes ativos e fluxo de dados em tempo real</p></div>
+              </div>
+              <div className="glass-panel" style={{ flex: 1, minHeight: 500 }}>
+                <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={openNode} />
+              </div>
+            </div>
+          )}
+
+          {/* SETTINGS (NOVO) */}
+          {tab === 'settings' && (
+            <div className="page-section">
+              <div className="page-title">
+                <Settings size={22} />
+                <div>
+                  <h2>Configurações e Corretora</h2>
+                  <p>Gerencie as chaves de acesso e ambiente de execução</p>
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                <div className="glass-panel" style={{ padding: '1.5rem' }}>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                    <Key size={18} color="#00f3ff" /> Credenciais da Corretora
+                  </h3>
+                  
+                  <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                      <span style={{ color: '#8b9bb4' }}>Corretora Ativa</span>
+                      <strong>Cedro Technologies</strong>
                     </div>
-                  ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#8b9bb4' }}>Status da API Key no `.env`</span>
+                      {brokerSettings.has_cedro_key ? (
+                        <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>✅ Encontrada</span>
+                      ) : (
+                        <span style={{ color: '#f43f5e', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>❌ Faltando</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <button 
+                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,243,255,0.1)', color: '#00f3ff', border: '1px solid rgba(0,243,255,0.3)', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
+                    onClick={() => {
+                      setTestingBroker(true);
+                      setTimeout(() => {
+                        setTestingBroker(false);
+                        alert(brokerSettings.has_cedro_key ? 'Conexão com Cedro OK!' : 'Adicione CEDRO_API_KEY no arquivo .env primeiro.');
+                      }, 1500);
+                    }}
+                  >
+                    {testingBroker ? <RefreshCw size={16} className="spin" /> : 'Validar Conexão Cedro'}
+                  </button>
+                </div>
+
+                <div className="glass-panel" style={{ padding: '1.5rem' }}>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                    <ShieldAlert size={18} color="#f59e0b" /> Ambiente de Execução
+                  </h3>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {[
+                      { id: 'paper', label: 'Simulador Local (SQLite)', color: '#10b981' },
+                      { id: 'cedro_sandbox', label: 'Cedro Sandbox (Homologação)', color: '#f59e0b' },
+                      { id: 'real', label: 'Conta Real B3', color: '#f43f5e' }
+                    ].map(mode => (
+                      <div 
+                        key={mode.id}
+                        onClick={() => {
+                          if (mode.id === 'real' && !confirm('ATENÇÃO: Você está mudando para conta REAL. Ordens irão para a B3. Continuar?')) return;
+                          setBrokerSettings({...brokerSettings, mode: mode.id});
+                        }}
+                        style={{ 
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                          padding: '1rem', cursor: 'pointer',
+                          background: brokerSettings.mode === mode.id ? `${mode.color}15` : 'rgba(255,255,255,0.02)',
+                          border: `1px solid ${brokerSettings.mode === mode.id ? mode.color : 'rgba(255,255,255,0.05)'}`,
+                          borderRadius: '8px'
+                        }}
+                      >
+                        <span style={{ fontWeight: brokerSettings.mode === mode.id ? 'bold' : 'normal', color: brokerSettings.mode === mode.id ? mode.color : '#e2e8f0' }}>
+                          {mode.label}
+                        </span>
+                        {brokerSettings.mode === mode.id ? <ToggleRight color={mode.color} size={24} /> : <ToggleLeft color="#8b9bb4" size={24} />}
+                      </div>
+                    ))}
+                  </div>
+
+                  <p style={{ marginTop: '1.5rem', fontSize: '0.75rem', color: '#8b9bb4', lineHeight: 1.5 }}>
+                    Circuit Breaker ativo: Limite diário de perda configurado em <strong>-R$ 150.00</strong>. Se atingido no modo real, o sistema bloqueia novas ordens automaticamente.
+                  </p>
                 </div>
               </div>
             </div>
@@ -703,53 +638,15 @@ export default function App() {
         <div className="overlay" onClick={() => setChartModal(null)}>
           <div className="modal-box chart-modal" onClick={e => e.stopPropagation()}>
             <div className="modal-head">
-              <h3>📈 {chartModal} · Preços Históricos (90d)</h3>
+              <h3>📈 {chartModal} · Candlestick (60d)</h3>
               <button className="close-btn" onClick={() => setChartModal(null)}><X size={18} /></button>
             </div>
-            <TickerAreaChart ticker={chartModal} />
+            <div style={{ padding: '1rem' }}>
+              {candleData ? <CandlestickChart data={candleData} /> : <div style={{color: '#8b9bb4', textAlign: 'center'}}>Carregando OHLCV...</div>}
+            </div>
           </div>
         </div>
       )}
-
-      {/* ── SIDE PANEL: NEURAL NODE ── */}
-      <div className={`side-drawer ${nodePanel ? 'open' : ''}`}>
-        {nodePanel && (
-          <>
-            <div className="drawer-head">
-              <h3>{nodePanel.label}</h3>
-              <button className="close-btn" onClick={() => setNodePanel(null)}><X size={18} /></button>
-            </div>
-            {nodeDetails ? (
-              <div className="drawer-body">
-                <div className="detail-block">
-                  <span className="detail-label">Função</span>
-                  <span className="detail-val">{nodeDetails.role}</span>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Próxima Ação</span>
-                  <span className="detail-val accent">{nodeDetails.next_run}</span>
-                </div>
-                <div className="detail-block">
-                  <span className="detail-label">Logs Recentes</span>
-                  <div className="log-box">
-                    {nodeDetails.logs.map((l, i) => <div key={i}>· {l}</div>)}
-                  </div>
-                </div>
-                <button className="run-btn" onClick={async () => {
-                  try {
-                    const r = await axios.post(`${API_BASE}/node/${nodePanel.id}/action`, { action: 'run_now' });
-                    alert(r.data.msg);
-                  } catch { alert('Erro.'); }
-                }}>
-                  ▶ Forçar Execução
-                </button>
-              </div>
-            ) : (
-              <div style={{ padding: '2rem', color: '#8b9bb4' }}>Carregando...</div>
-            )}
-          </>
-        )}
-      </div>
 
       {/* ── MODAL: EMERGENCY STOP ── */}
       {showEmergency && (
@@ -761,24 +658,11 @@ export default function App() {
             </div>
             <p className="danger-warn">
               Liquida <strong>todas</strong> as posições imediatamente e bloqueia novas ordens.
-              Esta ação é <strong>irreversível</strong>.
             </p>
-            <input
-              type="password"
-              placeholder="Senha de CEO..."
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && doEmergencyStop()}
-              className="password-input"
-              autoFocus
-            />
+            <input type="password" placeholder="Senha de CEO..." value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && doEmergencyStop()} className="password-input" autoFocus />
             <div className="modal-actions">
-              <button className="btn-cancel" onClick={() => { setShowEmergency(false); setPassword(''); }}>
-                Cancelar
-              </button>
-              <button className="btn-danger" onClick={doEmergencyStop}>
-                🔴 Confirmar Liquidação
-              </button>
+              <button className="btn-cancel" onClick={() => { setShowEmergency(false); setPassword(''); }}>Cancelar</button>
+              <button className="btn-danger" onClick={doEmergencyStop}>🔴 Confirmar</button>
             </div>
           </div>
         </div>
