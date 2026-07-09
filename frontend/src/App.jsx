@@ -10,7 +10,8 @@ import {
 } from 'lucide-react';
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
-  RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge
+  RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge,
+  MarketHeatmap, EconomicCalendar, DepthOfMarket
 } from './EliteCharts';
 import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
 import './index.css';
@@ -268,6 +269,33 @@ const AgentOfficeView = () => {
       `}</style>
     </div>
   );
+};
+
+// ─── AUDIO SYSTEM ─────────────────────────────────────────────────────────────
+const playTone = (freq, type, duration, vol) => {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime);
+    gain.gain.setValueAtTime(vol, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + duration);
+  } catch (e) {}
+};
+
+const playDing = () => {
+  playTone(800, 'sine', 0.1, 0.1);
+  setTimeout(() => playTone(1200, 'sine', 0.4, 0.15), 100);
+};
+
+const playBeep = () => {
+  playTone(300, 'square', 0.1, 0.1);
+  setTimeout(() => playTone(300, 'square', 0.2, 0.1), 150);
 };
 
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
@@ -587,6 +615,17 @@ export default function App() {
                         </table>
                       </div>
                     </div>
+
+                    {/* DOM WIDGET */}
+                    <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                      <div className="panel-header">
+                        <h3>Livro Visual de Ofertas (DOM)</h3>
+                        <button onClick={playDing} style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.2rem 0.5rem', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 600 }}>🔊 Testar Som de Gain</button>
+                      </div>
+                      <div style={{ padding: '1rem' }}>
+                        <DepthOfMarket />
+                      </div>
+                    </div>
                   </div>
 
                   <div className="right-col">
@@ -611,9 +650,9 @@ export default function App() {
                     </div>
 
                     {/* NEWS WIDGET */}
-                    <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '300px' }}>
                       <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', maxHeight: '400px' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', flex: 1 }}>
                         {marketNews ? marketNews.map((n, i) => (
                           <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
@@ -623,6 +662,29 @@ export default function App() {
                             <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
                           </div>
                         )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginTop: '1rem' }}>
+                      {/* ECONOMIC CALENDAR WIDGET */}
+                      <div className="glass-panel">
+                        <div className="panel-header">
+                          <h3>Calendário Econômico</h3>
+                          <button onClick={playBeep} style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.2rem 0.5rem', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 600 }}>🔊 Testar Alerta</button>
+                        </div>
+                        <div style={{ padding: '1rem' }}>
+                          <EconomicCalendar />
+                        </div>
+                      </div>
+
+                      {/* HEATMAP WIDGET */}
+                      <div className="glass-panel">
+                        <div className="panel-header">
+                          <h3>Mapa de Calor (IBOV)</h3>
+                        </div>
+                        <div style={{ padding: '0.5rem' }}>
+                          <MarketHeatmap />
+                        </div>
                       </div>
                     </div>
                   </div>
