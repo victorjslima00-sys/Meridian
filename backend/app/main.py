@@ -69,7 +69,8 @@ async def ai_committee_worker():
     try:
         from trading_bot.core.config import AppConfig
         cfg = AppConfig.load()
-        tickers_to_watch = cfg.get("_universe", default=["PETR4.SA", "VALE3.SA", "ITUB4.SA"])
+        raw_tickers = cfg.get("_universe", "tickers", default=["PETR4", "VALE3", "ITUB4"])
+        tickers_to_watch = [f"{t}.SA" if not t.endswith(".SA") else t for t in raw_tickers]
     except Exception:
         tickers_to_watch = ["PETR4.SA", "VALE3.SA"]
 
@@ -560,3 +561,18 @@ async def broadcast_log(agent: str, msg: str, level: str = "info"):
 
     for ws in disconnected:
         active_connections.remove(ws)
+
+@app.get("/api/portfolio")
+def api_get_portfolio():
+    from .data.database import get_portfolio
+    return get_portfolio()
+
+@app.get("/api/trades/active")
+def api_get_active_trades():
+    from .data.database import get_active_trades
+    return get_active_trades()
+
+@app.get("/api/trades/closed")
+def api_get_closed_trades():
+    from .data.database import get_closed_trades
+    return get_closed_trades()
