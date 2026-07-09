@@ -5,7 +5,27 @@ from datetime import date, timedelta
 import sys
 from unittest.mock import MagicMock
 
-sys.modules['genetic_algorithm'] = MagicMock()
+# Dummy classes for isinstance to work
+class FloatGene:
+    def __init__(self, *args, **kwargs): pass
+    min_val = 0.0
+    max_val = 1.0
+
+class IntGene:
+    def __init__(self, *args, **kwargs): pass
+    min_val = 0
+    max_val = 1
+
+class GeneticAlgorithm:
+    def __init__(self, *args, **kwargs): pass
+    def evolve(self): pass
+
+ga_mock = MagicMock()
+ga_mock.FloatGene = FloatGene
+ga_mock.IntGene = IntGene
+ga_mock.GeneticAlgorithm = GeneticAlgorithm
+sys.modules['genetic_algorithm'] = ga_mock
+
 from trading_bot.signals.optimizer import MeridianGeneticOptimizer
 
 def _make_df(n=250, seed=42):
