@@ -1030,7 +1030,7 @@ export default function App() {
   const emPos = cap.em_posicoes || 0;
   const saldoLivre = cap.saldo_livre || 0;
   
-  const totalAbsoluto = patTotal + saldoDisp;
+  const totalAbsoluto = patTotal;
   const roi = (((totalAbsoluto - 100) / 100) * 100).toFixed(2);
   const roiNum = parseFloat(roi);
   const tickers = (positions.active_positions || []).map(p => p.ticker);

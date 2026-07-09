@@ -110,6 +110,7 @@ def get_portfolio() -> Dict[str, Any]:
         }
 
     d = dict(row)
+    d["patrimonio_total"] = d.get("saldo_disponivel", 0.0)
     d["saldo_livre"] = round(d.get("saldo_disponivel", 0) - d.get("em_posicoes", 0), 4)
     return d
 
