@@ -2,7 +2,9 @@ import logging
 import random
 import pandas as pd
 from typing import Dict, List, Tuple
-from genetic_algorithm import GeneticAlgorithm, IntGene, FloatGene
+from genetic_algorithm.GeneticAlgorithm import GeneticAlgorithm
+from genetic_algorithm.IntGene import IntGene
+from genetic_algorithm.FloatGene import FloatGene
 
 logger = logging.getLogger(__name__)
 

@@ -3,29 +3,6 @@ import pandas as pd
 import numpy as np
 from datetime import date, timedelta
 import sys
-import types
-
-# Create a real module
-ga_module = types.ModuleType('genetic_algorithm')
-
-class FloatGene:
-    def __init__(self, min_val=0.0, max_val=1.0, *args, **kwargs):
-        self.min_val = min_val
-        self.max_val = max_val
-
-class IntGene:
-    def __init__(self, min_val=0, max_val=1, *args, **kwargs):
-        self.min_val = min_val
-        self.max_val = max_val
-
-class GeneticAlgorithm:
-    def __init__(self, *args, **kwargs): pass
-    def evolve(self): pass
-
-ga_module.FloatGene = FloatGene
-ga_module.IntGene = IntGene
-ga_module.GeneticAlgorithm = GeneticAlgorithm
-sys.modules['genetic_algorithm'] = ga_module
 
 from trading_bot.signals.optimizer import MeridianGeneticOptimizer
 
