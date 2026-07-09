@@ -906,6 +906,25 @@ export default function App() {
                   </div>
                 </div>
                 <AIEcosystemDashboard />
+                
+                {/* TERMINAL DO COMITÊ */}
+                <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+                  <div className="panel-header" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)' }}>
+                    <Terminal size={14} color="var(--primary)" />
+                    <h3 style={{ margin: 0, fontSize: '0.8rem', color: '#fff' }}>Terminal do Comitê de IA</h3>
+                  </div>
+                  <div ref={termRef} style={{ background: '#000', padding: '1rem', height: '250px', overflowY: 'auto', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
+                    {logs.map((log, i) => (
+                      <div key={i} style={{ display: 'flex', gap: '0.75rem', lineHeight: 1.4 }}>
+                        <span style={{ color: 'var(--text-muted)' }}>[{log.t}]</span>
+                        <span style={{ color: log.sender === 'RISKMANAGER' ? '#f59e0b' : (log.sender === 'EXECUTORAGENT' ? '#10b981' : '#00f3ff'), fontWeight: 700 }}>
+                          {log.sender}:
+                        </span>
+                        <span style={{ color: '#e2e8f0' }}>{log.msg}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           )}
