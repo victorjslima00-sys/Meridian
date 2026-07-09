@@ -274,13 +274,15 @@ const AgentOfficeView = () => {
 // ─── AUDIO SYSTEM ─────────────────────────────────────────────────────────────
 const playTone = (freq, type, duration, vol) => {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = type;
     osc.frequency.setValueAtTime(freq, ctx.currentTime);
     gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
@@ -296,6 +298,118 @@ const playDing = () => {
 const playBeep = () => {
   playTone(300, 'square', 0.1, 0.1);
   setTimeout(() => playTone(300, 'square', 0.2, 0.1), 150);
+};
+
+// ─── AI ECOSYSTEM DASHBOARD ───────────────────────────────────────────────────
+const AIEcosystemDashboard = () => {
+  const departments = [
+    {
+      name: "Alocação & Wealth (24/7)",
+      icon: "🌍",
+      agents: [
+        { name: "O Criador", role: "Alpha Seeker", status: "ONLINE 24/7", cpu: 85, ram: 92, task: "Analisando liquidez em Crypto (BTC/ETH) e FIIs para balanceamento de carteira de longo prazo." },
+        { name: "Guardião", role: "Risk Manager", status: "ONLINE 24/7", cpu: 30, ram: 45, task: "Calculando Drawdown e ajustando Position Sizing via Kelly Criterion." }
+      ]
+    },
+    {
+      name: "Engenharia de Software & MLOps",
+      icon: "⚙️",
+      agents: [
+        { name: "Arquiteto", role: "Code Generator", status: "IDLE", cpu: 5, ram: 10, task: "Aguardando novas instruções de modelagem em Python." },
+        { name: "Operário", role: "DevOps & Latency", status: "ONLINE", cpu: 40, ram: 55, task: "Otimizando websockets e reduzindo ping com a API da B3." }
+      ]
+    },
+    {
+      name: "Criação & Modelagem Quant",
+      icon: "🔬",
+      agents: [
+        { name: "Minerador", role: "Alternative Data", status: "ONLINE", cpu: 65, ram: 80, task: "Raspando sentimento do Twitter e Reddit para correlação de ativos." },
+        { name: "Simulador", role: "Backtest Engine", status: "PROCESSING", cpu: 98, ram: 100, task: "Rodando 10.000 simulações de Monte Carlo no IBOV histórico." }
+      ]
+    },
+    {
+      name: "Notícias & Macroeconomia",
+      icon: "📰",
+      agents: [
+        { name: "Radar Global", role: "News Aggregator", status: "ONLINE", cpu: 22, ram: 30, task: "Acompanhando discursos do Fed e dados do IPCA-15 em tempo real." },
+        { name: "Analista", role: "NLP Sentiment", status: "PROCESSING", cpu: 75, ram: 60, task: "Classificando impacto das notícias corporativas da VALE3 e PETR4." }
+      ]
+    },
+    {
+      name: "Supervisão & Compliance",
+      icon: "👁️",
+      agents: [
+        { name: "Overlord", role: "Supervisor Principal", status: "ONLINE 24/7", cpu: 15, ram: 25, task: "Auditando as saídas de todos os agentes. Nenhuma anomalia detectada." },
+        { name: "X-Ray", role: "Auditor de Execução", status: "SLEEP", cpu: 0, ram: 5, task: "Aguardando próxima janela de execução de ordens." }
+      ]
+    }
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+      <div style={{ background: 'linear-gradient(90deg, rgba(16,185,129,0.1) 0%, rgba(0,0,0,0) 100%)', borderLeft: '4px solid #10b981', padding: '1.25rem', borderRadius: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: '1.3rem', fontWeight: 800, color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Activity size={20} color="#10b981" /> Ecossistema Neural Meridian
+          </h2>
+          <p style={{ margin: '0.25rem 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Arquitetura multi-agente autônoma. Setores operando 24/7 de forma assíncrona.</p>
+        </div>
+        <div style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid #10b981', color: '#10b981', padding: '0.5rem 1rem', borderRadius: '4px', fontWeight: 700, fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981', animation: 'pulsePill 1.5s infinite' }}></div>
+          CORE ONLINE
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1rem' }}>
+        {departments.map((dept, i) => (
+          <div key={i} className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="panel-header" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)' }}>
+              <span style={{ fontSize: '1.1rem' }}>{dept.icon}</span>
+              <h3 style={{ margin: 0, fontSize: '0.9rem', color: '#fff' }}>{dept.name}</h3>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', background: 'rgba(255,255,255,0.05)', flex: 1 }}>
+              {dept.agents.map((agent, j) => (
+                <div key={j} style={{ padding: '1rem', background: 'var(--bg-2)', display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                        <span style={{ fontSize: '1rem', fontWeight: 800, color: '#fff' }}>{agent.name}</span>
+                        <span style={{ fontSize: '0.65rem', background: 'rgba(0,243,255,0.1)', color: '#00f3ff', border: '1px solid rgba(0,243,255,0.2)', padding: '0.1rem 0.4rem', borderRadius: '2px', fontWeight: 700, textTransform: 'uppercase' }}>{agent.role}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.65rem', color: agent.status.includes('ONLINE') || agent.status === 'PROCESSING' ? '#10b981' : 'var(--text-muted)', fontWeight: 800 }}>
+                        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: agent.status.includes('ONLINE') || agent.status === 'PROCESSING' ? '#10b981' : '#64748b', boxShadow: agent.status.includes('ONLINE') ? '0 0 6px #10b981' : 'none' }}></div>
+                        {agent.status}
+                      </div>
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem' }}>
+                        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 600 }}>CPU</span>
+                        <div style={{ width: '30px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${agent.cpu}%`, height: '100%', background: agent.cpu > 80 ? '#f43f5e' : (agent.cpu > 50 ? '#f59e0b' : '#10b981') }}></div>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem' }}>
+                        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', fontWeight: 600 }}>RAM</span>
+                        <div style={{ width: '30px', height: '4px', background: 'rgba(255,255,255,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
+                          <div style={{ width: `${agent.ram}%`, height: '100%', background: agent.ram > 80 ? '#f43f5e' : (agent.ram > 50 ? '#f59e0b' : '#10b981') }}></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div style={{ background: '#000', padding: '0.6rem 0.75rem', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <span style={{ color: '#00f3ff', animation: 'pulsePill 1.5s infinite' }}>❯</span>
+                    <span style={{ lineHeight: 1.4 }}>{agent.task}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 };
 
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
@@ -722,29 +836,7 @@ export default function App() {
 
               {homeTab === 'ai' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                  <div className="glass-panel terminal-panel">
-                    <div className="panel-header">
-                      <h3><Terminal size={16} /> Comitê de IA (Terminal Logs)</h3>
-                      <span className="live-badge">● LIVE</span>
-                    </div>
-                    <div className="terminal-feed" ref={termRef} style={{ maxHeight: '250px' }}>
-                      {logs.map((l, i) => (
-                        <div key={i} className="log-line">
-                          <span className="log-time">{l.t}</span>
-                          <span className={`log-sender sender-${l.sender.toLowerCase().replace('-','')}`}>{l.sender}</span>
-                          <span className="log-msg">{l.msg}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="glass-panel" style={{ overflow: 'hidden' }}>
-                    <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                      <h3><Users size={16} /> Agent Office (Live Thoughts)</h3>
-                      <span className="muted-tag">Monitoramento visual do workflow cognitivo dos Agentes</span>
-                    </div>
-                    <AgentOfficeView />
-                  </div>
+                  <AIEcosystemDashboard />
                 </div>
               )}
             </div>
