@@ -19,8 +19,9 @@ def _normalize_ticker(ticker: str) -> str:
     return ticker
 
 
-def fetch_recent_data(ticker: str, period: str = "5d",
-                      interval: str = "1h", max_retries: int = 3):
+def fetch_recent_data(
+    ticker: str, period: str = "5d", interval: str = "1h", max_retries: int = 3
+):
     """
     Busca dados OHLCV recentes usando yfinance.
     Inclui retry com backoff exponencial para tolerância a falhas de rede.
@@ -38,14 +39,23 @@ def fetch_recent_data(ticker: str, period: str = "5d",
 
     for attempt in range(max_retries):
         try:
-            df = yf.download(normalized, period=period, interval=interval,
-                             progress=False, auto_adjust=True)
+            df = yf.download(
+                normalized,
+                period=period,
+                interval=interval,
+                progress=False,
+                auto_adjust=True,
+            )
 
             if df is None or df.empty:
-                logger.warning("[%s] Dados vazios (tentativa %d/%d)",
-                               normalized, attempt + 1, max_retries)
+                logger.warning(
+                    "[%s] Dados vazios (tentativa %d/%d)",
+                    normalized,
+                    attempt + 1,
+                    max_retries,
+                )
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
                 continue
 
             # Normalizar índice e colunas
@@ -55,14 +65,25 @@ def fetch_recent_data(ticker: str, period: str = "5d",
             df.rename(columns={"Datetime": "date", "Date": "date"}, inplace=True)
             df.columns = [c.lower() for c in df.columns]
 
-            logger.debug("[%s] %d candles carregados (period=%s interval=%s)",
-                         normalized, len(df), period, interval)
+            logger.debug(
+                "[%s] %d candles carregados (period=%s interval=%s)",
+                normalized,
+                len(df),
+                period,
+                interval,
+            )
             return df
 
         except Exception as e:
-            wait = 2 ** attempt
-            logger.warning("[%s] Erro na tentativa %d/%d: %s. Aguardando %ds...",
-                           normalized, attempt + 1, max_retries, e, wait)
+            wait = 2**attempt
+            logger.warning(
+                "[%s] Erro na tentativa %d/%d: %s. Aguardando %ds...",
+                normalized,
+                attempt + 1,
+                max_retries,
+                e,
+                wait,
+            )
             if attempt < max_retries - 1:
                 time.sleep(wait)
 
@@ -76,4 +97,3 @@ def get_current_price(ticker: str) -> float:
     if df is not None and not df.empty:
         return float(df.iloc[-1]["close"])
     return 0.0
-

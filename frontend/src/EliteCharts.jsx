@@ -21,7 +21,7 @@ const DarkTooltip = ({ active, payload, label }) => {
     }}>
       <p style={{ color: '#8b9bb4', marginBottom: '0.25rem' }}>{label}</p>
       {payload.map((p, i) => (
-        <p key={i} style={{ color: p.color || p.fill, fontWeight: 600 }}>
+        <p key={p.name || i} style={{ color: p.color || p.fill, fontWeight: 600 }}>
           {p.name}: {typeof p.value === 'number' ? p.value.toFixed(2) : p.value}
         </p>
       ))}
@@ -30,7 +30,7 @@ const DarkTooltip = ({ active, payload, label }) => {
 };
 
 // Custom Candlestick implementation using ComposedChart
-export const CandlestickChart = ({ data }) => {
+export const CandlestickChart = React.memo(({ data }) => {
   if (!data || !data.length) return <div style={{ color: '#8b9bb4', padding: '2rem' }}>Sem dados OHLCV</div>;
 
   // Process data for stacked bars to simulate candles
@@ -70,20 +70,20 @@ export const CandlestickChart = ({ data }) => {
         <Bar yAxisId="price" dataKey="bodyBottom" stackId="a" fill="transparent" />
         <Bar yAxisId="price" dataKey="bodyHeight" stackId="a" isAnimationActive={false}>
           {processedData.map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={entry.color} />
+            <Cell key={`cell-${entry.name || index}`} fill={entry.color} />
           ))}
         </Bar>
         
         {/* Volume */}
         <Bar yAxisId="volume" dataKey="v" name="Volume" isAnimationActive={false}>
           {processedData.map((entry, index) => (
-            <Cell key={`vol-${index}`} fill={entry.color} fillOpacity={0.3} />
+            <Cell key={`vol-${entry.name || index}`} fill={entry.color} fillOpacity={0.3} />
           ))}
         </Bar>
       </ComposedChart>
     </ResponsiveContainer>
   );
-};
+});
 
 export const EquityDrawdownChart = ({ capitalHistory }) => {
   if (!capitalHistory || !capitalHistory.length) return <div style={{ color: '#8b9bb4' }}>Sem dados de equity</div>;
@@ -166,7 +166,7 @@ export const CorrelationHeatmap = ({ matrix, tickers }) => {
   );
 };
 
-export const RiskMetricsPanel = ({ metrics }) => {
+export const RiskMetricsPanel = React.memo(({ metrics }) => {
   if (!metrics) return <div style={{ color: '#8b9bb4' }}>Carregando métricas...</div>;
 
   const getMetricColor = (key, val) => {
@@ -202,20 +202,20 @@ export const RiskMetricsPanel = ({ metrics }) => {
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
       {Object.entries(metrics).map(([k, v]) => {
         const color = getMetricColor(k, v);
         const progress = getProgressVal(k, v);
         return (
-          <div key={k} style={{ background: 'rgba(0,0,0,0.2)', padding: '1.25rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', bottom: 0, left: 0, height: '4px', width: '100%', background: 'rgba(255,255,255,0.05)' }}>
-              <div style={{ height: '100%', width: `${progress}%`, background: color, opacity: 0.5, transition: 'width 1s ease' }} />
+          <div key={k} style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ position: 'absolute', bottom: 0, left: 0, height: '3px', width: '100%', background: 'rgba(255,255,255,0.05)' }}>
+              <div style={{ height: '100%', width: `${progress}%`, background: color, opacity: 0.6, transition: 'width 1s ease' }} />
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <div style={{ fontSize: '0.75rem', color: '#8b9bb4', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{labels[k]}</div>
-              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, boxShadow: `0 0 8px ${color}` }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div style={{ fontSize: '0.65rem', color: '#8b9bb4', textTransform: 'uppercase', letterSpacing: '0.5px', lineHeight: 1.2 }}>{labels[k]}</div>
+              <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, boxShadow: `0 0 6px ${color}`, flexShrink: 0, marginTop: '2px' }} />
             </div>
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: color, fontFamily: 'JetBrains Mono, monospace' }}>
+            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: color, fontFamily: 'JetBrains Mono, monospace' }}>
               {formatters[k] ? formatters[k](v) : v}
             </div>
           </div>
@@ -223,7 +223,7 @@ export const RiskMetricsPanel = ({ metrics }) => {
       })}
     </div>
   );
-};
+});
 
 export const PositionSizingCalc = ({ capital }) => {
   const [riskPct, setRiskPct] = useState(2.0);
@@ -353,7 +353,7 @@ export const AlertBadge = ({ alerts }) => {
           {!count ? <div style={{ color: '#8b9bb4', fontSize: '0.85rem' }}>Sem alertas no momento.</div> : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {alerts.map((a, i) => (
-                <div key={i} style={{ display: 'flex', gap: '0.75rem', fontSize: '0.8rem' }}>
+                <div key={a.id || i} style={{ display: 'flex', gap: '0.75rem', fontSize: '0.8rem' }}>
                   <div style={{
                     width: '8px', height: '8px', borderRadius: '50%', marginTop: '4px', flexShrink: 0,
                     background: a.type === 'target_hit' ? '#10b981' : (a.type === 'stop_hit' ? '#f43f5e' : '#f59e0b')
@@ -445,7 +445,7 @@ export const MarketHeatmap = () => {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gridAutoRows: '70px', gap: '2px', width: '100%', background: 'var(--bg)' }}>
       {blocks.map((b, i) => (
-        <div key={i} style={{ gridColumn: b.col, gridRow: b.row, background: b.c, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff', borderRadius: '2px', cursor: 'pointer', transition: 'all 0.2s', overflow: 'hidden', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.2)' }} onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.15)'} onMouseLeave={e => e.currentTarget.style.filter = 'none'}>
+        <div key={b.ticker} style={{ gridColumn: b.col, gridRow: b.row, background: b.c, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff', borderRadius: '2px', cursor: 'pointer', transition: 'all 0.2s', overflow: 'hidden', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.2)' }} onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.15)'} onMouseLeave={e => e.currentTarget.style.filter = 'none'}>
           <div style={{ fontSize: '0.8rem', fontWeight: 800, letterSpacing: '0.5px' }}>{b.ticker}</div>
           <div style={{ fontSize: '0.65rem', fontWeight: 600, opacity: 0.8 }}>{b.perf}</div>
         </div>
@@ -465,7 +465,7 @@ export const EconomicCalendar = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', paddingLeft: '0.5rem', borderLeft: '2px solid rgba(255,255,255,0.1)', gap: '1.2rem', marginTop: '0.5rem' }}>
       {events.map((e, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
+        <div key={e.name || i} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', position: 'relative' }}>
           <div style={{ position: 'absolute', left: '-13px', width: '8px', height: '8px', borderRadius: '50%', background: e.impact === 3 ? '#f59e0b' : 'var(--text-muted)', boxShadow: e.impact === 3 ? '0 0 8px rgba(245,158,11,0.5)' : 'none' }} />
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, width: '40px', fontFamily: 'JetBrains Mono, monospace' }}>{e.time}</div>
           <div style={{ fontSize: '1.1rem' }}>{e.flag}</div>
@@ -481,7 +481,7 @@ export const EconomicCalendar = () => {
   );
 };
 
-export const DepthOfMarket = () => {
+export const DepthOfMarket = React.memo(() => {
   const domLevels = [
     { price: '34.52', ask: 1500, askW: '85%', bid: null, bidW: '0%' },
     { price: '34.51', ask: 800,  askW: '45%', bid: null, bidW: '0%' },
@@ -503,7 +503,7 @@ export const DepthOfMarket = () => {
       </div>
       
       {domLevels.map((lvl, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', height: '24px', alignItems: 'center', borderBottom: i === 3 ? '2px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.02)' }}>
+        <div key={lvl.price} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', height: '24px', alignItems: 'center', borderBottom: i === 3 ? '2px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.02)' }}>
           {/* Bid Side */}
           <div style={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', paddingLeft: '0.5rem' }}>
             {lvl.bid && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: lvl.bidW, background: 'rgba(16,185,129,0.15)' }} />}
@@ -524,7 +524,7 @@ export const DepthOfMarket = () => {
       ))}
     </div>
   );
-};
+});
 
 export const AcademyWidget = () => {
   const courses = [
@@ -537,7 +537,7 @@ export const AcademyWidget = () => {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', width: '100%' }}>
       {courses.map((c, i) => (
-        <div key={i} style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'transform 0.2s, box-shadow 0.2s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
+        <div key={c.title || i} style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'transform 0.2s, box-shadow 0.2s' }} onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)'; }} onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
           <div style={{ height: '80px', background: `linear-gradient(135deg, ${c.c1}, ${c.c2})`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2rem' }}>
             {c.icon}
           </div>
@@ -557,17 +557,76 @@ export const AcademyWidget = () => {
   );
 };
 
-export const FastExecutionWidget = () => {
+export const FastExecutionWidget = React.memo(({ trade, saldoLivre = 0, onExecute }) => {
+  const [qty, setQty] = useState(100);
+  const [loading, setLoading] = useState(false);
+  const [localTicker, setLocalTicker] = useState('BTC-USD');
+
+  // Sincroniza se o usuário clicar na tabela
+  React.useEffect(() => {
+    if (trade?.ticker) setLocalTicker(trade.ticker);
+  }, [trade]);
+
+  const handleExec = async (side) => {
+    if (!localTicker) {
+      alert("Digite um ativo para operar.");
+      return;
+    }
+    if (qty <= 0) return;
+    
+    setLoading(true);
+    try {
+      if (onExecute) {
+        await onExecute({
+          ticker: localTicker.toUpperCase(),
+          side: side,
+          quantity: qty
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Falha na execução: " + (err.response?.data?.detail || err.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Ativo (Ticker)</div>
+        <input 
+          type="text" 
+          value={localTicker} 
+          onChange={e => setLocalTicker(e.target.value.toUpperCase())}
+          placeholder="Ex: BTC-USD"
+          style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: '#fff', padding: '0.5rem', borderRadius: '4px', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace', textAlign: 'center', fontWeight: 800, letterSpacing: '1px' }} 
+        />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
-        <button style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid var(--red)', color: 'var(--red)', padding: '0.75rem', borderRadius: '4px', fontWeight: 800, fontSize: '0.9rem', cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.background='var(--red)'; e.currentTarget.style.color='#fff'; }} onMouseLeave={e => { e.currentTarget.style.background='rgba(244,63,94,0.1)'; e.currentTarget.style.color='var(--red)'; }}>VENDER</button>
-        <button style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid var(--green)', color: 'var(--green)', padding: '0.75rem', borderRadius: '4px', fontWeight: 800, fontSize: '0.9rem', cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.background='var(--green)'; e.currentTarget.style.color='#fff'; }} onMouseLeave={e => { e.currentTarget.style.background='rgba(16,185,129,0.1)'; e.currentTarget.style.color='var(--green)'; }}>COMPRAR</button>
+        <button 
+          onClick={() => handleExec('SELL')}
+          disabled={loading || !localTicker}
+          style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid var(--red)', color: 'var(--red)', padding: '0.75rem', borderRadius: '4px', fontWeight: 800, fontSize: '0.9rem', cursor: loading || !localTicker ? 'not-allowed' : 'pointer', transition: 'all 0.2s', opacity: loading || !localTicker ? 0.5 : 1 }} 
+          onMouseEnter={e => { if(!loading && localTicker) { e.currentTarget.style.background='var(--red)'; e.currentTarget.style.color='#fff'; } }} 
+          onMouseLeave={e => { if(!loading && localTicker) { e.currentTarget.style.background='rgba(244,63,94,0.1)'; e.currentTarget.style.color='var(--red)'; } }}
+        >
+          {loading ? '...' : 'VENDER'}
+        </button>
+        <button 
+          onClick={() => handleExec('BUY')}
+          disabled={loading || !localTicker}
+          style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid var(--green)', color: 'var(--green)', padding: '0.75rem', borderRadius: '4px', fontWeight: 800, fontSize: '0.9rem', cursor: loading || !localTicker ? 'not-allowed' : 'pointer', transition: 'all 0.2s', opacity: loading || !localTicker ? 0.5 : 1 }} 
+          onMouseEnter={e => { if(!loading && localTicker) { e.currentTarget.style.background='var(--green)'; e.currentTarget.style.color='#fff'; } }} 
+          onMouseLeave={e => { if(!loading && localTicker) { e.currentTarget.style.background='rgba(16,185,129,0.1)'; e.currentTarget.style.color='var(--green)'; } }}
+        >
+          {loading ? '...' : 'COMPRAR'}
+        </button>
       </div>
       <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '0.2rem', textTransform: 'uppercase', fontWeight: 700 }}>Quantidade</div>
-          <input type="number" defaultValue={100} step={100} style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: '#fff', padding: '0.5rem', borderRadius: '4px', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace' }} />
+          <input type="number" value={qty} onChange={e => setQty(Number(e.target.value))} step={100} style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: '#fff', padding: '0.5rem', borderRadius: '4px', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace' }} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '0.2rem', textTransform: 'uppercase', fontWeight: 700 }}>Preço</div>
@@ -575,9 +634,9 @@ export const FastExecutionWidget = () => {
         </div>
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
-        <span>Poder de Compra: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ 45.200,00</strong></span>
-        <span>Margem: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ 0,00</strong></span>
+        <span>Poder de Compra: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ {saldoLivre.toFixed(2)}</strong></span>
+        <span>Margem req: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ 0,00</strong></span>
       </div>
     </div>
   );
-};
+});

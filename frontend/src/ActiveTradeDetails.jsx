@@ -94,6 +94,20 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
       });
     }
 
+    const current_price = trade.side === 'BUY'
+      ? trade.entry_price * (1 + (trade.pnl_pct / 100))
+      : trade.entry_price * (1 - (trade.pnl_pct / 100));
+
+    if (current_price) {
+      candlestickSeries.createPriceLine({
+        price: current_price,
+        color: '#eab308',
+        lineWidth: 2,
+        lineStyle: 0, // Solid line
+        title: 'ATUAL',
+      });
+    }
+
     chart.timeScale().fitContent();
     chartRef.current = chart;
 
@@ -107,6 +121,18 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
 
   const pnlColor = trade.pnl_pct >= 0 ? '#10b981' : '#f43f5e';
 
+  // Financial calculations
+  const expectedProfit = trade.side === 'BUY' 
+    ? (trade.target_price - trade.entry_price) * trade.shares
+    : (trade.entry_price - trade.target_price) * trade.shares;
+
+  const maxLoss = trade.side === 'BUY'
+    ? (trade.entry_price - trade.stop_loss) * trade.shares
+    : (trade.stop_loss - trade.entry_price) * trade.shares;
+
+  const pnlValue = (trade.pnl_pct / 100) * (trade.shares * trade.entry_price);
+  const pnlSign = pnlValue >= 0 ? '+' : '-';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', animation: 'fadeIn 0.3s' }}>
       
@@ -119,7 +145,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
           <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
             {trade.ticker} 
             <span style={{ fontSize: '0.75rem', background: trade.side === 'BUY' ? 'rgba(16,185,129,0.1)' : 'rgba(244,63,94,0.1)', color: trade.side === 'BUY' ? '#10b981' : '#f43f5e', padding: '0.2rem 0.6rem', borderRadius: '4px', border: `1px solid ${trade.side === 'BUY' ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}` }}>
-              LONG
+              {trade.side === 'BUY' ? 'LONG' : 'SHORT'}
             </span>
           </h2>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Operação aberta em {new Date(trade.entry_date).toLocaleString()}</span>
@@ -151,24 +177,34 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
             <div className="glass-panel" style={{ padding: '1rem' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Entrada Executada</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Entrada & Investimento</span>
               <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', marginTop: '0.5rem' }}>R$ {trade.entry_price?.toFixed(2)}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Tamanho: {trade.shares?.toFixed(0)} ações</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                Alocado: <strong>R$ {(trade.shares * trade.entry_price).toFixed(2)}</strong> ({trade.shares?.toFixed(5)} un.)
+              </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', borderTop: '2px solid #10b981' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}><Crosshair size={12} style={{ display: 'inline', marginRight: '4px' }}/> Take Profit (Alvo)</span>
               <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#10b981', marginTop: '0.5rem' }}>R$ {trade.target_price?.toFixed(2)}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Risco/Retorno: 1:3</div>
+              <div style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.25rem', fontWeight: 600 }}>
+                Lucro Estimado: +R$ {Math.max(0, expectedProfit).toFixed(2)}
+              </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', borderTop: '2px solid #f43f5e' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}><ShieldAlert size={12} style={{ display: 'inline', marginRight: '4px' }}/> Stop Loss (Risco)</span>
               <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#f43f5e', marginTop: '0.5rem' }}>R$ {trade.stop_loss?.toFixed(2)}</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Hard stop no servidor</div>
+              <div style={{ fontSize: '0.75rem', color: '#f43f5e', marginTop: '0.25rem', fontWeight: 600 }}>
+                Perda Máxima: -R$ {Math.max(0, maxLoss).toFixed(2)}
+              </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', background: 'rgba(0,0,0,0.4)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Lucro/Prejuízo Aberto</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: pnlColor, marginTop: '0.5rem' }}>{trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct?.toFixed(2)}%</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Atualizado em tempo real</div>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Lucro/Prejuízo Atual</span>
+              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: pnlColor, marginTop: '0.5rem' }}>
+                {pnlSign} R$ {Math.abs(pnlValue).toFixed(2)}
+              </div>
+              <div style={{ fontSize: '0.75rem', color: pnlColor, marginTop: '0.25rem' }}>
+                ({trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct?.toFixed(2)}%)
+              </div>
             </div>
           </div>
 
@@ -195,7 +231,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
                   <div style={{ width: '6px', height: '6px', background: '#3b82f6', borderRadius: '50%' }}></div> MARKET ANALYST
                 </div>
                 <div style={{ background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '6px', borderLeft: '3px solid #3b82f6', fontSize: '0.85rem', lineHeight: 1.6, color: '#e2e8f0', fontFamily: 'JetBrains Mono, monospace' }}>
-                  {trade.ai_rationale || 'Nenhuma justificativa textual foi providenciada para esta execução antiga.'}
+                  {(trade.ai_rationale || '').split('|')[0] || 'Nenhuma justificativa textual providenciada.'}
                 </div>
               </div>
 
@@ -204,7 +240,9 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
                   <div style={{ width: '6px', height: '6px', background: '#f59e0b', borderRadius: '50%' }}></div> RISK MANAGER
                 </div>
                 <div style={{ background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '6px', borderLeft: '3px solid #f59e0b', fontSize: '0.85rem', lineHeight: 1.6, color: '#e2e8f0' }}>
-                  Aprovado. Dimensionamento baseado na volatilidade histórica. Risco limitado a 2% do capital em conta via critério de Kelly dinâmico.
+                  {(trade.ai_rationale && trade.ai_rationale.includes('|')) 
+                    ? trade.ai_rationale.split('|')[1].trim()
+                    : "Aprovado. Risco avaliado dinamicamente."}
                 </div>
               </div>
 

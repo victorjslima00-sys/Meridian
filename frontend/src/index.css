@@ -51,6 +51,22 @@ body {
   overflow: hidden;
 }
 
+/* ─── SCROLLBARS ─── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 /* ═══════════════════════════════════════════════════════
    SPLASH / LOADING
 ═══════════════════════════════════════════════════════ */
@@ -367,6 +383,27 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* PRO TRADING LAYOUT */
+.pro-trading-layout {
+  display: grid;
+  grid-template-columns: 2.5fr 1fr;
+  gap: 0.75rem;
+  align-items: stretch;
+  height: calc(100vh - 180px);
+}
+.pro-main-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: hidden; /* TradingView takes remaining space */
+}
+.pro-side-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto; /* Side panel can scroll if DOM/Scalper is long */
 }
 
 /* ═══════════════════════════════════════════════════════

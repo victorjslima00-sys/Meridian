@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 import ActiveTradeDetails from './ActiveTradeDetails';import {
   Activity, ShieldAlert, Cpu, Database,
   BarChart2, Globe, Terminal, Briefcase, X,
@@ -76,14 +77,22 @@ const PositionRow = ({ pos, onClick, onClose }) => {
   const target = pos.target_price || 0;
   const stop = pos.stop_loss || 0;
   
-  const priceDiff = target - pos.entry_price;
-  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, ((current_price - pos.entry_price) / priceDiff) * 100));
+  const priceDiff = pos.side === 'BUY' ? target - pos.entry_price : pos.entry_price - target;
+  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, 
+    pos.side === 'BUY' 
+      ? ((current_price - pos.entry_price) / priceDiff) * 100 
+      : ((pos.entry_price - current_price) / priceDiff) * 100
+  ));
+  
   const isGain = pos.pnl_pct >= 0;
+  const pnlMonetary = (pos.pnl_pct / 100) * (pos.shares * pos.entry_price);
+  const alocado = pos.shares * pos.entry_price;
 
   return (
     <tr className="pos-row" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
       <td>
         <div className="ticker-badge">{pos.ticker}</div>
+        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', letterSpacing: '0.5px' }}>R$ {alocado.toFixed(2)}</div>
       </td>
       <td>
         <span className={`side-chip ${pos.side === 'BUY' ? 'long' : 'short'}`}>
@@ -93,7 +102,7 @@ const PositionRow = ({ pos, onClick, onClose }) => {
       <td className="mono">R$ {pos.entry_price?.toFixed(2)}</td>
       <td>
         <div className="mtm-cell">
-          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e' }}>
+          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
             R$ {current_price?.toFixed(2)}
           </span>
           <div className="prog-track">
@@ -104,9 +113,14 @@ const PositionRow = ({ pos, onClick, onClose }) => {
       <td className="mono dim">R$ {target?.toFixed(2)}</td>
       <td className="mono dim">R$ {stop?.toFixed(2)}</td>
       <td>
-        <span className={`pnl-chip ${isGain ? 'gain' : 'loss'}`}>
-          {isGain ? '+' : ''}{pos.pnl_pct}%
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+          <span className={`pnl-chip ${isGain ? 'gain' : 'loss'}`}>
+            {isGain ? '+' : ''}{pos.pnl_pct?.toFixed(2)}%
+          </span>
+          <span className="mono" style={{ fontSize: '0.75rem', color: isGain ? '#10b981' : '#f43f5e', fontWeight: 800 }}>
+            {pnlMonetary >= 0 ? '+' : '-'}R$ {Math.abs(pnlMonetary).toFixed(2)}
+          </span>
+        </div>
       </td>
       <td>
         <button 
@@ -122,6 +136,322 @@ const PositionRow = ({ pos, onClick, onClose }) => {
         <ChevronRight size={14} color="#8b9bb4" />
       </td>
     </tr>
+  );
+};
+// ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
+const PortfolioOverviewDashboard = ({ positions, patTotal, saldoLivre }) => {
+  // Dados para Gráfico de Pizza (Alocação)
+  const allocData = [
+    { name: 'Caixa Livre', value: saldoLivre, color: '#10b981' }
+  ];
+  
+  if (positions?.active_positions) {
+    positions.active_positions.forEach(p => {
+      allocData.push({
+        name: p.ticker,
+        value: p.shares * p.entry_price, // Capital alocado
+        color: p.side === 'BUY' ? '#3b82f6' : '#f59e0b'
+      });
+    });
+  }
+
+  // Dados para Gráfico de Barras (PnL por Ativo)
+  const pnlData = positions?.active_positions ? positions.active_positions.map(p => {
+    const isGain = p.pnl_pct >= 0;
+    const pnlMonetary = p.shares * p.entry_price * (p.pnl_pct / 100);
+    return {
+      ticker: p.ticker,
+      pnl: pnlMonetary,
+      color: isGain ? '#10b981' : '#f43f5e'
+    };
+  }) : [];
+
+  const CustomTooltip = ({ active, payload }) => {
+    if (active && payload && payload.length) {
+      return (
+        <div style={{ background: 'rgba(17,24,39,0.9)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.5rem 1rem', borderRadius: '8px', backdropFilter: 'blur(4px)' }}>
+          <p style={{ margin: 0, color: '#fff', fontWeight: 600 }}>{payload[0].name || payload[0].payload.ticker}</p>
+          <p style={{ margin: 0, color: payload[0].payload.color, fontWeight: 700 }}>R$ {payload[0].value.toFixed(2)}</p>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '100%', overflow: 'hidden' }}>
+      <div className="glass-panel" style={{ padding: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'radial-gradient(ellipse at 50% -20%, rgba(16,185,129,0.15) 0%, rgba(0,0,0,0) 70%)', border: '1px solid rgba(16,185,129,0.1)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <h2 style={{ fontSize: '1.8rem', marginBottom: '0.5rem', color: '#fff', textShadow: '0 0 10px rgba(16,185,129,0.3)' }}>Visão Global da Carteira</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Métricas consolidadas de alocação e performance em tempo real.</p>
+        </div>
+      </div>
+      
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, paddingBottom: '1rem' }}>
+        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
+          <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
+          <div style={{ flex: 1, minHeight: '250px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={allocData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={80}
+                  outerRadius={105}
+                  paddingAngle={5}
+                  dataKey="value"
+                  stroke="none"
+                >
+                  {allocData.map((entry, index) => (
+                    <Cell key={`cell-${entry.name || entry.ticker || index}`} fill={entry.color} style={{ filter: `drop-shadow(0px 0px 8px ${entry.color}40)` }} />
+                  ))}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+                <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '0.85rem' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
+          <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
+          <div style={{ flex: 1, minHeight: '250px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={pnlData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis dataKey="ticker" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val}`} tickLine={false} axisLine={false} />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.03)' }} content={<CustomTooltip />} />
+                <Bar dataKey="pnl" radius={[4, 4, 0, 0]} maxBarSize={60}>
+                  {pnlData.map((entry, index) => (
+                    <Cell key={`cell-${entry.name || entry.ticker || index}`} fill={entry.color} style={{ filter: `drop-shadow(0px -2px 6px ${entry.color}40)` }} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Trade Performance Strip (Tático) ────────────────────────────────────────
+const TradePerformanceStrip = ({ trade }) => {
+  if (!trade) return null;
+
+  const isGain = trade.pnl_pct >= 0;
+  const pnlColor = isGain ? '#10b981' : '#f43f5e';
+  
+  // Simulando cálculos reais para display
+  const pnlMonetary = trade.shares * trade.entry_price * (trade.pnl_pct / 100);
+  
+  const targetDist = trade.target_price ? 
+    (trade.side === 'BUY' 
+      ? ((trade.target_price - trade.entry_price) / trade.entry_price) * 100 
+      : ((trade.entry_price - trade.target_price) / trade.entry_price) * 100
+    ).toFixed(2) : '--';
+    
+  const stopDist = trade.stop_loss ? 
+    (trade.side === 'BUY'
+      ? ((trade.entry_price - trade.stop_loss) / trade.entry_price) * 100
+      : ((trade.stop_loss - trade.entry_price) / trade.entry_price) * 100
+    ).toFixed(2) : '--';
+
+  return (
+    <div style={{ display: 'flex', gap: '1rem', padding: '0.75rem 1rem', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+      {/* PnL Atual */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>PnL Aberto</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1.2rem', fontWeight: 800, color: pnlColor, textShadow: `0 0 10px ${pnlColor}40` }}>
+            {isGain ? '+' : '-'}R$ {Math.abs(pnlMonetary).toFixed(2)}
+          </span>
+          <span style={{ fontSize: '0.85rem', fontWeight: 600, color: pnlColor }}>
+            ({isGain ? '+' : ''}{trade.pnl_pct}%)
+          </span>
+        </div>
+      </div>
+
+      <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+
+      {/* Lado / Entrada */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Posição</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', background: trade.side === 'BUY' ? 'rgba(59,130,246,0.15)' : 'rgba(245,158,11,0.15)', color: trade.side === 'BUY' ? '#3b82f6' : '#f59e0b', fontWeight: 'bold' }}>
+            {trade.side}
+          </span>
+          <span style={{ fontSize: '1rem', fontWeight: 600, color: '#fff', fontFamily: 'JetBrains Mono' }}>
+            @ {trade.entry_price}
+          </span>
+        </div>
+      </div>
+
+      <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+
+      {/* Alvo */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Alvo (Gain)</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1rem', fontWeight: 600, color: '#fff', fontFamily: 'JetBrains Mono' }}>
+            {trade.target_price || 'N/A'}
+          </span>
+          {trade.target_price && (
+            <span style={{ fontSize: '0.75rem', color: '#10b981' }}>({targetDist}%)</span>
+          )}
+        </div>
+      </div>
+
+      <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+
+      {/* Stop */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Stop Loss</span>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+          <span style={{ fontSize: '1rem', fontWeight: 600, color: '#fff', fontFamily: 'JetBrains Mono' }}>
+            {trade.stop_loss || 'N/A'}
+          </span>
+          {trade.stop_loss && (
+            <span style={{ fontSize: '0.75rem', color: '#f43f5e' }}>({stopDist}%)</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+
+// ─── Live PnL Chart ────────────────────────────────────────────────────────
+const LivePnlChart = React.memo(({ history }) => {
+  if (!history || history.length === 0) return (
+    <div className="glass-panel" style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
+      Aguardando coleta de dados (Ao Vivo)...
+    </div>
+  );
+
+  const currentPnl = history[history.length - 1].pnl;
+  const isGain = currentPnl >= 0;
+
+  return (
+    <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>Evolução MTM (Intraday)</h3>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Soma do PnL Aberto em Tempo Real</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isGain ? '#10b981' : '#f43f5e', boxShadow: `0 0 8px ${isGain ? '#10b981' : '#f43f5e'}`, animation: 'pulsePill 1.5s infinite' }}></div>
+          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e', fontWeight: 800 }}>
+            {isGain ? '+' : '-'}R$ {Math.abs(currentPnl).toFixed(2)}
+          </span>
+        </div>
+      </div>
+      <div style={{ width: '100%', height: '220px' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={history} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
+            <defs>
+              <linearGradient id="colorPnlGain" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+              </linearGradient>
+              <linearGradient id="colorPnlLoss" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={8} minTickGap={20} />
+            <YAxis stroke="#475569" fontSize={10} tickFormatter={(val) => `R$ ${val.toFixed(0)}`} domain={['auto', 'auto']} />
+            <Tooltip
+              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '4px', fontSize: '0.8rem' }}
+              itemStyle={{ color: '#fff', fontWeight: 600 }}
+              formatter={(value) => [`R$ ${value.toFixed(2)}`, 'PnL']}
+              labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
+            />
+            <Area 
+              type="monotone" 
+              dataKey="pnl" 
+              stroke={isGain ? '#10b981' : '#f43f5e'} 
+              strokeWidth={2}
+              fillOpacity={1} 
+              fill={isGain ? "url(#colorPnlGain)" : "url(#colorPnlLoss)"} 
+              isAnimationActive={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+});
+
+// ─── Open Positions Dashboard ───────────────────────────────────────────────
+const OpenPositionsDashboard = ({ positions }) => {
+  const active = positions?.active_positions || [];
+  if (active.length === 0) return null;
+
+  const totalAlocado = active.reduce((sum, pos) => sum + (pos.shares * pos.entry_price), 0);
+  const totalPnlPct = active.reduce((sum, pos) => sum + pos.pnl_pct, 0) / active.length;
+  const totalPnlMonetary = active.reduce((sum, pos) => sum + ((pos.pnl_pct / 100) * (pos.shares * pos.entry_price)), 0);
+  
+  const maxRisk = active.reduce((sum, pos) => {
+    const risk = pos.side === 'BUY' 
+      ? (pos.entry_price - pos.stop_loss) * pos.shares 
+      : (pos.stop_loss - pos.entry_price) * pos.shares;
+    return sum + (risk > 0 ? risk : 0);
+  }, 0);
+
+  const maxReturn = active.reduce((sum, pos) => {
+    const ret = pos.side === 'BUY' 
+      ? (pos.target_price - pos.entry_price) * pos.shares 
+      : (pos.entry_price - pos.target_price) * pos.shares;
+    return sum + (ret > 0 ? ret : 0);
+  }, 0);
+
+  const winLossRatio = maxRisk > 0 ? (maxReturn / maxRisk).toFixed(2) : 'N/A';
+  const isGain = totalPnlMonetary >= 0;
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.75rem', marginBottom: '1rem' }}>
+      <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderLeft: '3px solid #3b82f6' }}>
+        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Capital Exposto (Risco)</span>
+        <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#e2e8f0' }}>R$ {totalAlocado.toFixed(2)}</div>
+        <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Em {active.length} Posição(ões)</span>
+      </div>
+      
+      <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderLeft: `3px solid ${isGain ? '#10b981' : '#f43f5e'}` }}>
+        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>PnL Flutuante Total</span>
+        <div style={{ fontSize: '1.25rem', fontWeight: 800, color: isGain ? '#10b981' : '#f43f5e' }}>
+          {isGain ? '+' : '-'}R$ {Math.abs(totalPnlMonetary).toFixed(2)}
+        </div>
+        <span style={{ fontSize: '0.7rem', color: isGain ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
+          {isGain ? '+' : ''}{totalPnlPct.toFixed(2)}% Médio
+        </span>
+      </div>
+
+      <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderLeft: '3px solid #f59e0b' }}>
+        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Global Risco/Retorno</span>
+        <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#f59e0b' }}>{winLossRatio}x</div>
+        <span style={{ fontSize: '0.7rem', color: '#f59e0b' }}>Risco R$ {maxRisk.toFixed(2)} / Alvo R$ {maxReturn.toFixed(2)}</span>
+      </div>
+      
+      <div className="glass-panel" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderLeft: '3px solid #8b5cf6' }}>
+        <span style={{ fontSize: '0.65rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>Maior Vencedor</span>
+        {active.length > 0 ? (() => {
+          const best = [...active].sort((a,b) => b.pnl_pct - a.pnl_pct)[0];
+          return (
+            <>
+              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#e2e8f0' }}>{best.ticker}</div>
+              <span style={{ fontSize: '0.7rem', color: best.pnl_pct >= 0 ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
+                {best.pnl_pct >= 0 ? '+' : ''}{best.pnl_pct.toFixed(2)}%
+              </span>
+            </>
+          );
+        })() : <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#64748b' }}>-</div>}
+      </div>
+    </div>
   );
 };
 
@@ -143,7 +473,7 @@ const NeuralMap = ({ nodes, edges, onNodeClick }) => {
           const s = layout[e.source], t = layout[e.target];
           if (!s || !t) return null;
           return (
-            <line key={i}
+            <line key={`edge-${e.source}-${e.target}`}
               x1={s.left} y1={s.top} x2={t.left} y2={t.top}
               className={`neural-edge ${e.animated ? 'live' : ''}`}
             />
@@ -202,7 +532,7 @@ const AgentOfficeView = () => {
       }, 3000);
     }
     return () => clearTimeout(timer);
-  }, [phase, step]);
+  }, [phase, step, script.length]);
 
   const currentLine = script[step];
   const fromAgent = agents[currentLine.from];
@@ -311,11 +641,17 @@ const AgentOfficeView = () => {
 };
 
 // ─── AUDIO SYSTEM ─────────────────────────────────────────────────────────────
+let sharedAudioCtx = null;
 const playTone = (freq, type, duration, vol) => {
   try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
+    if (!sharedAudioCtx) {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      sharedAudioCtx = new AudioContext();
+    }
+    const ctx = sharedAudioCtx;
+    if (ctx.state === 'suspended') ctx.resume();
+    
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = type;
@@ -326,7 +662,7 @@ const playTone = (freq, type, duration, vol) => {
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + duration);
-  } catch (e) {}
+  } catch (e) { console.error('Audio error', e); }
 };
 
 const playDing = () => {
@@ -408,14 +744,14 @@ const AIEcosystemDashboard = ({ logs }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))', gap: '1rem' }}>
         {departments.map((dept, i) => (
-          <div key={i} className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div key={dept.name} className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
             <div className="panel-header" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)' }}>
               <span style={{ fontSize: '1.1rem' }}>{dept.icon}</span>
               <h3 style={{ margin: 0, fontSize: '0.9rem', color: '#fff' }}>{dept.name}</h3>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', background: 'rgba(255,255,255,0.05)', flex: 1 }}>
               {dept.agents.map((agent, j) => (
-                <div key={j} style={{ padding: '1rem', background: 'var(--bg-2)', display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>
+                <div key={agent.id} style={{ padding: '1rem', background: 'var(--bg-2)', display: 'flex', flexDirection: 'column', gap: '0.75rem', flex: 1 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
@@ -517,6 +853,7 @@ export default function App() {
   const [alerts, setAlerts] = useState([
     { type: 'regime_change', ticker: 'IBOV', message: 'Regime alterado para Bull Market', time: new Date().toLocaleTimeString() }
   ]);
+  const [livePnlHistory, setLivePnlHistory] = useState([]);
   const [candleData, setCandleData] = useState(null);
 
   // Settings State
@@ -537,7 +874,7 @@ export default function App() {
 
   // AI Ecosystem Real-time Logs
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/logs');
+    const ws = new window.WebSocket('ws://localhost:8000/ws/logs');
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
@@ -567,8 +904,26 @@ export default function App() {
           axios.get(`${API_BASE}/elite/equity_curve`).catch(()=>({data:null})),
           axios.get(`${API_BASE}/elite/news`).catch(()=>({data:null})),
         ]);
-        setStatus(s.data); setPositions(p.data);
+        setStatus(s.data); 
+        setPositions(p.data);
+        setSelectedTrade(prev => {
+          if (!prev) return prev;
+          // Sync with the latest fetched positions
+          const updated = p.data.active_positions?.find(t => t.id === prev.id) || p.data.closed_positions?.find(t => t.id === prev.id);
+          return updated ? { ...prev, ...updated } : prev;
+        });
         setEcosystem(e.data); setTapeData(tp.data);
+        
+        // Update Live PnL History
+        if (p.data?.active_positions) {
+          const totalPnl = p.data.active_positions.reduce((sum, pos) => sum + ((pos.pnl_pct / 100) * (pos.shares * pos.entry_price)), 0);
+          setLivePnlHistory(prev => {
+            const now = new Date();
+            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+            const newHist = [...prev, { time: timeStr, pnl: totalPnl }];
+            return newHist.slice(-60); // Keep last 60 ticks (5 mins)
+          });
+        }
         
         if (rm.data) setRiskMetrics(rm.data);
         if (tj.data) setTradeJournal(tj.data);
@@ -602,6 +957,20 @@ export default function App() {
     }
   };
 
+  const handleExecuteTrade = async (tradeParams) => {
+    try {
+      setApiError(null);
+      await axios.post(`${API_BASE}/trades/execute`, tradeParams);
+      // Force refresh positions
+      const p = await axios.get(`${API_BASE}/positions`);
+      setPositions(p.data);
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message;
+      setApiError(`Erro ao executar trade: ${msg}`);
+      throw err;
+    }
+  };
+
   // Fetch candle data when a ticker is selected for modal
   useEffect(() => {
     if (!chartModal) return;
@@ -616,7 +985,8 @@ export default function App() {
           }));
           setCandleData(formatted);
         }
-      });
+      })
+      .catch(err => console.error("Chart fetch error:", err));
   }, [chartModal]);
 
   const openNode = async (node) => {
@@ -624,7 +994,9 @@ export default function App() {
     try {
       const r = await axios.get(`${API_BASE}/node/${node.id}`);
       setNodeDetails(r.data);
-    } catch {}
+    } catch (err) {
+      console.error("Node fetch error:", err);
+    }
   };
 
   const doEmergencyStop = async () => {
@@ -753,8 +1125,8 @@ export default function App() {
 
           <div className="topbar-tape" aria-label="Fita de mercado">
             <div className="tape-scroll">
-              {tapeData.tape.map((item, i) => <TapeItem key={i} item={item} />)}
-              {tapeData.tape.map((item, i) => <TapeItem key={`r${i}`} item={item} />)}
+              {tapeData.tape.map((item, i) => <TapeItem key={item.id || item.timestamp || i} item={item} />)}
+              {tapeData.tape.map((item, i) => <TapeItem key={`r-${item.id || item.timestamp || i}`} item={item} />)}
             </div>
           </div>
           
@@ -782,7 +1154,7 @@ export default function App() {
               <div style={{ overflow: 'hidden', display: 'flex', alignItems: 'center', marginBottom: '1rem', fontSize: '0.75rem', fontWeight: 600, color: '#8b9bb4', padding: '0.6rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', maskImage: 'linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%)' }}>
                 <div className="tape-scroll" style={{ gap: '3rem', animationDuration: '60s' }}>
                   {[...Array(2)].map((_, idx) => (
-                    <React.Fragment key={idx}>
+                    <React.Fragment key={`fill-${idx}`}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <span>S&P 500</span> <span style={{ color: '#10b981' }}>5,123.40 (+0.8%)</span>
                       </div>
@@ -796,7 +1168,7 @@ export default function App() {
                         <span>US10Y</span> <span style={{ color: '#f59e0b' }}>4.23% (+0.02)</span>
                       </div>
                       {marketNews && marketNews.map((n, i) => (
-                        <div key={`news-${i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div key={`news-${n.id || i}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                           <span style={{ color: 'var(--primary)' }}>[{n.source}]</span>
                           <span style={{ color: '#fff' }}>{n.title}</span>
                         </div>
@@ -806,142 +1178,127 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="kpi-row">
-                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Capital protegido (fora de risco)" />
-                <KpiCard title="Saldo Disponível" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub={`Limite Total: R$ ${saldoDisp.toFixed(2)}`} />
-                <KpiCard title="ROI Global" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="desde o início (base R$ 100)" trend={roiNum} />
-                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions?.length || 0} sub={`R$ ${emPos.toFixed(2)} alocado`} />
+              {/* HEADER DE KPIS UNIFICADO */}
+              <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
+                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Capital consolidado" />
+                <KpiCard title="Saldo em Conta" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Margem livre p/ operar" />
+                <KpiCard 
+                  title="PnL Flutuante (MTM)" 
+                  icon={Activity} 
+                  color={livePnlHistory.length > 0 && livePnlHistory[livePnlHistory.length - 1].pnl >= 0 ? '#10b981' : '#f43f5e'} 
+                  value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`} 
+                  sub={`${positions?.active_positions?.length || 0} Posições em aberto`} 
+                />
+                <KpiCard title="ROI Global" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="Retorno Histórico (Real)" trend={roiNum} />
               </div>
 
-
-                <div className="content-grid">
-                  <div className="left-col">
-                    <div className="glass-panel">
-                      <div className="panel-header">
-                        <h3>Evolução do Portfólio (Trades Reais)</h3>
-                        <span className="muted-tag">Histórico de PnL</span>
-                      </div>
-                      <SimplePortfolio capital={positions.capital} closed_positions={positions.closed_positions} />
-                    </div>
-
-                    <div className="glass-panel">
-                      <div className="panel-header">
-                        <h3>Posições Abertas (MTM)</h3>
-                        <span className="muted-tag">Clique para ver o gráfico</span>
-                      </div>
-                      <div className="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Ativo</th><th>Lado</th><th>Entrada</th>
-                              <th>MTM / Progresso</th><th>Alvo</th><th>Stop</th>
-                              <th>PnL</th><th></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {!(positions.active_positions && positions.active_positions.length > 0) ? (
-                              <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta — capital protegido</td></tr>
-                            ) : (
-                              positions.active_positions.map((p, i) => (
-                                <PositionRow key={i} pos={p} onClick={() => { setSelectedTrade(p); }} onClose={handleCloseTrade} />
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    {/* BOTTOM LEFT GRID */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '0.5rem' }}>
-                      {/* DOM WIDGET */}
-                      <div className="glass-panel">
-                        <div className="panel-header">
-                          <h3>Livro Visual de Ofertas (DOM)</h3>
-                          <button onClick={playDing} title="Testar Som de Gain" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '2px', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                            <Activity size={12} />
+              <div className="pro-trading-layout">
+                {/* COLUNA PRINCIPAL (ESQUERDA - 75%) */}
+                <div className="pro-main-col">
+                  {/* ÁREA GRÁFICA / VISÃO GLOBAL */}
+                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
+                    {selectedTrade ? (
+                      <>
+                        <div className="panel-header" style={{ flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <h3>Terminal Gráfico Avançado ({selectedTrade.ticker})</h3>
+                          <button 
+                            onClick={() => setSelectedTrade(null)}
+                            style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.3)', padding: '0.3rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                          >
+                            <Globe size={12} /> Voltar p/ Visão Global
                           </button>
                         </div>
-                        <div style={{ padding: '0.5rem' }}>
-                          <DepthOfMarket />
+                        <TradePerformanceStrip trade={selectedTrade} />
+                        <div style={{ flex: 1, width: '100%' }}>
+                          <iframe
+                            title="TradingView"
+                            src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE:${selectedTrade.ticker.replace('-', '')}&interval=15&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=f1f3f6&studies=%5B%5D&theme=dark&style=1&timezone=America%2FSao_Paulo&withdateranges=1&showpopupbutton=1&studies_overrides=%7B%7D`}
+                            width="100%"
+                            height="100%"
+                            frameBorder="0"
+                            allowFullScreen
+                          ></iframe>
                         </div>
-                      </div>
-
-                      {/* FAST EXECUTION WIDGET */}
-                      <div className="glass-panel">
-                        <div className="panel-header">
-                          <h3>Boleta Scalper Turbo</h3>
-                        </div>
-                        <div style={{ padding: '0.75rem' }}>
-                          <FastExecutionWidget />
-                        </div>
-                      </div>
-                    </div>
+                      </>
+                    ) : (
+                      <PortfolioOverviewDashboard positions={positions} patTotal={patTotal} saldoLivre={saldoLivre} />
+                    )}
                   </div>
 
-                  <div className="right-col">
-                    {/* LIVE STREAM WIDGET */}
-                    <div className="glass-panel" style={{ flexShrink: 0 }}>
-                      <div className="panel-header" style={{ padding: '0.5rem 0.75rem' }}>
-                        <h3><Globe size={14} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
-                        <span className="live-badge">● REC</span>
+                  {/* POSITIONS TABLE (RODAPÉ DA COLUNA PRINCIPAL) */}
+                  <div className="glass-panel pro-bottom-area" style={{ display: 'flex', flexDirection: 'column' }}>
+                    <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <h3 style={{ marginBottom: '4px' }}>Posições em Aberto</h3>
+                        <span className="muted-tag">Clique numa linha para vincular o gráfico ao ativo</span>
                       </div>
-                      <div style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}>
-                        <iframe 
-                          width="100%" 
-                          height="100%" 
-                          src="https://www.youtube.com/embed/live_stream?channel=UCXwZGs_2hH9AEvSExnQicZw&autoplay=1&mute=1" 
-                          title="Live de Mercado" 
-                          frameBorder="0" 
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                          allowFullScreen
-                          style={{ display: 'block' }}
-                        ></iframe>
+                      <div style={{ display: 'flex', gap: '0.5rem' }}>
+                        <button style={{ background: 'rgba(244,63,94,0.1)', color: '#f43f5e', border: '1px solid rgba(244,63,94,0.3)', padding: '0.3rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} title="Zerar todas as posições a mercado">
+                          <X size={12} /> Liquidar Portfólio
+                        </button>
                       </div>
                     </div>
-
-                    {/* NEWS WIDGET */}
-                    <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '200px' }}>
-                      <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', padding: '0.75rem', overflowY: 'auto', flex: 1 }}>
-                        {marketNews ? marketNews.map((n, i) => (
-                          <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.5rem' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem', fontSize: '0.7rem' }}>
-                              <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{n.category}</span>
-                              <span style={{ color: 'var(--text-muted)' }}>{n.time} • {n.source}</span>
-                            </div>
-                            <div style={{ fontSize: '0.8rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
-                          </div>
-                        )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Carregando radar de notícias...</div>}
-                      </div>
-                    </div>
-
-                    {/* BOTTOM RIGHT GRID */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                      {/* ECONOMIC CALENDAR WIDGET */}
-                      <div className="glass-panel">
-                        <div className="panel-header">
-                          <h3>Calendário Econômico</h3>
-                          <button onClick={playBeep} title="Testar Alerta" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '2px', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                            <Bell size={12} />
-                          </button>
-                        </div>
-                        <div style={{ padding: '0.5rem' }}>
-                          <EconomicCalendar />
-                        </div>
-                      </div>
-
-                      {/* HEATMAP WIDGET */}
-                      <div className="glass-panel">
-                        <div className="panel-header">
-                          <h3>Mapa de Calor (IBOV)</h3>
-                        </div>
-                        <div style={{ padding: '0.25rem' }}>
-                          <MarketHeatmap />
-                        </div>
-                      </div>
+                    <div className="table-wrap" style={{ flex: 1, overflowY: 'auto' }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Ativo</th><th>Lado</th><th>Entrada</th>
+                            <th>MTM / Progresso</th><th>Alvo</th><th>Stop</th>
+                            <th>PnL</th><th>Ação</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {!(positions.active_positions && positions.active_positions.length > 0) ? (
+                            <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta</td></tr>
+                          ) : (
+                            positions.active_positions.map((p, i) => (
+                              <PositionRow key={p.id || p.ticker} pos={p} onClick={() => { setSelectedTrade(p); }} onClose={handleCloseTrade} />
+                            ))
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 </div>
+
+                {/* COLUNA LATERAL (DIREITA - 25%) */}
+                <div className="pro-side-col">
+                  {/* LIVE PNL CHART */}
+                  {(positions?.active_positions?.length > 0 || livePnlHistory.length > 0) && (
+                    <LivePnlChart history={livePnlHistory} />
+                  )}
+
+                  {/* BOLETA E DOM */}
+                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
+                      <h3>Boleta Rápida (Scalper)</h3>
+                    </div>
+                    <div style={{ padding: '0.75rem' }}>
+                      <FastExecutionWidget 
+                        trade={selectedTrade} 
+                        saldoLivre={saldoLivre} 
+                        onExecute={handleExecuteTrade} 
+                      />
+                    </div>
+                  </div>
+
+                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
+                      <h3>Livro Visual (DOM)</h3>
+                    </div>
+                    <div style={{ padding: '0.5rem' }}><DepthOfMarket /></div>
+                  </div>
+
+                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
+                      <h3>Matriz de Risco</h3>
+                    </div>
+                    <div style={{ padding: '0.5rem' }}>
+                      <RiskMetricsPanel metrics={riskMetrics} />
+                    </div>
+                  </div>
+                </div>
+              </div>
                 
                 {/* ACADEMY WIDGET ROW */}
                 <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -997,15 +1354,15 @@ export default function App() {
                       // Syntax highlighting without dangerouslySetInnerHTML (Fixes XSS CodeQL Alert)
                       const parts = (log.msg || '').split(/\b(BUY|SELL|HOLD|PETR4\.SA|VALE3\.SA|ITUB4\.SA)\b/g);
                       const formattedMsg = parts.map((part, index) => {
-                        if (part === 'BUY') return <span key={index} style={{color:'#10b981', fontWeight:'bold'}}>BUY</span>;
-                        if (part === 'SELL') return <span key={index} style={{color:'#f43f5e', fontWeight:'bold'}}>SELL</span>;
-                        if (part === 'HOLD') return <span key={index} style={{color:'#f59e0b', fontWeight:'bold'}}>HOLD</span>;
-                        if (['PETR4.SA', 'VALE3.SA', 'ITUB4.SA'].includes(part)) return <span key={index} style={{color:'#00f3ff', textDecoration:'underline'}}>{part}</span>;
+                        if (part === 'BUY') return <span key={`part-${index}`} style={{color:'#10b981', fontWeight:'bold'}}>BUY</span>;
+                        if (part === 'SELL') return <span key={`part-${index}`} style={{color:'#f43f5e', fontWeight:'bold'}}>SELL</span>;
+                        if (part === 'HOLD') return <span key={`part-${index}`} style={{color:'#f59e0b', fontWeight:'bold'}}>HOLD</span>;
+                        if (['PETR4.SA', 'VALE3.SA', 'ITUB4.SA'].includes(part)) return <span key={`part-${index}`} style={{color:'#00f3ff', textDecoration:'underline'}}>{part}</span>;
                         return part;
                       });
 
                       return (
-                        <div key={i} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', lineHeight: 1.5, animation: 'fadeIn 0.3s ease-out' }}>
+                        <div key={log.id || log.timestamp || i} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', lineHeight: 1.5, animation: 'fadeIn 0.3s ease-out' }}>
                           <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap', paddingTop: '0.1rem' }}>[{log.t}]</span>
                           <span style={{ 
                             color: badgeColor, background: bgBadge, padding: '0.1rem 0.5rem', borderRadius: '4px', border: `1px solid ${badgeColor}30`, 
@@ -1145,7 +1502,7 @@ export default function App() {
                     </thead>
                     <tbody>
                       {tradeJournal?.trades?.map((t, i) => (
-                        <tr key={i}>
+                        <tr key={t.id || t.exit_date || i}>
                           <td><span className="ticker-badge">{t.ticker}</span></td>
                           <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
                           <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
@@ -1245,7 +1602,7 @@ export default function App() {
                       <div 
                         key={mode.id}
                         onClick={() => {
-                          if (mode.id === 'real' && !confirm('ATENÇÃO: Você está mudando para conta REAL. Ordens irão para a B3. Continuar?')) return;
+                          if (mode.id === 'real' && !window.confirm('ATENÇÃO: Você está mudando para conta REAL. Ordens irão para a B3. Continuar?')) return;
                           setBrokerSettings({...brokerSettings, mode: mode.id});
                         }}
                         style={{ 
