@@ -8,8 +8,13 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DB_PATH = str(PROJECT_ROOT / "data" / "trading_bot.db")
 
 
+def get_connection(isolation_level=None):
+    conn = sqlite3.connect(DB_PATH, isolation_level=isolation_level)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     try:
         cursor = conn.cursor()
 
@@ -87,7 +92,7 @@ def init_db():
 
 
 def get_portfolio() -> Dict[str, Any]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
@@ -114,7 +119,7 @@ def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
     if valor <= 0:
         return {"ok": False, "error": "Valor deve ser positivo."}
 
-    conn = sqlite3.connect(DB_PATH, isolation_level="IMMEDIATE")
+    conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -150,7 +155,7 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
     if valor <= 0:
         return {"ok": False, "error": "Valor deve ser positivo."}
 
-    conn = sqlite3.connect(DB_PATH, isolation_level="IMMEDIATE")
+    conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -184,7 +189,7 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
 
 
 def get_trades() -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
@@ -195,7 +200,7 @@ def get_trades() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 def get_active_trades() -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
@@ -206,7 +211,7 @@ def get_active_trades() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 def get_closed_trades() -> List[Dict[str, Any]]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
@@ -217,7 +222,7 @@ def get_closed_trades() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 def get_trade_by_id(trade_id: int) -> Dict[str, Any]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
@@ -227,7 +232,7 @@ def get_trade_by_id(trade_id: int) -> Dict[str, Any]:
         conn.close()
     return dict(row) if row else None
 def get_risk_metrics() -> Dict[str, float]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT pnl_pct FROM trades WHERE status = 'closed'")

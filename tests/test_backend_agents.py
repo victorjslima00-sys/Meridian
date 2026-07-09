@@ -159,7 +159,15 @@ class TestRiskManager:
     def test_approves_trade_with_sufficient_capital(self):
         from backend.app.agents.risk_manager import RiskManager
         result = RiskManager(saldo_livre=1000.0).evaluate_trade(
-            {"signal": "BUY", "last_price": 50000.0}, ticker="BTC-USD", open_tickers=[]
+            {
+                "signal": "BUY", 
+                "last_price": 50000.0,
+                "target_price": 55000.0,
+                "stop_loss": 48000.0,
+                "confidence": 70
+            }, 
+            ticker="BTC-USD", 
+            open_tickers=[]
         )
         assert result["approved"] is True
         assert result["allocated_capital"] > 0
@@ -210,7 +218,13 @@ class TestRiskManager:
     def test_allows_uncorrelated_asset_when_btc_open(self):
         from backend.app.agents.risk_manager import RiskManager
         result = RiskManager(saldo_livre=1000.0).evaluate_trade(
-            {"signal": "BUY", "last_price": 150.0},
+            {
+                "signal": "BUY", 
+                "last_price": 150.0,
+                "target_price": 160.0,
+                "stop_loss": 140.0,
+                "confidence": 70
+            },
             ticker="SOL-USD", open_tickers=["BTC-USD"]
         )
         assert result["approved"] is True
@@ -218,7 +232,13 @@ class TestRiskManager:
     def test_allows_eth_when_no_open_positions(self):
         from backend.app.agents.risk_manager import RiskManager
         result = RiskManager(saldo_livre=1000.0).evaluate_trade(
-            {"signal": "BUY", "last_price": 3000.0},
+            {
+                "signal": "BUY", 
+                "last_price": 3000.0,
+                "target_price": 3200.0,
+                "stop_loss": 2800.0,
+                "confidence": 70
+            },
             ticker="ETH-USD", open_tickers=[]
         )
         assert result["approved"] is True
@@ -270,7 +290,7 @@ class TestExecutorAgent:
 
             # Patch que usa a referência REAL ao sqlite3.connect (evita recursão)
             with patch("backend.app.agents.executor.sqlite3.connect",
-                       side_effect=lambda p: _real_connect(db_path)):
+                       side_effect=lambda p, **kwargs: _real_connect(db_path)):
                 executor = ExecutorAgent()
                 result = executor.execute_order(
                     ticker="BTC-USD",

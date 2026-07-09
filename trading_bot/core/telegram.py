@@ -5,9 +5,9 @@ import time
 logger = logging.getLogger(__name__)
 
 class TelegramNotifier:
-    def __init__(self, bot_token: str, chat_id: str):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
+    def __init__(self, token: str, chat_id: str):
+        self.bot_token = token
+        self.chat_id = str(chat_id)
         self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
 
     def send_message(self, text: str) -> bool:
@@ -83,8 +83,13 @@ class TelegramNotifier:
                         callback_data = callback_query.get("data")
                         callback_id = callback_query.get("id")
                         callback_message = callback_query.get("message", {})
+                        callback_user_id = str(callback_query.get("from", {}).get("id", ""))
 
                         if message_id and callback_message.get("message_id") == message_id:
+                            if callback_user_id != self.chat_id:
+                                logger.warning("Unauthorized user %s tried to approve trade", callback_user_id)
+                                continue
+                                
                             answer_url = f"{self.base_url}/answerCallbackQuery"
                             requests.post(answer_url, json={"callback_query_id": callback_id}, timeout=5)
 

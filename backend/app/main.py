@@ -66,7 +66,12 @@ async def ai_committee_worker():
     """
     Continuous loop that runs the AI Committee every 60 seconds.
     """
-    tickers_to_watch = ["BTC-USD", "ETH-USD", "SOL-USD"]
+    try:
+        from trading_bot.core.config import AppConfig
+        cfg = AppConfig.load()
+        tickers_to_watch = cfg.get("_universe", default=["PETR4.SA", "VALE3.SA", "ITUB4.SA"])
+    except Exception:
+        tickers_to_watch = ["PETR4.SA", "VALE3.SA"]
 
     while True:
         await asyncio.sleep(5)  # start 5s after boot
@@ -83,7 +88,8 @@ async def ai_committee_worker():
             current_price = df_recent.iloc[-1]["close"]
 
             # Database connection
-            conn = sqlite3.connect(DB_PATH)
+            from .data.database import get_connection
+            conn = get_connection()
             try:
                 cursor = conn.cursor()
 
@@ -228,7 +234,8 @@ async def ai_committee_worker():
                 saldo_livre = pf.get("saldo_livre", 0.0)
 
                 # Buscar todos os tickers com posição ativa para checar correlação
-                _conn = sqlite3.connect(DB_PATH)
+                from .data.database import get_connection
+                _conn = get_connection()
                 try:
                     open_tickers = [
                         row[0]
@@ -488,7 +495,7 @@ def system_emergency_stop(req: ActionRequest):
     
     import hmac
     if not hmac.compare_digest(req.password, EMERGENCY_PASSWORD):
-        return {"error": "Senha incorreta. Acesso negado."}
+        raise HTTPException(status_code=401, detail="Senha incorreta. Acesso negado.")
 
     try:
         from .data.database import get_active_trades
@@ -497,8 +504,15 @@ def system_emergency_stop(req: ActionRequest):
         executor = ExecutorAgent()
         for row in active_trades:
             trade_id = row["id"]
+            ticker = row["ticker"]
             entry_price = row["entry_price"]
-            executor.close_order(trade_id, entry_price, "EMERGENCY STOP")
+            
+            from .data.feed import get_current_price
+            current_price = get_current_price(ticker)
+            if current_price <= 0:
+                current_price = entry_price # fallback to entry if feed is down
+                
+            executor.close_order(trade_id, current_price, "EMERGENCY STOP")
         return {
             "status": "success",
             "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas.",

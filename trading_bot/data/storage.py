@@ -9,7 +9,6 @@ Cache inteligente: re-usa dados históricos e busca apenas o delta.
 import logging
 import sqlite3
 import json
-import redis
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -194,6 +193,7 @@ class RedisCacheL2:
     Camada L2 (Cache Distribuído) para comunicação entre containers.
     """
     def __init__(self, redis_url: str):
+        import redis
         self.client = redis.from_url(redis_url, decode_responses=True)
         
     def set_open_positions(self, positions: list):
