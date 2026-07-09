@@ -645,6 +645,7 @@ export default function App() {
         <nav className="sidebar-nav">
           {[
             { id: 'overview',   Icon: BarChart2,   label: 'Visão Geral' },
+            { id: 'ai',         Icon: Cpu,         label: 'Comitê de IA' },
             { id: 'risk',       Icon: ShieldAlert, label: 'Risk & Metrics' },
             { id: 'profile',    Icon: BookOpen,    label: 'Perfil' },
             { id: 'settings',   Icon: Settings,    label: 'Configurações' },
@@ -748,24 +749,7 @@ export default function App() {
                 <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${positions.capital.invested?.toFixed(2) || '105.00'} alocado`} />
               </div>
 
-              {/* INNER TABS */}
-              <div style={{ display: 'inline-flex', background: 'var(--bg-2)', padding: '0.35rem', borderRadius: '10px', marginBottom: '1.5rem', border: '1px solid var(--border)' }}>
-                <button 
-                  style={{ background: (homeTab === 'dashboard' || homeTab === 'portfolio') ? 'rgba(0, 243, 255, 0.1)' : 'transparent', color: (homeTab === 'dashboard' || homeTab === 'portfolio') ? '#00f3ff' : 'var(--text-muted)', border: 'none', padding: '0.6rem 1.25rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
-                  onClick={() => setHomeTab('dashboard')}
-                >
-                  <BarChart2 size={16} /> Mercado & Portfólio
-                </button>
-                <button 
-                  style={{ background: homeTab === 'ai' ? 'rgba(16, 185, 129, 0.1)' : 'transparent', color: homeTab === 'ai' ? '#10b981' : 'var(--text-muted)', border: 'none', padding: '0.6rem 1.25rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
-                  onClick={() => setHomeTab('ai')}
-                >
-                  <Cpu size={16} /> Comitê de IA
-                </button>
-              </div>
 
-              {(homeTab === 'dashboard' || homeTab === 'portfolio') && (
-                <React.Fragment>
                 <div className="content-grid">
                   <div className="left-col">
                     <div className="glass-panel">
@@ -903,23 +887,31 @@ export default function App() {
                   </div>
                   <AcademyWidget />
                 </div>
-              </React.Fragment>
-              )}
+              </div>
+            )}
 
-              {homeTab === 'ai' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                  <div className="glass-panel">
-                    <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                      <h3><BrainCircuit size={16} /> Workflow Lógico do Agente</h3>
-                      <span className="muted-tag">Estrutura Node-Based do Raciocínio (Langflow)</span>
-                    </div>
-                    <div style={{ padding: '1rem' }}>
-                      <AIFlow />
-                    </div>
-                  </div>
-                  <AIEcosystemDashboard />
+          {/* AI COMMITTEE */}
+          {tab === 'ai' && (
+            <div className="page-section">
+              <div className="page-title">
+                <Cpu size={22} />
+                <div>
+                  <h2>Comitê de IA Operacional</h2>
+                  <p>Gestão e supervisão do ecossistema de agentes</p>
                 </div>
-              )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                <div className="glass-panel">
+                  <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <h3><BrainCircuit size={16} /> Workflow Lógico do Agente</h3>
+                    <span className="muted-tag">Estrutura Node-Based do Raciocínio (Langflow)</span>
+                  </div>
+                  <div style={{ padding: '1rem' }}>
+                    <AIFlow />
+                  </div>
+                </div>
+                <AIEcosystemDashboard />
+              </div>
             </div>
           )}
 
