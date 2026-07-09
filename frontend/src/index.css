@@ -828,6 +828,98 @@ td {
 .run-btn:hover { background: rgba(0,243,255,0.15); }
 
 /* ═══════════════════════════════════════════════════════
+   COPILOT WIDGET
+═══════════════════════════════════════════════════════ */
+.copilot-fab {
+  position: absolute;
+  bottom: 24px; right: 24px;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: none;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(230, 0, 0, 0.4);
+  z-index: 100;
+  transition: transform 0.2s, background 0.2s;
+}
+.copilot-fab:hover {
+  transform: scale(1.05);
+  background: #ff1a1a;
+}
+
+.copilot-window {
+  position: absolute;
+  bottom: 90px; right: 24px;
+  width: 340px; height: 480px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.8);
+  display: flex; flex-direction: column;
+  z-index: 99;
+  overflow: hidden;
+  animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.copilot-header {
+  padding: 1rem;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+
+.copilot-body {
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 1rem;
+}
+
+.copilot-msg {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  max-width: 85%;
+}
+.copilot-msg.ai {
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 0;
+  align-self: flex-start;
+}
+
+.copilot-footer {
+  padding: 0.75rem;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 0.5rem;
+  background: var(--bg-3);
+}
+
+.copilot-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 0.5rem 1rem;
+  color: #fff;
+  font-size: 0.85rem;
+  outline: none;
+}
+.copilot-input:focus { border-color: var(--primary); }
+
+.copilot-send {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: none;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+
+/* ═══════════════════════════════════════════════════════
    RESPONSIVE
 ═══════════════════════════════════════════════════════ */
 @media (max-width: 1100px) {

@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Bell, Settings, RefreshCw,
   DollarSign, Percent, BookOpen, History,
-  Key, ToggleLeft, ToggleRight, Users, Menu
+  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send
 } from 'lucide-react';
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
@@ -273,6 +273,7 @@ const AgentOfficeView = () => {
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [copilotOpen, setCopilotOpen] = useState(false);
   const [tab, setTab] = useState('overview');
   const [homeTab, setHomeTab] = useState('portfolio');
   const [status, setStatus] = useState(null);
@@ -961,6 +962,35 @@ export default function App() {
               <button className="btn-cancel" onClick={() => { setShowEmergency(false); setPassword(''); }}>Cancelar</button>
               <button className="btn-danger" onClick={doEmergencyStop}>🔴 Confirmar</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── COPILOT WIDGET ── */}
+      <button 
+        className="copilot-fab"
+        onClick={() => setCopilotOpen(!copilotOpen)}
+      >
+        {copilotOpen ? <X size={24} color="#fff" /> : <Bot size={24} color="#fff" />}
+      </button>
+
+      {copilotOpen && (
+        <div className="copilot-window">
+          <div className="copilot-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Bot size={18} color="var(--primary)" />
+              <span style={{ fontWeight: 'bold' }}>Meridian Copilot</span>
+            </div>
+            <button onClick={() => setCopilotOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
+              <X size={16} />
+            </button>
+          </div>
+          <div className="copilot-body">
+            <div className="copilot-msg ai">Olá! Sou o Assistente da Meridian. Posso ajudar a analisar seu portfólio, explicar métricas de risco ou consultar o comitê de agentes por você. Como posso ajudar?</div>
+          </div>
+          <div className="copilot-footer">
+            <input type="text" placeholder="Pergunte ao Copilot..." className="copilot-input" />
+            <button className="copilot-send"><Send size={16} color="#fff" /></button>
           </div>
         </div>
       )}
