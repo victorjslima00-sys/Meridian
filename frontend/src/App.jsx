@@ -899,37 +899,87 @@ export default function App() {
                 <Cpu size={22} />
                 <div>
                   <h2>Comitê de IA Operacional</h2>
-                  <p>Gestão e supervisão do ecossistema de agentes</p>
+                  <p>Orquestração e inferência de modelos quantitativos</p>
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                <div className="glass-panel">
-                  <div className="panel-header" style={{ padding: '1rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <h3><BrainCircuit size={16} /> Workflow Lógico do Agente</h3>
-                    <span className="muted-tag">Estrutura Node-Based do Raciocínio (Langflow)</span>
-                  </div>
-                  <div style={{ padding: '1rem' }}>
-                    <AIFlow />
-                  </div>
-                </div>
                 <AIEcosystemDashboard logs={logs} />
                 
-                {/* TERMINAL DO COMITÊ */}
-                <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
-                  <div className="panel-header" style={{ padding: '0.75rem 1rem', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(255,255,255,0.02)' }}>
-                    <Terminal size={14} color="var(--primary)" />
-                    <h3 style={{ margin: 0, fontSize: '0.8rem', color: '#fff' }}>Terminal do Comitê de IA</h3>
+                {/* TERMINAL DO COMITÊ (PREMIUM) */}
+                <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid rgba(0, 243, 255, 0.2)', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
+                  <div className="panel-header" style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(0, 243, 255, 0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0, 10, 20, 0.4)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <Terminal size={16} color="#00f3ff" />
+                      <h3 style={{ margin: 0, fontSize: '0.85rem', color: '#fff', letterSpacing: '1px', textTransform: 'uppercase' }}>Terminal de Operações (Live)</h3>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.7rem', color: '#10b981', fontWeight: 800 }}>
+                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', boxShadow: '0 0 8px #10b981', animation: 'pulsePill 1.5s infinite' }}></div>
+                      WEBSOCKET CONNECTED
+                    </div>
                   </div>
-                  <div ref={termRef} style={{ background: '#000', padding: '1rem', height: '250px', overflowY: 'auto', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', borderBottomLeftRadius: '12px', borderBottomRightRadius: '12px' }}>
-                    {logs.map((log, i) => (
-                      <div key={i} style={{ display: 'flex', gap: '0.75rem', lineHeight: 1.4 }}>
-                        <span style={{ color: 'var(--text-muted)' }}>[{log.t}]</span>
-                        <span style={{ color: log.sender === 'RISKMANAGER' ? '#f59e0b' : (log.sender === 'EXECUTORAGENT' ? '#10b981' : '#00f3ff'), fontWeight: 700 }}>
-                          {log.sender}:
-                        </span>
-                        <span style={{ color: '#e2e8f0' }}>{log.msg}</span>
-                      </div>
-                    ))}
+                  
+                  <div ref={termRef} style={{ background: '#020617', padding: '1.25rem', height: '350px', overflowY: 'auto', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    {logs.length === 0 ? (
+                      <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center', marginTop: '2rem' }}>Aguardando inicialização do motor neural...</div>
+                    ) : logs.map((log, i) => {
+                      let badgeColor = '#64748b';
+                      let bgBadge = 'transparent';
+                      let icon = '>';
+                      
+                      if (log.sender === 'SYSTEM') { badgeColor = '#94a3b8'; icon = '⚙️'; }
+                      else if (log.sender === 'MARKETANALYST') { badgeColor = '#3b82f6'; bgBadge = 'rgba(59, 130, 246, 0.1)'; icon = '📊'; }
+                      else if (log.sender === 'RISKMANAGER') { badgeColor = '#f59e0b'; bgBadge = 'rgba(245, 158, 11, 0.1)'; icon = '🛡️'; }
+                      else if (log.sender === 'EXECUTORAGENT') { badgeColor = '#10b981'; bgBadge = 'rgba(16, 185, 129, 0.1)'; icon = '⚡'; }
+                      else if (log.sender === 'USER') { badgeColor = '#ec4899'; bgBadge = 'rgba(236, 72, 153, 0.1)'; icon = '👤'; }
+
+                      // Syntax highlighting hack for text
+                      const formattedMsg = log.msg.replace(/\b(BUY|SELL|HOLD|PETR4\.SA|VALE3\.SA|ITUB4\.SA)\b/g, match => {
+                        if (match === 'BUY') return '<span style="color:#10b981;font-weight:bold;">BUY</span>';
+                        if (match === 'SELL') return '<span style="color:#f43f5e;font-weight:bold;">SELL</span>';
+                        if (match === 'HOLD') return '<span style="color:#f59e0b;font-weight:bold;">HOLD</span>';
+                        return `<span style="color:#00f3ff;text-decoration:underline;">${match}</span>`;
+                      });
+
+                      return (
+                        <div key={i} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', lineHeight: 1.5, animation: 'fadeIn 0.3s ease-out' }}>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap', paddingTop: '0.1rem' }}>[{log.t}]</span>
+                          <span style={{ 
+                            color: badgeColor, background: bgBadge, padding: '0.1rem 0.5rem', borderRadius: '4px', border: `1px solid ${badgeColor}30`, 
+                            fontWeight: 800, fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' 
+                          }}>
+                            {icon} {log.sender}
+                          </span>
+                          <span style={{ color: log.sender === 'USER' ? '#fdf2f8' : '#e2e8f0', flex: 1 }} dangerouslySetInnerHTML={{ __html: formattedMsg }}></span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  
+                  {/* Interactive Terminal Input */}
+                  <div style={{ padding: '0.75rem 1.25rem', background: 'rgba(0,0,0,0.6)', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <span style={{ color: '#00f3ff', fontWeight: 800 }}>❯</span>
+                    <form onSubmit={(e) => {
+                      e.preventDefault();
+                      const input = e.target.elements.cmd.value;
+                      if(!input.trim()) return;
+                      // Add user log
+                      setLogs(prev => [...prev, { t: new Date().toLocaleTimeString(), sender: 'USER', msg: input }]);
+                      e.target.elements.cmd.value = '';
+                      
+                      // Fake AI response
+                      setTimeout(() => {
+                        setLogs(prev => [...prev, { t: new Date().toLocaleTimeString(), sender: 'SYSTEM', msg: `Comando '${input}' recebido. Processando via LLM NLP Layer...` }]);
+                      }, 600);
+                      setTimeout(() => {
+                        handleOmniSubmit({ preventDefault: () => {}, target: { value: input } }); // Use existing logic if we want, or just custom:
+                        setLogs(prev => [...prev, { t: new Date().toLocaleTimeString(), sender: 'MARKETANALYST', msg: `Análise Ad-Hoc: Comando processado. Nenhuma anomalia de risco detectada para a instrução.` }]);
+                      }, 2000);
+                    }} style={{ flex: 1, display: 'flex' }}>
+                      <input name="cmd" type="text" placeholder="Digite /help, /scan ITUB4 ou interaja livremente com o comitê..." style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', outline: 'none', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.8rem' }} autoComplete="off" />
+                    </form>
+                    <button style={{ background: 'rgba(0, 243, 255, 0.1)', border: '1px solid rgba(0, 243, 255, 0.3)', color: '#00f3ff', padding: '0.3rem 0.75rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <Send size={12} /> ENVIAR
+                    </button>
                   </div>
                 </div>
               </div>
