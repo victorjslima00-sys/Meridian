@@ -6,7 +6,7 @@ import {
   Wifi, WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Bell, Settings, RefreshCw,
   DollarSign, Percent, BookOpen, History,
-  Key, ToggleLeft, ToggleRight, Users
+  Key, ToggleLeft, ToggleRight, Users, Menu
 } from 'lucide-react';
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
@@ -272,6 +272,7 @@ const AgentOfficeView = () => {
 
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [tab, setTab] = useState('overview');
   const [homeTab, setHomeTab] = useState('portfolio');
   const [status, setStatus] = useState(null);
@@ -419,8 +420,11 @@ export default function App() {
 
   return (
     <div className="shell">
+      {/* ── SIDEBAR OVERLAY ── */}
+      <div className={`sidebar-overlay ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} />
+      
       {/* ── SIDEBAR ── */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
           <Activity size={22} color="#00f3ff" />
           <span>MERIDIAN</span>
@@ -453,7 +457,13 @@ export default function App() {
       <main className="main-area">
         {/* ── TOPBAR ── */}
         <header className="topbar">
-          <div style={{ padding: '0 1rem', display: 'flex', alignItems: 'center' }}>
+          <div style={{ padding: '0 1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <button 
+              onClick={() => setSidebarOpen(true)} 
+              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+            >
+              <Menu size={20} />
+            </button>
             {brokerSettings.mode === 'real' ? (
               <span style={{ background: 'rgba(244,63,94,0.15)', color: '#f43f5e', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 'bold', border: '1px solid rgba(244,63,94,0.3)' }}>
                 🔴 CONTA REAL
@@ -521,93 +531,89 @@ export default function App() {
               {/* INNER TABS */}
               <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.25rem' }}>
                 <button 
-                  style={{ background: 'none', border: 'none', color: homeTab === 'portfolio' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'portfolio' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
-                  onClick={() => setHomeTab('portfolio')}
-                >Portfólio & Posições</button>
-                <button 
-                  style={{ background: 'none', border: 'none', color: homeTab === 'market' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'market' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
-                  onClick={() => setHomeTab('market')}
-                >Mercado & Notícias</button>
+                  style={{ background: 'none', border: 'none', color: (homeTab === 'dashboard' || homeTab === 'portfolio') ? '#fff' : 'var(--text-muted)', borderBottom: (homeTab === 'dashboard' || homeTab === 'portfolio') ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
+                  onClick={() => setHomeTab('dashboard')}
+                >Dashboard (Mercado & Portfólio)</button>
                 <button 
                   style={{ background: 'none', border: 'none', color: homeTab === 'ai' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'ai' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
                   onClick={() => setHomeTab('ai')}
                 >Comitê de IA</button>
               </div>
 
-              {homeTab === 'portfolio' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.25rem' }}>
-                  <div className="glass-panel">
-                    <div className="panel-header">
-                      <h3>Evolução do Portfólio</h3>
-                      <span className="muted-tag">30 dias · BRL</span>
+              {(homeTab === 'dashboard' || homeTab === 'portfolio') && (
+                <div className="content-grid">
+                  <div className="left-col">
+                    <div className="glass-panel">
+                      <div className="panel-header">
+                        <h3>Evolução do Portfólio</h3>
+                        <span className="muted-tag">30 dias · BRL</span>
+                      </div>
+                      <SimplePortfolio capital={positions.capital} />
                     </div>
-                    <SimplePortfolio capital={positions.capital} />
-                  </div>
 
-                  <div className="glass-panel">
-                    <div className="panel-header">
-                      <h3>Posições Abertas (MTM)</h3>
-                      <span className="muted-tag">Clique para ver o gráfico</span>
-                    </div>
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Ativo</th><th>Lado</th><th>Entrada</th>
-                            <th>MTM / Progresso</th><th>Alvo</th><th>Stop</th>
-                            <th>PnL</th><th></th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {positions.active_positions.length === 0 ? (
-                            <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta — capital protegido</td></tr>
-                          ) : (
-                            positions.active_positions.map((p, i) => (
-                              <PositionRow key={i} pos={p} onClick={() => { setChartModal(p.ticker); setCandleData(null); }} />
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {homeTab === 'market' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
-                  {/* LIVE STREAM WIDGET */}
-                  <div className="glass-panel">
-                    <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
-                      <h3><Globe size={16} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
-                      <span className="live-badge">● REC</span>
-                    </div>
-                    <div style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}>
-                      <iframe 
-                        width="100%" 
-                        height="100%" 
-                        src="https://www.youtube.com/embed/live_stream?channel=UCXwZGs_2hH9AEvSExnQicZw&autoplay=1&mute=1" 
-                        title="Live de Mercado" 
-                        frameBorder="0" 
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                        allowFullScreen
-                        style={{ display: 'block' }}
-                      ></iframe>
+                    <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                      <div className="panel-header">
+                        <h3>Posições Abertas (MTM)</h3>
+                        <span className="muted-tag">Clique para ver o gráfico</span>
+                      </div>
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Ativo</th><th>Lado</th><th>Entrada</th>
+                              <th>MTM / Progresso</th><th>Alvo</th><th>Stop</th>
+                              <th>PnL</th><th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {positions.active_positions.length === 0 ? (
+                              <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta — capital protegido</td></tr>
+                            ) : (
+                              positions.active_positions.map((p, i) => (
+                                <PositionRow key={i} pos={p} onClick={() => { setChartModal(p.ticker); setCandleData(null); }} />
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   </div>
 
-                  {/* NEWS WIDGET */}
-                  <div className="glass-panel" style={{ maxHeight: '600px', display: 'flex', flexDirection: 'column' }}>
-                    <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', flex: 1 }}>
-                      {marketNews ? marketNews.map((n, i) => (
-                        <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
-                            <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{n.category}</span>
-                            <span style={{ color: 'var(--text-muted)' }}>{n.time} • {n.source}</span>
+                  <div className="right-col">
+                    {/* LIVE STREAM WIDGET */}
+                    <div className="glass-panel" style={{ flexShrink: 0 }}>
+                      <div className="panel-header" style={{ padding: '0.75rem 1rem' }}>
+                        <h3><Globe size={16} color="var(--primary)" /> TV Mercado Ao Vivo</h3>
+                        <span className="live-badge">● REC</span>
+                      </div>
+                      <div style={{ width: '100%', aspectRatio: '16/9', background: '#000' }}>
+                        <iframe 
+                          width="100%" 
+                          height="100%" 
+                          src="https://www.youtube.com/embed/live_stream?channel=UCXwZGs_2hH9AEvSExnQicZw&autoplay=1&mute=1" 
+                          title="Live de Mercado" 
+                          frameBorder="0" 
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                          allowFullScreen
+                          style={{ display: 'block' }}
+                        ></iframe>
+                      </div>
+                    </div>
+
+                    {/* NEWS WIDGET */}
+                    <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                      <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem', overflowY: 'auto', maxHeight: '400px' }}>
+                        {marketNews ? marketNews.map((n, i) => (
+                          <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
+                              <span style={{ color: 'var(--primary)', fontWeight: 600 }}>{n.category}</span>
+                              <span style={{ color: 'var(--text-muted)' }}>{n.time} • {n.source}</span>
+                            </div>
+                            <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
                           </div>
-                          <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: 'var(--text)' }}>{n.title}</div>
-                        </div>
-                      )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
+                        )) : <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
+                      </div>
                     </div>
                   </div>
                 </div>
