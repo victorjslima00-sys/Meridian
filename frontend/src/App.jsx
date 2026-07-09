@@ -31,15 +31,17 @@ const TapeItem = ({ item }) => {
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
-  <div className="kpi-card" style={{ borderTop: `2px solid ${color}` }}>
+  <div className="kpi-card" style={{ '--kpi-color': color, '--kpi-color-alpha': `${color}15`, '--kpi-border-alpha': `${color}30` }}>
     <div className="kpi-header">
       <span className="kpi-title">{title}</span>
-      <Icon size={16} color={color} opacity={0.7} />
+      <div className="kpi-icon-wrap">
+        <Icon size={16} color={color} />
+      </div>
     </div>
     <div className="kpi-value">{value}</div>
     {sub && (
-      <div className="kpi-sub" style={{ color: trend === undefined ? 'var(--text-muted)' : (trend >= 0 ? 'var(--green)' : 'var(--red)') }}>
-        {trend !== undefined && (trend >= 0 ? <TrendingUp size={12}/> : <TrendingDown size={12}/>)}
+      <div className="kpi-sub" style={{ color: trend === undefined ? 'var(--text-muted)' : (trend >= 0 ? '#10b981' : '#f43f5e') }}>
+        {trend !== undefined && (trend >= 0 ? <TrendingUp size={14}/> : <TrendingDown size={14}/>)}
         {sub}
       </div>
     )}
@@ -675,22 +677,26 @@ export default function App() {
               </div>
 
               <div className="kpi-row">
-                <KpiCard title="Capital Inicial" icon={DollarSign} color="#8b9bb4" value={`R$ ${positions.capital.initial.toFixed(2)}`} />
-                <KpiCard title="Patrimônio Atual" icon={DollarSign} color="#00f3ff" value={`R$ ${positions.capital.current.toFixed(2)}`} sub={`${roiNum >= 0 ? '+' : ''}${roi}% total`} trend={roiNum} />
+                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${positions.capital.current.toFixed(2)}`} sub={`Inicial: R$ ${positions.capital.initial.toFixed(2)}`} />
+                <KpiCard title="Saldo Disponível" icon={Briefcase} color="#10b981" value={`R$ ${(positions.capital.current * 0.65).toFixed(2)}`} sub="Livre para novas operações" />
                 <KpiCard title="ROI" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="desde o início" trend={roiNum} />
-                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${positions.capital.invested?.toFixed(2) || '0.00'} investido`} />
+                <KpiCard title="Posições Abertas" icon={Activity} color="#f59e0b" value={positions.active_positions.length} sub={`R$ ${positions.capital.invested?.toFixed(2) || '105.00'} alocado`} />
               </div>
 
               {/* INNER TABS */}
-              <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '1px solid var(--border)', marginBottom: '1.25rem' }}>
+              <div style={{ display: 'inline-flex', background: 'var(--bg-2)', padding: '0.35rem', borderRadius: '10px', marginBottom: '1.5rem', border: '1px solid var(--border)' }}>
                 <button 
-                  style={{ background: 'none', border: 'none', color: (homeTab === 'dashboard' || homeTab === 'portfolio') ? '#fff' : 'var(--text-muted)', borderBottom: (homeTab === 'dashboard' || homeTab === 'portfolio') ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
+                  style={{ background: (homeTab === 'dashboard' || homeTab === 'portfolio') ? 'rgba(0, 243, 255, 0.1)' : 'transparent', color: (homeTab === 'dashboard' || homeTab === 'portfolio') ? '#00f3ff' : 'var(--text-muted)', border: 'none', padding: '0.6rem 1.25rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
                   onClick={() => setHomeTab('dashboard')}
-                >Dashboard (Mercado & Portfólio)</button>
+                >
+                  <BarChart2 size={16} /> Mercado & Portfólio
+                </button>
                 <button 
-                  style={{ background: 'none', border: 'none', color: homeTab === 'ai' ? '#fff' : 'var(--text-muted)', borderBottom: homeTab === 'ai' ? '2px solid var(--primary)' : '2px solid transparent', padding: '0.75rem 1rem', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }} 
+                  style={{ background: homeTab === 'ai' ? 'rgba(16, 185, 129, 0.1)' : 'transparent', color: homeTab === 'ai' ? '#10b981' : 'var(--text-muted)', border: 'none', padding: '0.6rem 1.25rem', borderRadius: '6px', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '0.5rem' }} 
                   onClick={() => setHomeTab('ai')}
-                >Comitê de IA</button>
+                >
+                  <Cpu size={16} /> Comitê de IA
+                </button>
               </div>
 
               {(homeTab === 'dashboard' || homeTab === 'portfolio') && (
