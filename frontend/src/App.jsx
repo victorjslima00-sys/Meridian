@@ -620,7 +620,9 @@ export default function App() {
                     <div className="glass-panel" style={{ marginTop: '1rem' }}>
                       <div className="panel-header">
                         <h3>Livro Visual de Ofertas (DOM)</h3>
-                        <button onClick={playDing} style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.2rem 0.5rem', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 600 }}>🔊 Testar Som de Gain</button>
+                        <button onClick={playDing} title="Testar Som de Gain" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                          <Activity size={14} />
+                        </button>
                       </div>
                       <div style={{ padding: '1rem' }}>
                         <DepthOfMarket />
@@ -665,12 +667,14 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem', marginTop: '1rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', marginTop: '1rem' }}>
                       {/* ECONOMIC CALENDAR WIDGET */}
                       <div className="glass-panel">
                         <div className="panel-header">
                           <h3>Calendário Econômico</h3>
-                          <button onClick={playBeep} style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', padding: '0.2rem 0.5rem', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 600 }}>🔊 Testar Alerta</button>
+                          <button onClick={playBeep} title="Testar Alerta" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '4px', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                            <Bell size={14} />
+                          </button>
                         </div>
                         <div style={{ padding: '1rem' }}>
                           <EconomicCalendar />

@@ -389,22 +389,22 @@ export const MarketRegimeBadge = ({ regime }) => {
 
 export const MarketHeatmap = () => {
   const blocks = [
-    { ticker: 'PETR4', w: '40%', h: '60%', c: '#10b981', perf: '+2.4%' },
-    { ticker: 'VALE3', w: '30%', h: '60%', c: '#f43f5e', perf: '-1.8%' },
-    { ticker: 'ITUB4', w: '30%', h: '60%', c: '#059669', perf: '+1.1%' },
-    { ticker: 'BBDC4', w: '25%', h: '40%', c: '#10b981', perf: '+3.2%' },
-    { ticker: 'BBAS3', w: '25%', h: '40%', c: '#e60000', perf: '-2.1%' },
-    { ticker: 'ELET3', w: '20%', h: '40%', c: '#34d399', perf: '+0.5%' },
-    { ticker: 'WEGE3', w: '15%', h: '40%', c: '#f43f5e', perf: '-0.9%' },
-    { ticker: 'RENT3', w: '15%', h: '40%', c: '#e60000', perf: '-3.4%' }
+    { ticker: 'PETR4', col: 'span 2', row: 'span 2', c: '#10b981', perf: '+2.4%' },
+    { ticker: 'VALE3', col: 'span 2', row: 'span 2', c: '#f43f5e', perf: '-1.8%' },
+    { ticker: 'ITUB4', col: 'span 1', row: 'span 2', c: '#059669', perf: '+1.1%' },
+    { ticker: 'BBDC4', col: 'span 1', row: 'span 1', c: '#10b981', perf: '+3.2%' },
+    { ticker: 'BBAS3', col: 'span 1', row: 'span 1', c: '#e60000', perf: '-2.1%' },
+    { ticker: 'ELET3', col: 'span 1', row: 'span 1', c: '#34d399', perf: '+0.5%' },
+    { ticker: 'WEGE3', col: 'span 1', row: 'span 1', c: '#f43f5e', perf: '-0.9%' },
+    { ticker: 'RENT3', col: 'span 1', row: 'span 1', c: '#e60000', perf: '-3.4%' }
   ];
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', width: '100%', height: '220px', gap: '2px', background: 'var(--bg-2)' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gridAutoRows: '70px', gap: '4px', width: '100%', background: 'var(--bg-2)' }}>
       {blocks.map((b, i) => (
-        <div key={i} style={{ width: `calc(${b.w} - 2px)`, height: `calc(${b.h} - 2px)`, background: b.c, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.8rem', fontWeight: 700, borderRadius: '4px', cursor: 'pointer', transition: 'filter 0.2s' }} onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.2)'} onMouseLeave={e => e.currentTarget.style.filter = 'none'}>
+        <div key={i} style={{ gridColumn: b.col, gridRow: b.row, background: b.c, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '0.75rem', fontWeight: 700, borderRadius: '4px', cursor: 'pointer', transition: 'filter 0.2s', overflow: 'hidden' }} onMouseEnter={e => e.currentTarget.style.filter = 'brightness(1.2)'} onMouseLeave={e => e.currentTarget.style.filter = 'none'}>
           <div>{b.ticker}</div>
-          <div style={{ fontSize: '0.7rem', opacity: 0.9 }}>{b.perf}</div>
+          <div style={{ fontSize: '0.65rem', opacity: 0.9 }}>{b.perf}</div>
         </div>
       ))}
     </div>
