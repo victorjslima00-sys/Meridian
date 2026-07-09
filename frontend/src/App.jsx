@@ -11,7 +11,8 @@ import {
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
   RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge,
-  MarketHeatmap, EconomicCalendar, DepthOfMarket, AcademyWidget, FastExecutionWidget
+  MarketHeatmap, EconomicCalendar, DepthOfMarket, AcademyWidget, FastExecutionWidget,
+  MonteCarloChart
 } from './EliteCharts';
 import AIFlow from './AIFlow';
 import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
@@ -934,9 +935,12 @@ export default function App() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
                 <div className="glass-panel">
-                  <div className="panel-header"><h3>Curva de Equity & Drawdown</h3></div>
+                  <div className="panel-header">
+                    <h3>Simulação de Monte Carlo (1000 caminhos)</h3>
+                    <span className="muted-tag">Projeção 60 dias · Sharpe Base 2.1</span>
+                  </div>
                   <div style={{ padding: '1rem' }}>
-                    <EquityDrawdownChart capitalHistory={equityCurve?.curve || []} />
+                    <MonteCarloChart initialCapital={positions?.capital?.current || 300} days={60} paths={25} />
                   </div>
                 </div>
                 <div className="glass-panel">

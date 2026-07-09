@@ -274,6 +274,49 @@ export const PositionSizingCalc = ({ capital }) => {
   );
 };
 
+export const MonteCarloChart = ({ initialCapital = 300, days = 60, paths = 20 }) => {
+  const [data, setData] = useState([]);
+  
+  // Initialize data once so it doesn't flicker on re-renders
+  React.useEffect(() => {
+    const simData = Array.from({ length: days }, (_, i) => {
+      const point = { day: `D${i}` };
+      let sum = 0;
+      for (let p = 0; p < paths; p++) {
+        // Random walk with drift based on Sharpe ~ 1.5
+        const prev = i === 0 ? initialCapital : simData[i-1][`path${p}`];
+        const drift = 0.001; // daily drift
+        const vol = 0.015; // daily vol
+        const shock = (Math.random() + Math.random() + Math.random() + Math.random() - 2) * 1.5; // approx normal dist
+        const step = prev * (1 + drift + vol * shock);
+        point[`path${p}`] = parseFloat(step.toFixed(2));
+        sum += step;
+      }
+      point.median = parseFloat((sum / paths).toFixed(2));
+      return point;
+    });
+    setData(simData);
+  }, [initialCapital, days, paths]);
+
+  if (!data.length) return <div style={{ color: '#8b9bb4' }}>Simulando caminhos...</div>;
+
+  return (
+    <ResponsiveContainer width="100%" height={260}>
+      <LineChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.03)" vertical={false} />
+        <XAxis dataKey="day" tick={{ fill: '#8b9bb4', fontSize: 9 }} tickLine={false} axisLine={false} interval={Math.floor(days/6)} />
+        <YAxis tick={{ fill: '#8b9bb4', fontSize: 9 }} tickLine={false} axisLine={false} tickFormatter={v => `R$${v.toFixed(0)}`} domain={['dataMin - 20', 'dataMax + 20']} />
+        
+        {Array.from({ length: paths }).map((_, p) => (
+          <Line key={p} type="monotone" dataKey={`path${p}`} stroke="#00f3ff" strokeWidth={1} dot={false} opacity={0.15} activeDot={false} isAnimationActive={false} />
+        ))}
+        
+        <Line type="monotone" dataKey="median" name="Trajetória Esperada (Mediana)" stroke="#10b981" strokeWidth={3} dot={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+};
+
 export const AlertBadge = ({ alerts }) => {
   const [open, setOpen] = useState(false);
   const count = alerts?.length || 0;
