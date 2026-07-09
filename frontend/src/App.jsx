@@ -11,7 +11,7 @@ import {
 import { 
   CandlestickChart, EquityDrawdownChart, CorrelationHeatmap, 
   RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge,
-  MarketHeatmap, EconomicCalendar, DepthOfMarket, AcademyWidget
+  MarketHeatmap, EconomicCalendar, DepthOfMarket, AcademyWidget, FastExecutionWidget
 } from './EliteCharts';
 import { TickerAreaChart as SimpleArea, PortfolioChart as SimplePortfolio } from './Charts';
 import './index.css';
@@ -617,16 +617,29 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* DOM WIDGET */}
-                    <div className="glass-panel">
-                      <div className="panel-header">
-                        <h3>Livro Visual de Ofertas (DOM)</h3>
-                        <button onClick={playDing} title="Testar Som de Gain" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '2px', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                          <Activity size={12} />
-                        </button>
+                    {/* BOTTOM LEFT GRID */}
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '0.5rem' }}>
+                      {/* DOM WIDGET */}
+                      <div className="glass-panel">
+                        <div className="panel-header">
+                          <h3>Livro Visual de Ofertas (DOM)</h3>
+                          <button onClick={playDing} title="Testar Som de Gain" style={{ background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '2px', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+                            <Activity size={12} />
+                          </button>
+                        </div>
+                        <div style={{ padding: '0.5rem' }}>
+                          <DepthOfMarket />
+                        </div>
                       </div>
-                      <div style={{ padding: '0.5rem' }}>
-                        <DepthOfMarket />
+
+                      {/* FAST EXECUTION WIDGET */}
+                      <div className="glass-panel">
+                        <div className="panel-header">
+                          <h3>Boleta Scalper Turbo</h3>
+                        </div>
+                        <div style={{ padding: '0.75rem' }}>
+                          <FastExecutionWidget />
+                        </div>
                       </div>
                     </div>
                   </div>

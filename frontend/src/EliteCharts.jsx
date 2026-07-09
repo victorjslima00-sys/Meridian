@@ -513,3 +513,28 @@ export const AcademyWidget = () => {
     </div>
   );
 };
+
+export const FastExecutionWidget = () => {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', width: '100%' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+        <button style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid var(--red)', color: 'var(--red)', padding: '0.75rem', borderRadius: '4px', fontWeight: 800, fontSize: '0.9rem', cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.background='var(--red)'; e.currentTarget.style.color='#fff'; }} onMouseLeave={e => { e.currentTarget.style.background='rgba(244,63,94,0.1)'; e.currentTarget.style.color='var(--red)'; }}>VENDER</button>
+        <button style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid var(--green)', color: 'var(--green)', padding: '0.75rem', borderRadius: '4px', fontWeight: 800, fontSize: '0.9rem', cursor: 'pointer', transition: 'all 0.2s' }} onMouseEnter={e => { e.currentTarget.style.background='var(--green)'; e.currentTarget.style.color='#fff'; }} onMouseLeave={e => { e.currentTarget.style.background='rgba(16,185,129,0.1)'; e.currentTarget.style.color='var(--green)'; }}>COMPRAR</button>
+      </div>
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '0.2rem', textTransform: 'uppercase', fontWeight: 700 }}>Quantidade</div>
+          <input type="number" defaultValue={100} step={100} style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: '#fff', padding: '0.5rem', borderRadius: '4px', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace' }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '0.2rem', textTransform: 'uppercase', fontWeight: 700 }}>Preço</div>
+          <input type="text" defaultValue="Mercado" style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: '#10b981', padding: '0.5rem', borderRadius: '4px', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace', textAlign: 'center', fontWeight: 700 }} readOnly />
+        </div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
+        <span>Poder de Compra: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ 45.200,00</strong></span>
+        <span>Margem: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ 0,00</strong></span>
+      </div>
+    </div>
+  );
+};
