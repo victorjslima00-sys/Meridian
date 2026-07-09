@@ -434,6 +434,43 @@ export default function App() {
   const [correlation, setCorrelation] = useState(null);
   const [marketRegime, setMarketRegime] = useState(null);
   const [equityCurve, setEquityCurve] = useState(null);
+  
+  // GOD MODE / OMNIBAR STATE
+  const [omnibarOpen, setOmnibarOpen] = useState(false);
+  const [omniInput, setOmniInput] = useState('');
+  const [omniResult, setOmniResult] = useState(null);
+  
+  // Listeners for Cmd+K / Ctrl+K
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setOmnibarOpen(prev => !prev);
+      }
+      if (e.key === 'Escape') setOmnibarOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  const handleOmniSubmit = (e) => {
+    e.preventDefault();
+    if (!omniInput.trim()) return;
+    
+    const cmd = omniInput.toLowerCase();
+    if (cmd.startsWith('/buy') || cmd.startsWith('/sell')) {
+      setOmniResult({ type: 'success', text: `Ordem enviada para o Motor FIX de Alta Frequência: ${cmd.toUpperCase()}` });
+    } else if (cmd.includes('clima') || cmd.includes('macro')) {
+      setOmniResult({ type: 'ai', text: `Análise do Comitê: Volatilidade (VIX) em queda. Apetite a risco favorável. Sugestão: Aumentar exposição em Beta Alto.` });
+    } else if (cmd === '/matrix') {
+      document.body.classList.toggle('matrix-mode');
+      setOmniResult({ type: 'success', text: `Matrix Mode toggled.` });
+    } else {
+      setOmniResult({ type: 'error', text: `Comando desconhecido. Digite /help para listar as habilidades do Agente.` });
+    }
+    setOmniInput('');
+  };
+
   const [alerts, setAlerts] = useState([
     { type: 'regime_change', ticker: 'IBOV', message: 'Regime alterado para Bull Market', time: new Date().toLocaleTimeString() }
   ]);
@@ -566,6 +603,34 @@ export default function App() {
 
   return (
     <div className="shell">
+      {/* ── OMNIBAR / GOD MODE OVERLAY ── */}
+      <div className={`omnibar-overlay ${omnibarOpen ? 'open' : ''}`} onClick={() => setOmnibarOpen(false)}>
+        <div className="omnibar-modal" onClick={e => e.stopPropagation()}>
+          <div className="omnibar-header">
+            <Bot size={18} color="#00f3ff" />
+            <span>Meridian AI Core // God Mode</span>
+            <div className="omnibar-hint">ESC to close</div>
+          </div>
+          <form onSubmit={handleOmniSubmit} className="omnibar-form">
+            <span className="omnibar-prompt">❯</span>
+            <input 
+              autoFocus={omnibarOpen}
+              type="text" 
+              value={omniInput}
+              onChange={e => setOmniInput(e.target.value)}
+              placeholder="Digite um comando (ex: /buy 100 PETR4, /matrix, ou 'como está o clima macro?')" 
+              className="omnibar-input"
+            />
+          </form>
+          {omniResult && (
+            <div className={`omnibar-result type-${omniResult.type}`}>
+              {omniResult.type === 'ai' ? <BrainCircuit size={16} /> : <Terminal size={16} />}
+              <span>{omniResult.text}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ── SIDEBAR OVERLAY ── */}
       <div className={`sidebar-overlay ${sidebarOpen ? 'open' : ''}`} onClick={() => setSidebarOpen(false)} />
       

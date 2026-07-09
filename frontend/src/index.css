@@ -942,6 +942,123 @@ td {
   cursor: pointer;
 }
 
+/* ─── OMNIBAR / GOD MODE ─── */
+.omnibar-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 15vh;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+.omnibar-overlay.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.omnibar-modal {
+  width: 100%;
+  max-width: 650px;
+  background: var(--bg-1);
+  border: 1px solid rgba(0, 243, 255, 0.2);
+  border-radius: 12px;
+  box-shadow: 0 0 40px rgba(0, 243, 255, 0.1);
+  overflow: hidden;
+  transform: translateY(-20px);
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.omnibar-overlay.open .omnibar-modal {
+  transform: translateY(0);
+}
+
+.omnibar-header {
+  padding: 0.75rem 1.25rem;
+  background: rgba(0, 243, 255, 0.05);
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #00f3ff;
+  letter-spacing: 0.5px;
+}
+.omnibar-hint {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.05);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+}
+
+.omnibar-form {
+  display: flex;
+  align-items: center;
+  padding: 1.25rem;
+  gap: 1rem;
+}
+.omnibar-prompt {
+  color: #00f3ff;
+  font-size: 1.5rem;
+  font-weight: 800;
+  animation: pulsePill 1.5s infinite;
+}
+.omnibar-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 1.25rem;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+}
+.omnibar-input::placeholder {
+  color: rgba(255,255,255,0.2);
+  font-size: 0.9rem;
+}
+
+.omnibar-result {
+  padding: 1rem 1.25rem;
+  background: rgba(0,0,0,0.5);
+  border-top: 1px solid rgba(255,255,255,0.05);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-muted);
+}
+.omnibar-result.type-success { color: #10b981; }
+.omnibar-result.type-error { color: #f43f5e; }
+.omnibar-result.type-ai { color: #8b5cf6; }
+
+/* ─── MATRIX MODE ─── */
+body.matrix-mode {
+  background: #000;
+  color: #0f0;
+}
+body.matrix-mode * {
+  border-color: rgba(0, 255, 0, 0.2) !important;
+  color: #0f0 !important;
+  text-shadow: 0 0 5px #0f0;
+  background-color: rgba(0,20,0,0.8) !important;
+}
+body.matrix-mode .glass-panel, body.matrix-mode .kpi-card {
+  background: rgba(0, 20, 0, 0.9) !important;
+  box-shadow: inset 0 0 20px rgba(0, 255, 0, 0.1);
+}
+body.matrix-mode button {
+  background: rgba(0, 255, 0, 0.1) !important;
+}
+
 /* ═══════════════════════════════════════════════════════
    RESPONSIVE
 ═══════════════════════════════════════════════════════ */
