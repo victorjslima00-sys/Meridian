@@ -38,7 +38,9 @@ async def ai_committee_worker():
     
     while True:
         await asyncio.sleep(5) # start 5s after boot
+        print("Starting AI committee scan loop...", flush=True)
         for ticker in tickers_to_watch:
+            print(f"Scanning {ticker}...", flush=True)
             await broadcast_log("System", f"Scanning {ticker}...", "info")
             await asyncio.sleep(2)
             
@@ -52,7 +54,7 @@ async def ai_committee_worker():
             if analysis['signal'] != "HOLD":
                 await broadcast_log("RiskManager", f"Evaluating {analysis['signal']} on {ticker}...", "warning")
                 pf = get_portfolio()
-                rm = RiskManager(current_capital=pf['current'])
+                rm = RiskManager(current_capital=pf.get('current_capital', 10000.0))
                 decision = rm.evaluate_trade(analysis)
                 await asyncio.sleep(2)
                 

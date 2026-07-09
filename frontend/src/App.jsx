@@ -305,14 +305,21 @@ const playBeep = () => {
 };
 
 // ─── AI ECOSYSTEM DASHBOARD ───────────────────────────────────────────────────
-const AIEcosystemDashboard = () => {
+const AIEcosystemDashboard = ({ logs }) => {
+  // Extract latest task for each agent based on recent logs
+  const getLatestTask = (agentId, defaultTask) => {
+    if (!logs) return defaultTask;
+    const recentLog = [...logs].reverse().find(l => l.sender === agentId.toUpperCase());
+    return recentLog ? recentLog.msg : defaultTask;
+  };
+
   const departments = [
     {
       name: "Alocação & Wealth (24/7)",
       icon: "🌍",
       agents: [
         { name: "O Criador", role: "Alpha Seeker", status: "ONLINE 24/7", cpu: 85, ram: 92, task: "Analisando liquidez em Crypto (BTC/ETH) e FIIs para balanceamento de carteira de longo prazo." },
-        { name: "Guardião", role: "Risk Manager", status: "ONLINE 24/7", cpu: 30, ram: 45, task: "Calculando Drawdown e ajustando Position Sizing via Kelly Criterion." }
+        { name: "Guardião", role: "Risk Manager", status: "ONLINE 24/7", cpu: 30, ram: 45, task: getLatestTask('RiskManager', "Calculando Drawdown e ajustando Position Sizing via Kelly Criterion.") }
       ]
     },
     {
@@ -336,15 +343,15 @@ const AIEcosystemDashboard = () => {
       icon: "📰",
       agents: [
         { name: "Radar Global", role: "News Aggregator", status: "ONLINE", cpu: 22, ram: 30, task: "Acompanhando discursos do Fed e dados do IPCA-15 em tempo real." },
-        { name: "Analista", role: "NLP Sentiment", status: "PROCESSING", cpu: 75, ram: 60, task: "Classificando impacto das notícias corporativas da VALE3 e PETR4." }
+        { name: "Analista", role: "NLP Sentiment", status: "PROCESSING", cpu: 75, ram: 60, task: getLatestTask('MarketAnalyst', "Classificando impacto das notícias corporativas da VALE3 e PETR4.") }
       ]
     },
     {
       name: "Supervisão & Compliance",
       icon: "👁️",
       agents: [
-        { name: "Overlord", role: "Supervisor Principal", status: "ONLINE 24/7", cpu: 15, ram: 25, task: "Auditando as saídas de todos os agentes. Nenhuma anomalia detectada." },
-        { name: "X-Ray", role: "Auditor de Execução", status: "SLEEP", cpu: 0, ram: 5, task: "Aguardando próxima janela de execução de ordens." }
+        { name: "Overlord", role: "Supervisor Principal", status: "ONLINE 24/7", cpu: 15, ram: 25, task: getLatestTask('System', "Auditando as saídas de todos os agentes. Nenhuma anomalia detectada.") },
+        { name: "X-Ray", role: "Auditor de Execução", status: "SLEEP", cpu: 0, ram: 5, task: getLatestTask('ExecutorAgent', "Aguardando próxima janela de execução de ordens.") }
       ]
     }
   ];
@@ -404,7 +411,7 @@ const AIEcosystemDashboard = () => {
                   
                   <div style={{ background: '#000', padding: '0.6rem 0.75rem', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '0.7rem', fontFamily: 'JetBrains Mono, monospace', color: 'var(--text-muted)', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     <span style={{ color: '#00f3ff', animation: 'pulsePill 1.5s infinite' }}>❯</span>
-                    <span style={{ lineHeight: 1.4 }}>{agent.task}</span>
+                    <span style={{ lineHeight: 1.4, color: agent.task !== "Aguardando próxima janela de execução de ordens." && agent.task !== "Calculando Drawdown e ajustando Position Sizing via Kelly Criterion." && !agent.task.startsWith("Classificando") && !agent.task.startsWith("Auditando") ? '#10b981' : 'var(--text-muted)' }}>{agent.task}</span>
                   </div>
                 </div>
               ))}
@@ -905,7 +912,7 @@ export default function App() {
                     <AIFlow />
                   </div>
                 </div>
-                <AIEcosystemDashboard />
+                <AIEcosystemDashboard logs={logs} />
                 
                 {/* TERMINAL DO COMITÊ */}
                 <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
