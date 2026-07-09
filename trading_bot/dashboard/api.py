@@ -234,6 +234,10 @@ def node_action(node_id: str, req: ActionRequest):
     
     return {"status": "error", "msg": "Ação desconhecida."}
 
+from trading_bot.dashboard.api_elite import router as elite_router
+app.include_router(elite_router)
+
+
 @app.get("/api/history/{ticker}")
 def get_ticker_history(ticker: str, limit: int = 60):
     """

@@ -8,6 +8,10 @@ import {
   DollarSign, Percent, BookOpen, History
 } from 'lucide-react';
 import { TickerAreaChart, SparkLine, PortfolioChart } from './Charts';
+import {
+  CandlestickChart, EquityDrawdownChart, CorrelationHeatmap,
+  RiskMetricsPanel, PositionSizingCalc, AlertBadge, MarketRegimeBadge
+} from './EliteCharts';
 import './index.css';
 
 const API_BASE = 'http://localhost:8000/api';
@@ -170,6 +174,17 @@ export default function App() {
   const [showEmergency, setShowEmergency] = useState(false);
   const [password, setPassword] = useState('');
 
+  // ── Elite state ───────────────────────────────────────────────────────────
+  const [riskMetrics,  setRiskMetrics]  = useState(null);
+  const [tradeJournal, setTradeJournal] = useState(null);
+  const [correlation,  setCorrelation]  = useState(null);
+  const [marketRegime, setMarketRegime] = useState(null);
+  const [equityCurve,  setEquityCurve]  = useState(null);
+  const [candleData,   setCandleData]   = useState(null);
+  const [alerts, setAlerts] = useState([
+    { type: 'regime_change', ticker: 'IBOV', message: 'Regime alterado para Bull Market', time: new Date().toLocaleTimeString() }
+  ]);
+
   const [logs, setLogs] = useState([
     { t: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida.' },
     { t: new Date().toLocaleTimeString(), sender: 'QUANT',  msg: 'Parâmetros Donchian carregados.' },
@@ -217,6 +232,29 @@ export default function App() {
     };
     load();
     const iv = setInterval(load, 5000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // Elite data fetch (once on mount)
+  useEffect(() => {
+    const loadElite = async () => {
+      try {
+        const [rm, tj, corr, mr, ec] = await Promise.all([
+          axios.get(`${API_BASE}/elite/risk_metrics`),
+          axios.get(`${API_BASE}/elite/trade_journal`),
+          axios.get(`${API_BASE}/elite/correlation_matrix`),
+          axios.get(`${API_BASE}/elite/market_regime`),
+          axios.get(`${API_BASE}/elite/equity_curve`),
+        ]);
+        setRiskMetrics(rm.data);
+        setTradeJournal(tj.data);
+        setCorrelation(corr.data);
+        setMarketRegime(mr.data?.regime || 'bull');
+        setEquityCurve(ec.data);
+      } catch (_) {}
+    };
+    loadElite();
+    const iv = setInterval(loadElite, 30000);
     return () => clearInterval(iv);
   }, []);
 
@@ -270,10 +308,13 @@ export default function App() {
 
         <nav className="sidebar-nav">
           {[
-            { id: 'overview',  Icon: BarChart2,  label: 'Visão Geral' },
-            { id: 'history',   Icon: History,    label: 'Histórico' },
-            { id: 'neural',    Icon: Globe,      label: 'Mapa Neural' },
-            { id: 'backtest',  Icon: BookOpen,   label: 'Backtests' },
+            { id: 'overview',     Icon: BarChart2,  label: 'Visão Geral' },
+            { id: 'history',      Icon: History,    label: 'Histórico' },
+            { id: 'neural',       Icon: Globe,      label: 'Mapa Neural' },
+            { id: 'backtest',     Icon: BookOpen,   label: 'Backtests' },
+            { id: 'risk',         Icon: ShieldAlert,label: 'Risk & Metrics' },
+            { id: 'journal',      Icon: BookOpen,   label: 'Trade Journal' },
+            { id: 'correlation',  Icon: Database,   label: 'Correlação' },
           ].map(({ id, Icon, label }) => (
             <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
               <Icon size={18} />
@@ -303,9 +344,13 @@ export default function App() {
               {tapeData.tape.map((item, i) => <TapeItem key={`r${i}`} item={item} />)}
             </div>
           </div>
-          <button className="emergency-btn" onClick={() => setShowEmergency(true)}>
-            <ShieldAlert size={14} /> STOP
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+            <MarketRegimeBadge regime={marketRegime} />
+            <AlertBadge alerts={alerts} />
+            <button className="emergency-btn" onClick={() => setShowEmergency(true)}>
+              <ShieldAlert size={14} /> STOP
+            </button>
+          </div>
         </header>
 
         {/* ── PAGE CONTENT ── */}
@@ -376,13 +421,38 @@ export default function App() {
                             </tr>
                           ) : (
                             positions.active_positions.map((p, i) => (
-                              <PositionRow key={i} pos={p} onClick={() => setChartModal(p.ticker)} />
+                              <PositionRow key={i} pos={p} onClick={() => {
+                                setChartModal(p.ticker);
+                                axios.get(`${API_BASE}/history/${p.ticker}?limit=60`)
+                                  .then(r => {
+                                    const candles = r.data?.candles || [];
+                                    if (candles.length) {
+                                      setCandleData(candles.map(c => ({
+                                        date: String(c.ts).slice(5),
+                                        o: c.o, h: c.h, l: c.l, c: c.c, v: c.v
+                                      })));
+                                    }
+                                  }).catch(() => {});
+                              }} />
                             ))
                           )}
                         </tbody>
                       </table>
                     </div>
                   </div>
+
+                  {/* Candlestick chart below positions table */}
+                  {candleData && (
+                    <div className="glass-panel" style={{ marginTop: '1rem' }}>
+                      <div className="panel-header">
+                        <h3>📊 Candlestick · {chartModal || 'Selecione um ativo'}</h3>
+                        <span className="muted-tag">OHLCV · 60 pregões</span>
+                      </div>
+                      <div style={{ padding: '1rem' }}>
+                        <CandlestickChart data={candleData} />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Right: Terminal IA */}
@@ -482,6 +552,145 @@ export default function App() {
                     </div>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* RISK & METRICS ─────────────────────────────────────── */}
+          {tab === 'risk' && (
+            <div className="page-section">
+              <div className="page-title">
+                <ShieldAlert size={22} />
+                <div>
+                  <h2>Risk &amp; Performance Metrics</h2>
+                  <p>Curva de equity, drawdown e métricas de risco em tempo real</p>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
+                <div className="glass-panel">
+                  <div className="panel-header"><h3>Curva de Equity &amp; Drawdown</h3><span className="muted-tag">60 pregões</span></div>
+                  <div style={{ padding: '1rem' }}>
+                    <EquityDrawdownChart capitalHistory={equityCurve?.curve || []} />
+                  </div>
+                </div>
+                <div className="glass-panel">
+                  <div className="panel-header"><h3>Métricas de Risco</h3><span className="muted-tag">Donchian · paper trading</span></div>
+                  <div style={{ padding: '1rem' }}>
+                    <RiskMetricsPanel metrics={riskMetrics} />
+                  </div>
+                </div>
+                <div className="glass-panel" style={{ gridColumn: 'span 2' }}>
+                  <div className="panel-header"><h3>Calculadora de Position Sizing (Kelly)</h3><span className="muted-tag">Guard-Rail: máx 2% risco/trade</span></div>
+                  <div style={{ padding: '1.25rem' }}>
+                    <PositionSizingCalc capital={positions?.capital?.current || 300} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TRADE JOURNAL ──────────────────────────────────────── */}
+          {tab === 'journal' && (
+            <div className="page-section">
+              <div className="page-title">
+                <BookOpen size={22} />
+                <div>
+                  <h2>Trade Journal</h2>
+                  <p>Registro completo de todas as operações · paper trading</p>
+                </div>
+              </div>
+
+              {/* Summary cards */}
+              {tradeJournal?.summary && (
+                <div className="kpi-row" style={{ marginBottom: '1rem' }}>
+                  <KpiCard title="Total de Trades" icon={Activity} color="#8b9bb4"
+                    value={tradeJournal.summary.total_trades} />
+                  <KpiCard title="Vencedores" icon={TrendingUp} color="#10b981"
+                    value={tradeJournal.summary.winning}
+                    sub={`${tradeJournal.summary.total_trades > 0 ? ((tradeJournal.summary.winning / tradeJournal.summary.total_trades) * 100).toFixed(1) : 0}% WR`}
+                    trend={1} />
+                  <KpiCard title="Perdedores" icon={TrendingDown} color="#f43f5e"
+                    value={tradeJournal.summary.losing} trend={-1} />
+                  <KpiCard title="PnL Total" icon={DollarSign}
+                    color={tradeJournal.summary.total_pnl_brl >= 0 ? '#10b981' : '#f43f5e'}
+                    value={`R$ ${tradeJournal.summary.total_pnl_brl?.toFixed(2)}`}
+                    trend={tradeJournal.summary.total_pnl_brl} />
+                </div>
+              )}
+
+              <div className="glass-panel">
+                <div className="panel-header"><h3>Histórico de Operações</h3></div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Ticker</th><th>Lado</th><th>Entrada</th><th>Saída</th>
+                        <th>Data Entrada</th><th>Data Saída</th><th>Duração</th>
+                        <th>PnL %</th><th>PnL R$</th><th>Motivo</th><th>Qtd</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(tradeJournal?.trades || []).map((t, i) => {
+                        const isWin = t.pnl_pct > 0;
+                        return (
+                          <tr key={i} style={{ background: isWin ? 'rgba(16,185,129,0.04)' : 'rgba(244,63,94,0.04)' }}>
+                            <td><div className="ticker-badge">{t.ticker}</div></td>
+                            <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side === 'BUY' ? '↑ LONG' : '↓ SHORT'}</span></td>
+                            <td className="mono">R$ {t.entry_price?.toFixed(2)}</td>
+                            <td className="mono">R$ {t.exit_price?.toFixed(2)}</td>
+                            <td className="mono dim">{t.entry_date}</td>
+                            <td className="mono dim">{t.exit_date}</td>
+                            <td className="mono dim">{t.duration_days}d</td>
+                            <td><span className={`pnl-chip ${isWin ? 'gain' : 'loss'}`}>{isWin ? '+' : ''}{t.pnl_pct?.toFixed(2)}%</span></td>
+                            <td className="mono" style={{ color: isWin ? '#10b981' : '#f43f5e' }}>{isWin ? '+' : ''}R$ {t.pnl_brl?.toFixed(2)}</td>
+                            <td><span style={{ fontSize: '0.75rem', color: t.exit_reason === 'target' ? '#10b981' : '#f43f5e', fontFamily: 'monospace' }}>{t.exit_reason}</span></td>
+                            <td className="mono dim">{t.qty}</td>
+                          </tr>
+                        );
+                      })}
+                      {(!tradeJournal?.trades?.length) && (
+                        <tr><td colSpan="11" className="empty-state">📋 Nenhuma operação registrada ainda</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CORRELATION ────────────────────────────────────────── */}
+          {tab === 'correlation' && (
+            <div className="page-section">
+              <div className="page-title">
+                <Database size={22} />
+                <div>
+                  <h2>Matriz de Correlação</h2>
+                  <p>Correlação de Pearson dos retornos diários · últimos 60 pregões</p>
+                </div>
+              </div>
+              <div className="glass-panel" style={{ padding: '1.5rem' }}>
+                <CorrelationHeatmap
+                  matrix={correlation?.matrix || []}
+                  tickers={correlation?.tickers || []}
+                />
+              </div>
+              <div className="glass-panel" style={{ padding: '1.25rem', marginTop: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
+                  {[
+                    { range: '> 0.7', color: '#f59e0b', icon: '⛔', label: 'Alta correlação', desc: 'Guard-Rail veta nova posição no mesmo setor.' },
+                    { range: '0.3 – 0.7', color: '#8b9bb4', icon: '⚠️', label: 'Correlação moderada', desc: 'Monitorar concentração setorial.' },
+                    { range: '< 0.3', color: '#10b981', icon: '✅', label: 'Baixa correlação', desc: 'Diversificação eficiente — posição liberada.' },
+                  ].map(({ range, color, icon, label, desc }) => (
+                    <div key={range} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: 4 }}>
+                        <span>{icon}</span>
+                        <span style={{ color, fontSize: '0.75rem', fontFamily: 'monospace', fontWeight: 700 }}>{range}</span>
+                      </div>
+                      <div style={{ color: '#e2e8f0', fontSize: '0.8rem', fontWeight: 600, marginBottom: 2 }}>{label}</div>
+                      <div style={{ color: '#8b9bb4', fontSize: '0.75rem', lineHeight: 1.5 }}>{desc}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           )}
