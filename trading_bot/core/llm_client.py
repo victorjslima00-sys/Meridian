@@ -35,14 +35,34 @@ class ResilientLLMClient(LLMClientInterface):
         self.fallback_key = fallback_key or os.environ.get("OPENAI_API_KEY", "")
         
     def generate_text(self, prompt: str) -> Optional[LLMResponse]:
+        """Versão síncrona — para uso em scripts (fase2, fase3, etc.)."""
         try:
             return asyncio.run(self._call_gemini(prompt))
+        except RuntimeError:
+            # Loop já rodando — usar nest_asyncio ou avisar
+            logger.error(
+                "generate_text() síncrono chamado dentro de contexto async. "
+                "Use await generate_text_async() em código FastAPI/async."
+            )
+            return None
         except Exception as e:
-            logger.warning("Falha no provedor LLM principal via llm-bridge: %s. Acionando fallback transparente...", e)
+            logger.warning("Falha no LLM principal: %s. Tentando fallback...", e)
             try:
                 return asyncio.run(self._call_fallback(prompt))
-            except Exception as fallback_e:
-                logger.error("Falha crítica: Provedor de fallback também falhou: %s", fallback_e)
+            except Exception as fe:
+                logger.error("Fallback também falhou: %s", fe)
+                return None
+
+    async def generate_text_async(self, prompt: str) -> Optional[LLMResponse]:
+        """Versão async — para uso em FastAPI, workers async, etc."""
+        try:
+            return await self._call_gemini(prompt)
+        except Exception as e:
+            logger.warning("Falha no LLM principal (async): %s. Tentando fallback...", e)
+            try:
+                return await self._call_fallback(prompt)
+            except Exception as fe:
+                logger.error("Fallback async também falhou: %s", fe)
                 return None
 
     async def _call_gemini(self, prompt: str) -> LLMResponse:

@@ -6,10 +6,16 @@ from typing import Dict, Any
 
 app = FastAPI(title="Meridian AI Core")
 
-# CORS config to allow the React frontend
+import os
+
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5173"  # dev local
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # For dev, allow all
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

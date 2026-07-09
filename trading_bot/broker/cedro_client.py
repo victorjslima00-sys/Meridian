@@ -55,15 +55,23 @@ class CedroClient:
             self.logger.error(f"Erro na autenticação Cedro: {e}")
             raise
             
-    def validate_connection(self):
-        """Verifica se a API Key é válida."""
-        if not self.api_key:
-            return False, "API Key não encontrada."
-            
-        # Simula um ping de validação
-        if self.api_key.startswith("mock") or len(self.api_key) > 5:
-            return True, "Conexão estabelecida com sucesso."
-        return False, "Credenciais inválidas ou expiradas."
+    def validate_connection(self) -> tuple[bool, str]:
+        """Verifica se as credenciais mínimas estão configuradas."""
+        placeholders = {"sua_api_key_aqui", "seu_api_secret_aqui", "numero_da_sua_conta", "", None}
+
+        if self.api_key in placeholders:
+            return False, "CEDRO_API_KEY não configurada. Preencha o .env."
+        if self.api_secret in placeholders:
+            return False, "CEDRO_SECRET não configurada. Preencha o .env."
+        if self.account in placeholders:
+            return False, "CEDRO_ACCOUNT não configurada. Preencha o .env."
+
+        # Credenciais presentes — tenta auth real
+        try:
+            self.auth()
+            return True, f"Conexão estabelecida com sucesso ({self.env})."
+        except Exception as e:
+            return False, f"Falha na autenticação: {e}"
         
     def send_order(self, ticker: str, side: str, qty: int, price: float, order_type: str = "LIMIT"):
         """Envia ordem para a B3."""

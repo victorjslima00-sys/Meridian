@@ -105,10 +105,9 @@ def main():
             f"Responda /aprovar ou /rejeitar em {timeout_min} minutos.\n"
             f"Silêncio = REJEIÇÃO AUTOMÁTICA."
         )
-        notifier.send_message(text=msg)
 
         # 2. Aguardar confirmação (ou timeout = rejeitar)
-        approved = notifier.ask_for_approval(timeout_minutes=timeout_min)
+        approved = notifier.ask_for_approval(text=msg, timeout_minutes=timeout_min)
 
         if not approved:
             logger.info("[%s] Operação REJEITADA (timeout ou rejeição manual)", cand.ticker)

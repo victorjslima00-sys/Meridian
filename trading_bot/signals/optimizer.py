@@ -101,24 +101,30 @@ class MeridianGeneticOptimizer:
             verbose=False
         )
         
-        # O método .evolve() roda o algoritmo
-        # Assumimos que ele pode retornar o histórico ou o melhor.
         try:
-            ga.evolve()
+            result = ga.evolve()  # ← captura o retorno!
+            best_params = result.get("best params", {})
+            best_sharpe = result.get("best fitness", 0.0)
+            logger.info("Evolução concluída. Melhor Sharpe: %.4f | Params: %s",
+                        best_sharpe, best_params)
         except Exception as e:
-            logger.warning("GeneticAlgorithm library execution issue: %s", e)
-            
-        # Como a API exata de retorno não está totalmente clara pelos docs,
-        # vamos retornar um mock estruturado baseado no param_bounds caso a lib não retorne direto
-        # mas idealmente buscar o melhor da pop
-        best_params = {}
-        for k, v in self.param_space.items():
-            if isinstance(v, FloatGene):
-                best_params[k] = (v.min_val + v.max_val) / 2
-            else:
-                best_params[k] = int((v.min_val + v.max_val) / 2)
-                
-        logger.info("Otimização concluída.")
-        
-        # Retorna lista com os melhores (Top 1)
-        return [{"params": best_params, "sharpe": 1.5, "return_pct": 10.0, "win_rate": 0.5, "trades_count": 20}]
+            logger.warning("Erro na evolução genética: %s. Usando params padrão.", e)
+            # Fallback seguro: parâmetros do meio dos bounds
+            best_params = {}
+            for k, v in self.param_space.items():
+                if hasattr(v, "min_val") and hasattr(v, "max_val"):
+                    if isinstance(v, float) or "Float" in str(type(v)):
+                        best_params[k] = (v.min_val + v.max_val) / 2
+                    else:
+                        best_params[k] = int((v.min_val + v.max_val) / 2)
+                else:
+                    best_params[k] = 20 # Ultimate fallback
+            best_sharpe = 0.0
+
+        return [{
+            "params": best_params,
+            "sharpe": best_sharpe,        # ← valor real, não hardcoded 1.5
+            "return_pct": None,           # calculado externamente se necessário
+            "win_rate": None,
+            "trades_count": None,
+        }]
