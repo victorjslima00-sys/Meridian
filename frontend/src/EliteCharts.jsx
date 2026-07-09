@@ -452,7 +452,7 @@ export const DepthOfMarket = () => {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace', background: '#0a0a0a', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '400px', margin: '0 auto', fontSize: '0.75rem', fontFamily: 'JetBrains Mono, monospace', background: '#0a0a0a', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', background: 'var(--bg-2)', borderBottom: '1px solid var(--border)', padding: '0.5rem', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 600 }}>
         <div style={{ textAlign: 'left', paddingLeft: '0.5rem' }}>Bids (C)</div>
         <div>Price</div>
@@ -460,10 +460,10 @@ export const DepthOfMarket = () => {
       </div>
       
       {domLevels.map((lvl, i) => (
-        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', height: '26px', alignItems: 'center', borderBottom: i === 3 ? '2px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.02)' }}>
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 1fr', height: '24px', alignItems: 'center', borderBottom: i === 3 ? '2px solid rgba(255,255,255,0.1)' : '1px solid rgba(255,255,255,0.02)' }}>
           {/* Bid Side */}
           <div style={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', paddingLeft: '0.5rem' }}>
-            {lvl.bid && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: lvl.bidW, background: 'rgba(16,185,129,0.2)' }} />}
+            {lvl.bid && <div style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: lvl.bidW, background: 'rgba(16,185,129,0.15)' }} />}
             <span style={{ color: '#10b981', zIndex: 1, fontWeight: 500 }}>{lvl.bid || ''}</span>
           </div>
           
@@ -474,7 +474,7 @@ export const DepthOfMarket = () => {
 
           {/* Ask Side */}
           <div style={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '0.5rem' }}>
-            {lvl.ask && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: lvl.askW, background: 'rgba(244,63,94,0.2)' }} />}
+            {lvl.ask && <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: lvl.askW, background: 'rgba(244,63,94,0.15)' }} />}
             <span style={{ color: '#f43f5e', zIndex: 1, fontWeight: 500 }}>{lvl.ask || ''}</span>
           </div>
         </div>
