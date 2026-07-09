@@ -114,31 +114,35 @@ body {
   padding: 0.65rem 0.85rem;
   border-radius: var(--radius-md);
   background: none; border: none;
-  color: var(--muted);
-  font-size: 0.9rem; font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s;
-  text-align: left; width: 100%;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  text-align: left;
 }
-.nav-item:hover { background: rgba(255,255,255,0.05); color: var(--text); }
+.nav-item:hover {
+  color: var(--text);
+  background: rgba(255,255,255,0.03);
+}
 .nav-item.active {
-  background: rgba(0,243,255,0.08);
-  color: var(--cyan);
-  border: 1px solid rgba(0,243,255,0.15);
+  background: var(--bg-3);
+  color: #fff;
+  font-weight: 600;
 }
 
 .sidebar-footer {
-  display: flex; align-items: center; gap: 0.5rem;
-  padding-top: 1rem;
+  padding: 1.5rem;
   border-top: 1px solid var(--border);
 }
-.icon-btn {
-  background: none; border: none; color: var(--muted);
-  cursor: pointer; padding: 0.35rem;
-  border-radius: var(--radius-sm);
-  transition: all 0.2s;
-}
-.icon-btn:hover { color: var(--text); background: rgba(255,255,255,0.07); }
 
 .conn-pill {
   display: flex; align-items: center; gap: 0.35rem;
@@ -251,38 +255,48 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   padding: 1.25rem;
-  backdrop-filter: blur(12px);
-  transition: border-color 0.2s, transform 0.2s;
-  position: relative; overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+  position: relative;
 }
-.kpi-card::after {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
-  opacity: 0.3;
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
 }
-.kpi-card:hover { border-color: var(--border-hi); transform: translateY(-2px); }
 
 .kpi-header {
-  display: flex; justify-content: space-between; align-items: center;
-  margin-bottom: 0.75rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
-.kpi-label {
-  font-size: 0.72rem; font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.8px;
-  color: var(--muted);
+
+.kpi-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
+
 .kpi-value {
-  font-size: 1.75rem; font-weight: 800;
-  letter-spacing: -0.5px;
-  line-height: 1;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
 }
+
 .kpi-sub {
-  display: flex; align-items: center; gap: 0.3rem;
-  font-size: 0.75rem; font-weight: 600;
-  margin-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 /* CONTENT GRID */
@@ -303,24 +317,29 @@ body {
    GLASS PANEL
 ═══════════════════════════════════════════════════════ */
 .glass-panel {
-  background: var(--panel);
+  background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  backdrop-filter: blur(16px);
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
   overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
 
 .panel-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 1rem 1.25rem;
+  padding: 1.25rem 1.25rem;
   border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.01);
 }
 .panel-header h3 {
-  font-size: 0.9rem; font-weight: 700;
+  font-size: 0.85rem; font-weight: 600;
+  color: var(--text);
   display: flex; align-items: center; gap: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 .muted-tag {
-  font-size: 0.72rem; color: var(--muted);
+  font-size: 0.75rem; color: var(--text-muted);
 }
 
 /* ═══════════════════════════════════════════════════════

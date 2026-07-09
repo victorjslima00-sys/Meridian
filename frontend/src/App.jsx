@@ -28,16 +28,16 @@ const TapeItem = ({ item }) => {
 };
 
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
-const KpiCard = ({ title, value, sub, icon: Icon, color = '#00f3ff', trend }) => (
-  <div className="kpi-card">
+const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
+  <div className="kpi-card" style={{ borderTop: `2px solid ${color}` }}>
     <div className="kpi-header">
-      <span className="kpi-label">{title}</span>
-      {Icon && <Icon size={18} color={color} opacity={0.7} />}
+      <span className="kpi-title">{title}</span>
+      <Icon size={16} color={color} opacity={0.7} />
     </div>
-    <div className="kpi-value" style={{ color }}>{value}</div>
-    {(sub || trend !== undefined) && (
-      <div className="kpi-sub" style={{ color: trend >= 0 ? '#10b981' : '#f43f5e' }}>
-        {trend >= 0 ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+    <div className="kpi-value">{value}</div>
+    {sub && (
+      <div className="kpi-sub" style={{ color: trend === undefined ? 'var(--text-muted)' : (trend >= 0 ? 'var(--green)' : 'var(--red)') }}>
+        {trend !== undefined && (trend >= 0 ? <TrendingUp size={12}/> : <TrendingDown size={12}/>)}
         {sub}
       </div>
     )}
@@ -492,6 +492,25 @@ export default function App() {
           {/* OVERVIEW */}
           {tab === 'overview' && (
             <div className="overview-layout">
+              {/* GLOBAL MACRO TICKER */}
+              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', fontSize: '0.75rem', fontWeight: 600, color: '#8b9bb4', padding: '0.5rem 1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>S&P 500</span> <span style={{ color: '#10b981' }}>5,123.40 (+0.8%)</span>
+                </div>
+                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>DXY</span> <span style={{ color: '#f43f5e' }}>104.20 (-0.2%)</span>
+                </div>
+                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>VIX</span> <span style={{ color: '#10b981' }}>13.40 (-1.5%)</span>
+                </div>
+                <div style={{ width: '1px', background: 'rgba(255,255,255,0.1)' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>US10Y</span> <span style={{ color: '#f59e0b' }}>4.23% (+0.02)</span>
+                </div>
+              </div>
+
               <div className="kpi-row">
                 <KpiCard title="Capital Inicial" icon={DollarSign} color="#8b9bb4" value={`R$ ${positions.capital.initial.toFixed(2)}`} />
                 <KpiCard title="Patrimônio Atual" icon={DollarSign} color="#00f3ff" value={`R$ ${positions.capital.current.toFixed(2)}`} sub={`${roiNum >= 0 ? '+' : ''}${roi}% total`} trend={roiNum} />
