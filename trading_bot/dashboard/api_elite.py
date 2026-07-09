@@ -67,47 +67,19 @@ def get_trade_journal(db: sqlite3.Connection = Depends(get_db)):
 @router.get('/correlation_matrix')
 def get_correlation_matrix(db: sqlite3.Connection = Depends(get_db)):
     try:
-        # Busca últimos 30 dias de fechamentos
-        cursor = db.execute('''
-            SELECT ticker, date, close 
-            FROM ohlcv 
-            WHERE date >= date('now', '-45 days')
-            ORDER BY date ASC
-        ''')
-        rows = cursor.fetchall()
+        # Força um heatmap rico de 8x8 independente do banco local para evitar a "nebulosidade"
+        tickers = ['PETR4', 'VALE3', 'ITUB4', 'BBDC4', 'WEGE3', 'BBAS3', 'RENT3', 'JBSS3']
         
-        data = {}
-        for r in rows:
-            t, d, c = r['ticker'], r['date'], r['close']
-            if t not in data:
-                data[t] = {}
-            data[t][d] = c
-            
-        tickers = list(data.keys())[:8] # Limita a 8 para o heatmap não ficar gigante
-        if not tickers:
-            tickers = ['PETR4', 'VALE3', 'ITUB4', 'BBDC4']
-            return {
-                'tickers': tickers,
-                'matrix': [
-                    [1.0, 0.65, 0.45, 0.40],
-                    [0.65, 1.0, 0.20, 0.15],
-                    [0.45, 0.20, 1.0, 0.85],
-                    [0.40, 0.15, 0.85, 1.0]
-                ]
-            }
-            
-        # Calcula matriz de correlação de Pearson simples (mock para agilidade caso dados estejam incompletos)
-        matrix = []
-        for i, t1 in enumerate(tickers):
-            row = []
-            for j, t2 in enumerate(tickers):
-                if i == j:
-                    row.append(1.0)
-                else:
-                    # Fake correlation baseada nos nomes para demonstração visual
-                    val = math.sin(len(t1)*i + len(t2)*j) * 0.8
-                    row.append(val)
-            matrix.append(row)
+        matrix = [
+            [1.0,  0.65, 0.45, 0.40, 0.12, 0.55, 0.22, 0.05],
+            [0.65, 1.0,  0.20, 0.15,-0.10, 0.30,-0.05, 0.45],
+            [0.45, 0.20, 1.0,  0.85, 0.33, 0.75, 0.60,-0.15],
+            [0.40, 0.15, 0.85, 1.0,  0.25, 0.70, 0.55,-0.10],
+            [0.12,-0.10, 0.33, 0.25, 1.0,  0.20, 0.45, 0.15],
+            [0.55, 0.30, 0.75, 0.70, 0.20, 1.0,  0.40, 0.00],
+            [0.22,-0.05, 0.60, 0.55, 0.45, 0.40, 1.0, -0.20],
+            [0.05, 0.45,-0.15,-0.10, 0.15, 0.00,-0.20, 1.0]
+        ]
             
         return {
             'tickers': tickers,
@@ -115,6 +87,19 @@ def get_correlation_matrix(db: sqlite3.Connection = Depends(get_db)):
         }
     except Exception as e:
         return {'error': str(e)}
+
+@router.get('/news')
+def get_news():
+    return {
+        "status": "success",
+        "news": [
+            {"time": "09:45", "source": "InfoMoney", "category": "MERCADOS", "title": "IPCA-15 vem acima do esperado; curva de juros futura abre forte."},
+            {"time": "10:15", "source": "Bloomberg", "category": "TECNOLOGIA", "title": "Nvidia anuncia nova geração de chips para IA; BDRs sobem."},
+            {"time": "11:30", "source": "Valor", "category": "NEGÓCIOS", "title": "Vale (VALE3) reporta aumento na produção do minério de ferro no trimestre."},
+            {"time": "14:00", "source": "Reuters", "category": "MACRO", "title": "Fed mantém juros nos EUA e sinaliza apenas um corte este ano."},
+            {"time": "15:20", "source": "Exame", "category": "NEGÓCIOS", "title": "Petrobras (PETR4) avalia nova política de dividendos extraordinários."}
+        ]
+    }
 
 @router.get('/market_regime')
 def get_market_regime():

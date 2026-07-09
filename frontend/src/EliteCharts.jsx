@@ -194,16 +194,33 @@ export const RiskMetricsPanel = ({ metrics }) => {
     win_rate: 'Win Rate', avg_win: 'Média de Ganhos', avg_loss: 'Média de Perdas'
   };
 
+  const getProgressVal = (key, val) => {
+    if (key === 'win_rate') return val * 100;
+    if (key === 'sharpe' || key === 'sortino' || key === 'calmar') return Math.min(100, Math.max(0, (val / 3) * 100));
+    if (key === 'max_drawdown_pct') return Math.min(100, Math.max(0, (Math.abs(val) / 30) * 100)); // assumes max 30% bad
+    return 50; // default middle
+  };
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-      {Object.entries(metrics).map(([k, v]) => (
-        <div key={k} style={{ background: 'rgba(0,0,0,0.2)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ fontSize: '0.7rem', color: '#8b9bb4', textTransform: 'uppercase', marginBottom: '0.5rem' }}>{labels[k]}</div>
-          <div style={{ fontSize: '1.25rem', fontWeight: 700, color: getMetricColor(k, v), fontFamily: 'JetBrains Mono, monospace' }}>
-            {formatters[k] ? formatters[k](v) : v}
+      {Object.entries(metrics).map(([k, v]) => {
+        const color = getMetricColor(k, v);
+        const progress = getProgressVal(k, v);
+        return (
+          <div key={k} style={{ background: 'rgba(0,0,0,0.2)', padding: '1.25rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', bottom: 0, left: 0, height: '4px', width: '100%', background: 'rgba(255,255,255,0.05)' }}>
+              <div style={{ height: '100%', width: `${progress}%`, background: color, opacity: 0.5, transition: 'width 1s ease' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div style={{ fontSize: '0.75rem', color: '#8b9bb4', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{labels[k]}</div>
+              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, boxShadow: `0 0 8px ${color}` }} />
+            </div>
+            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: color, fontFamily: 'JetBrains Mono, monospace' }}>
+              {formatters[k] ? formatters[k](v) : v}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
@@ -287,7 +304,7 @@ export const AlertBadge = ({ alerts }) => {
           position: 'absolute', top: '100%', right: '0', width: '300px',
           background: 'rgba(15,23,42,0.95)', border: '1px solid rgba(255,255,255,0.1)',
           borderRadius: '12px', padding: '1rem', backdropFilter: 'blur(16px)',
-          boxShadow: '0 10px 40px rgba(0,0,0,0.5)', zIndex: 100
+          boxShadow: '0 10px 40px rgba(0,0,0,0.5)', zIndex: 9999
         }}>
           <h4 style={{ margin: '0 0 1rem 0', fontSize: '0.9rem', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '0.5rem' }}>Alertas Recentes</h4>
           {!count ? <div style={{ color: '#8b9bb4', fontSize: '0.85rem' }}>Sem alertas no momento.</div> : (
@@ -316,6 +333,7 @@ export const AlertBadge = ({ alerts }) => {
 };
 
 export const MarketRegimeBadge = ({ regime }) => {
+  const [open, setOpen] = useState(false);
   if (!regime) return null;
   
   const styles = {
@@ -328,21 +346,43 @@ export const MarketRegimeBadge = ({ regime }) => {
   const s = styles[regime.regime] || styles.lateral;
 
   return (
-    <div 
-      title={regime.description}
-      style={{
-        display: 'flex', alignItems: 'center', gap: '0.5rem',
-        background: s.bg, border: `1px solid ${s.color}40`,
-        padding: '0.35rem 0.75rem', borderRadius: '999px',
-        fontSize: '0.7rem', fontWeight: 800, color: s.color, letterSpacing: '1px',
-        cursor: 'help'
-      }}
-    >
-      <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: s.color }} />
-      {s.label}
-      <span style={{ opacity: 0.7, marginLeft: '0.25rem', borderLeft: `1px solid ${s.color}40`, paddingLeft: '0.5rem' }}>
-        {(regime.confidence * 100).toFixed(0)}%
-      </span>
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+      <button 
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          background: s.bg, border: `1px solid ${s.color}40`,
+          padding: '0.35rem 0.75rem', borderRadius: '999px',
+          fontSize: '0.7rem', fontWeight: 800, color: s.color, letterSpacing: '1px',
+          cursor: 'pointer', outline: 'none'
+        }}
+      >
+        <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: s.color, boxShadow: `0 0 6px ${s.color}` }} />
+        {s.label}
+        <span style={{ opacity: 0.7, marginLeft: '0.25rem', borderLeft: `1px solid ${s.color}40`, paddingLeft: '0.5rem' }}>
+          {(regime.confidence * 100).toFixed(0)}%
+        </span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', right: '0', marginTop: '0.5rem', width: '280px',
+          background: 'rgba(15,23,42,0.95)', border: `1px solid ${s.color}40`,
+          borderRadius: '12px', padding: '1rem', backdropFilter: 'blur(16px)',
+          boxShadow: '0 10px 40px rgba(0,0,0,0.5)', zIndex: 9999, textAlign: 'left'
+        }}>
+          <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem', color: s.color, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: s.color }} />
+            Regime de Mercado Atual
+          </h4>
+          <p style={{ margin: 0, fontSize: '0.8rem', color: '#e2e8f0', lineHeight: 1.5 }}>
+            {regime.description}
+          </p>
+          <div style={{ marginTop: '0.75rem', fontSize: '0.75rem', color: '#8b9bb4', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+            Nível de Confiança da IA: <strong>{(regime.confidence * 100).toFixed(1)}%</strong>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

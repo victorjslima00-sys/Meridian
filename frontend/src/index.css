@@ -169,8 +169,8 @@ body {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  overflow: hidden;
   flex-shrink: 0;
+  /* overflow removido para o dropdown funcionar */
 }
 
 .topbar-tape {

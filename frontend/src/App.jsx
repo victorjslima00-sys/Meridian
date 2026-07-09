@@ -130,6 +130,87 @@ const NeuralMap = ({ nodes, edges, onNodeClick }) => {
   );
 };
 
+const AgentOfficeView = () => {
+  const agents = [
+    { id: 'quant', name: 'Quant Engine', role: 'Análise Técnica & ML', icon: BarChart2, x: 20, y: 20, color: '#00f3ff' },
+    { id: 'research', name: 'Pesquisador', role: 'Sentimento & Notícias', icon: Globe, x: 70, y: 20, color: '#f59e0b' },
+    { id: 'guardrail', name: 'Guard-Rail', role: 'Risco & Compliance', icon: ShieldAlert, x: 20, y: 70, color: '#f43f5e' },
+    { id: 'broker', name: 'Mesa de Operações', role: 'Roteamento Cedro', icon: Briefcase, x: 70, y: 70, color: '#10b981' },
+    { id: 'db', name: 'Memória Central', role: 'SQLite', icon: Database, x: 45, y: 45, color: '#8b5cf6' }
+  ];
+
+  const [activeChats, setActiveChats] = useState([]);
+
+  useEffect(() => {
+    const dialogs = [
+      { from: 'research', to: 'quant', msg: 'Fluxo estrangeiro forte em PETR4. Recomendo revisar alvos.' },
+      { from: 'quant', to: 'guardrail', msg: 'Ajustando target de PETR4 para R$ 42.10. Solicito aprovação de risco.' },
+      { from: 'guardrail', to: 'quant', msg: 'Aprovado. Correlação do portfólio permanece em 0.38.' },
+      { from: 'quant', to: 'broker', msg: 'Gerando ordem LIMIT de compra PETR4 @ R$ 38.50.' },
+      { from: 'broker', to: 'db', msg: 'Ordem envidada via FIX/REST. Aguardando fill.' },
+      { from: 'research', to: 'guardrail', msg: 'Alerta macro: IPCA-15 acima do consenso.' },
+      { from: 'guardrail', to: 'broker', msg: 'Atenção: Aperto de stops acionado para posições long.' }
+    ];
+    
+    let step = 0;
+    const iv = setInterval(() => {
+      const d = dialogs[step % dialogs.length];
+      setActiveChats(prev => [...prev.slice(-3), { ...d, id: Date.now() }]);
+      step++;
+    }, 3500);
+    return () => clearInterval(iv);
+  }, []);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '600px', background: 'var(--bg-2)', borderRadius: '12px', border: '1px solid rgba(0,243,255,0.1)', overflow: 'hidden' }}>
+      {/* Grade do chão do escritório */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)', backgroundSize: '40px 40px' }} />
+      
+      {/* Agentes (Mesas) */}
+      {agents.map(a => (
+        <div key={a.id} style={{
+          position: 'absolute', top: `${a.y}%`, left: `${a.x}%`, transform: 'translate(-50%, -50%)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem', zIndex: 10
+        }}>
+          <div style={{
+            width: '60px', height: '60px', borderRadius: '12px', background: `rgba(0,0,0,0.5)`,
+            border: `2px solid ${a.color}`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: `0 0 20px ${a.color}40`, position: 'relative'
+          }}>
+            <a.icon size={24} color={a.color} />
+            <div style={{ position: 'absolute', top: -4, right: -4, width: 10, height: 10, borderRadius: '50%', background: '#10b981', boxShadow: '0 0 10px #10b981', animation: 'pulse 2s infinite' }} />
+          </div>
+          <div style={{ textAlign: 'center', background: 'rgba(10,14,23,0.8)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: a.color }}>{a.name}</div>
+            <div style={{ fontSize: '0.6rem', color: '#8b9bb4' }}>{a.role}</div>
+          </div>
+        </div>
+      ))}
+
+      {/* Chat Bubbles */}
+      {activeChats.map((chat, i) => {
+        const fromAgent = agents.find(a => a.id === chat.from);
+        if (!fromAgent) return null;
+        return (
+          <div key={chat.id} style={{
+            position: 'absolute', top: `calc(${fromAgent.y}% - 50px)`, left: `calc(${fromAgent.x}% + 40px)`,
+            background: 'rgba(15,23,42,0.9)', border: `1px solid ${fromAgent.color}`, borderRadius: '8px',
+            padding: '0.75rem', maxWidth: '220px', zIndex: 20, boxShadow: `0 4px 20px rgba(0,0,0,0.5)`,
+            animation: 'fadeInUp 0.3s ease-out forwards', color: '#e2e8f0', fontSize: '0.75rem', lineHeight: 1.4
+          }}>
+            <strong style={{ color: fromAgent.color, display: 'block', marginBottom: '0.2rem', fontSize: '0.65rem' }}>@{fromAgent.id.toUpperCase()} → {chat.to.toUpperCase()}</strong>
+            {chat.msg}
+          </div>
+        );
+      })}
+      
+      <style>{`
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      `}</style>
+    </div>
+  );
+};
+
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [tab, setTab] = useState('overview');
@@ -185,11 +266,13 @@ export default function App() {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
   }, [logs]);
 
+  const [marketNews, setMarketNews] = useState(null);
+
   // Main Data fetch
   useEffect(() => {
     const load = async () => {
       try {
-        const [s, p, e, tp, rm, tj, cm, mr, eq] = await Promise.all([
+        const [s, p, e, tp, rm, tj, cm, mr, eq, nw] = await Promise.all([
           axios.get(`${API_BASE}/status`),
           axios.get(`${API_BASE}/positions`),
           axios.get(`${API_BASE}/ecosystem`),
@@ -199,6 +282,7 @@ export default function App() {
           axios.get(`${API_BASE}/elite/correlation_matrix`).catch(()=>({data:null})),
           axios.get(`${API_BASE}/elite/market_regime`).catch(()=>({data:null})),
           axios.get(`${API_BASE}/elite/equity_curve`).catch(()=>({data:null})),
+          axios.get(`${API_BASE}/elite/news`).catch(()=>({data:null})),
         ]);
         setStatus(s.data); setPositions(p.data);
         setEcosystem(e.data); setTapeData(tp.data);
@@ -208,6 +292,7 @@ export default function App() {
         if (cm.data) setCorrelation(cm.data);
         if (mr.data) setMarketRegime(mr.data);
         if (eq.data) setEquityCurve(eq.data);
+        if (nw.data && nw.data.news) setMarketNews(nw.data.news);
 
         setConnected(true); setApiError(null);
       } catch (err) {
@@ -288,6 +373,7 @@ export default function App() {
             { id: 'journal',    Icon: BookOpen,    label: 'Trade Journal' },
             { id: 'correlation',Icon: Database,    label: 'Correlação' },
             { id: 'neural',     Icon: Globe,       label: 'Mapa Neural' },
+            { id: 'office',     Icon: Terminal,    label: 'Agent Office' },
             { id: 'settings',   Icon: Settings,    label: 'Configurações' },
           ].map(({ id, Icon, label }) => (
             <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
@@ -479,30 +565,48 @@ export default function App() {
                 </div>
               )}
 
-              <div className="glass-panel">
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
-                        <th>Data Início</th><th>Duração (dias)</th><th>PnL %</th><th>Motivo</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tradeJournal?.trades?.map((t, i) => (
-                        <tr key={i}>
-                          <td><span className="ticker-badge">{t.ticker}</span></td>
-                          <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
-                          <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
-                          <td className="mono">R$ {t.exit_price.toFixed(2)}</td>
-                          <td className="dim">{t.entry_date}</td>
-                          <td className="dim">{t.duration_days} d</td>
-                          <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct}%</span></td>
-                          <td className="dim">{t.exit_reason.toUpperCase()}</td>
+              <div className="content-grid" style={{ gridTemplateColumns: '2fr 1fr', gap: '1.25rem' }}>
+                <div className="glass-panel">
+                  <div className="panel-header"><h3>Histórico de Operações</h3></div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
+                          <th>Data Início</th><th>Duração</th><th>PnL %</th><th>Motivo</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {tradeJournal?.trades?.map((t, i) => (
+                          <tr key={i}>
+                            <td><span className="ticker-badge">{t.ticker}</span></td>
+                            <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
+                            <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
+                            <td className="mono">R$ {t.exit_price.toFixed(2)}</td>
+                            <td className="dim">{t.entry_date}</td>
+                            <td className="dim">{t.duration_days} d</td>
+                            <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct}%</span></td>
+                            <td className="dim">{t.exit_reason.toUpperCase()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="glass-panel">
+                  <div className="panel-header"><h3>Notícias e Eventos (B3)</h3></div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', padding: '1rem' }}>
+                    {marketNews ? marketNews.map((n, i) => (
+                      <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '0.75rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', fontSize: '0.75rem' }}>
+                          <span style={{ color: '#00f3ff', fontWeight: 600 }}>{n.category}</span>
+                          <span style={{ color: '#8b9bb4' }}>{n.time} • {n.source}</span>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', lineHeight: 1.4, color: '#e2e8f0' }}>{n.title}</div>
+                      </div>
+                    )) : <div style={{ color: '#8b9bb4', fontSize: '0.85rem' }}>Carregando radar de notícias...</div>}
+                  </div>
                 </div>
               </div>
             </div>
@@ -532,14 +636,65 @@ export default function App() {
 
           {/* NEURAL MAP */}
           {tab === 'neural' && (
-            <div className="page-section">
+            <div className="page-section" style={{ position: 'relative' }}>
               <div className="page-title">
                 <Globe size={22} />
                 <div><h2>Mapa Neural do Ecossistema</h2><p>Agentes ativos e fluxo de dados em tempo real</p></div>
               </div>
-              <div className="glass-panel" style={{ flex: 1, minHeight: 500 }}>
+              <div className="glass-panel" style={{ flex: 1, minHeight: 500, display: 'flex' }}>
                 <NeuralMap nodes={ecosystem.nodes} edges={ecosystem.edges} onNodeClick={openNode} />
+                
+                {/* Node Side Panel */}
+                {nodePanel && (
+                  <div style={{
+                    width: '350px', borderLeft: '1px solid rgba(0,243,255,0.2)', background: 'rgba(10,14,23,0.95)',
+                    padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem',
+                    animation: 'fadeInRight 0.3s ease-out'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.1)', paddingBottom: '1rem' }}>
+                      <h3 style={{ margin: 0, color: '#00f3ff', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <Terminal size={18} /> {nodePanel.label}
+                      </h3>
+                      <button onClick={() => setNodePanel(null)} style={{ background: 'none', border: 'none', color: '#8b9bb4', cursor: 'pointer' }}><X size={18} /></button>
+                    </div>
+                    
+                    <div style={{ flex: 1, overflowY: 'auto' }}>
+                      <div style={{ fontSize: '0.8rem', color: '#e2e8f0', marginBottom: '1rem' }}>
+                        <strong>Status:</strong> <span style={{ color: nodePanel.status === 'active' ? '#10b981' : '#f59e0b' }}>{nodePanel.status.toUpperCase()}</span>
+                      </div>
+                      
+                      <h4 style={{ fontSize: '0.75rem', color: '#8b9bb4', textTransform: 'uppercase', marginBottom: '0.5rem' }}>CMD State Logs (Live)</h4>
+                      <div style={{ background: '#000', padding: '1rem', borderRadius: '8px', border: '1px solid #333', fontFamily: 'JetBrains Mono', fontSize: '0.7rem', color: '#00f3ff', height: '250px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        <div>[21:14:02] Initializing {nodePanel.id} module...</div>
+                        <div>[21:14:05] Context loaded. Ready.</div>
+                        <div>[21:15:10] Scanning incoming data streams...</div>
+                        <div>[21:15:42] Processing vector embeddings... [OK]</div>
+                        <div style={{ color: '#10b981' }}>[21:16:01] Awaiting new tasks.</div>
+                        {/* Fake animated line */}
+                        <div style={{ opacity: 0.5, animation: 'pulse 1.5s infinite' }}>_</div>
+                      </div>
+                    </div>
+                    <button style={{ padding: '0.75rem', background: 'rgba(0,243,255,0.1)', color: '#00f3ff', border: '1px solid rgba(0,243,255,0.3)', borderRadius: '8px', cursor: 'pointer' }} onClick={() => alert('Diagnostic run initiated.')}>
+                      Executar Diagnóstico
+                    </button>
+                  </div>
+                )}
               </div>
+              <style>{`@keyframes fadeInRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }`}</style>
+            </div>
+          )}
+
+          {/* AGENT OFFICE (NEW) */}
+          {tab === 'office' && (
+            <div className="page-section">
+              <div className="page-title">
+                <Terminal size={22} />
+                <div>
+                  <h2>Agent Office (CMD View)</h2>
+                  <p>Acompanhe em tempo real as deliberações em linguagem natural do Comitê de IA</p>
+                </div>
+              </div>
+              <AgentOfficeView />
             </div>
           )}
 
