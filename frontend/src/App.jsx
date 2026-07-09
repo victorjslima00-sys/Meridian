@@ -962,12 +962,14 @@ export default function App() {
                       else if (log.sender === 'EXECUTORAGENT') { badgeColor = '#10b981'; bgBadge = 'rgba(16, 185, 129, 0.1)'; icon = '⚡'; }
                       else if (log.sender === 'USER') { badgeColor = '#ec4899'; bgBadge = 'rgba(236, 72, 153, 0.1)'; icon = '👤'; }
 
-                      // Syntax highlighting hack for text
-                      const formattedMsg = log.msg.replace(/\b(BUY|SELL|HOLD|PETR4\.SA|VALE3\.SA|ITUB4\.SA)\b/g, match => {
-                        if (match === 'BUY') return '<span style="color:#10b981;font-weight:bold;">BUY</span>';
-                        if (match === 'SELL') return '<span style="color:#f43f5e;font-weight:bold;">SELL</span>';
-                        if (match === 'HOLD') return '<span style="color:#f59e0b;font-weight:bold;">HOLD</span>';
-                        return `<span style="color:#00f3ff;text-decoration:underline;">${match}</span>`;
+                      // Syntax highlighting without dangerouslySetInnerHTML (Fixes XSS CodeQL Alert)
+                      const parts = (log.msg || '').split(/\b(BUY|SELL|HOLD|PETR4\.SA|VALE3\.SA|ITUB4\.SA)\b/g);
+                      const formattedMsg = parts.map((part, index) => {
+                        if (part === 'BUY') return <span key={index} style={{color:'#10b981', fontWeight:'bold'}}>BUY</span>;
+                        if (part === 'SELL') return <span key={index} style={{color:'#f43f5e', fontWeight:'bold'}}>SELL</span>;
+                        if (part === 'HOLD') return <span key={index} style={{color:'#f59e0b', fontWeight:'bold'}}>HOLD</span>;
+                        if (['PETR4.SA', 'VALE3.SA', 'ITUB4.SA'].includes(part)) return <span key={index} style={{color:'#00f3ff', textDecoration:'underline'}}>{part}</span>;
+                        return part;
                       });
 
                       return (
@@ -979,7 +981,7 @@ export default function App() {
                           }}>
                             {icon} {log.sender}
                           </span>
-                          <span style={{ color: log.sender === 'USER' ? '#fdf2f8' : '#e2e8f0', flex: 1 }} dangerouslySetInnerHTML={{ __html: formattedMsg }}></span>
+                          <span style={{ color: log.sender === 'USER' ? '#fdf2f8' : '#e2e8f0', flex: 1 }}>{formattedMsg}</span>
                         </div>
                       );
                     })}
