@@ -48,6 +48,16 @@ async def test_llm_async_returns_none_on_failure(mock_gemini):
 
 
 @patch.object(ResilientLLMClient, "_call_gemini", new_callable=AsyncMock)
+async def test_llm_sync_dentro_de_contexto_async_retorna_none(mock_gemini):
+    """generate_text() síncrono em event loop ativo → RuntimeError → None."""
+    mock_gemini.return_value = _resposta_ok()
+
+    client = ResilientLLMClient(primary_key="k1")
+    # Estamos dentro de um teste async (loop rodando): asyncio.run deve falhar
+    assert client.generate_text("teste") is None
+
+
+@patch.object(ResilientLLMClient, "_call_gemini", new_callable=AsyncMock)
 async def test_llm_async_uses_primary(mock_gemini):
     mock_gemini.return_value = _resposta_ok("async ok")
 
