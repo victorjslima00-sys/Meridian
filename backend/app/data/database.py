@@ -19,6 +19,11 @@ def hoje_b3() -> datetime.date:
     return datetime.datetime.now(TZ_B3).date()
 
 
+def now_b3() -> datetime.datetime:
+    """Datetime timezone-aware no fuso da B3 (para heartbeat do worker)."""
+    return datetime.datetime.now(TZ_B3)
+
+
 def get_connection(isolation_level=None):
     conn = sqlite3.connect(DB_PATH, isolation_level=isolation_level)
     conn.execute("PRAGMA journal_mode=WAL;")
