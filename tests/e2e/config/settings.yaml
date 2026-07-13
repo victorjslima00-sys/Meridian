@@ -33,10 +33,11 @@ risk:
   brokerage_pct: 0.0003
   spread_est_pct: 0.0002
   min_tick: 0.01
+  # Valores POSITIVOS (o código aplica o sinal negativo internamente)
   circuit_breaker:
-    daily_loss_limit: -0.030
-    drawdown_inception: -0.080
-    drawdown_rolling_30d: -0.060
+    daily_loss_limit: 0.030
+    drawdown_inception: 0.080
+    drawdown_rolling_30d: 0.060
 
 execution:
   mode: "manual"

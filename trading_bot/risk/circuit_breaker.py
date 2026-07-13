@@ -23,25 +23,39 @@ class CircuitBreaker:
         drawdown_inception: float = 0.20,
         drawdown_rolling_30d: float = 0.15
     ):
+        # FAIL-FAST: threshold com sinal errado inverte a lógica do check()
+        # (dispararia sempre) — melhor recusar a config do que operar com ela.
+        for nome, valor in (
+            ("daily_loss_limit", daily_loss_limit),
+            ("drawdown_inception", drawdown_inception),
+            ("drawdown_rolling_30d", drawdown_rolling_30d),
+        ):
+            if not isinstance(valor, (int, float)) or not 0 < valor <= 0.5:
+                raise ValueError(
+                    f"Circuit breaker: {nome}={valor!r} inválido — "
+                    "esperado número em (0, 0.5]. Corrija risk.circuit_breaker "
+                    "no settings.yaml (valores POSITIVOS)."
+                )
         self.daily_loss_limit = daily_loss_limit
         self.drawdown_inception = drawdown_inception
         self.drawdown_rolling_30d = drawdown_rolling_30d
 
     @classmethod
     def from_config(cls) -> "CircuitBreaker":
-        """Instancia com os limites de config/settings.yaml (risk.circuit_breaker)."""
-        try:
-            from trading_bot.core.config import AppConfig
-            cb_cfg = AppConfig.load().get("risk", "circuit_breaker", default={}) or {}
-            # abs(): alguns configs guardam os limites como negativos
-            return cls(
-                daily_loss_limit=abs(cb_cfg.get("daily_loss_limit", 0.05)),
-                drawdown_inception=abs(cb_cfg.get("drawdown_inception", 0.20)),
-                drawdown_rolling_30d=abs(cb_cfg.get("drawdown_rolling_30d", 0.15)),
-            )
-        except Exception as e:
-            logger.error(f"Erro ao carregar config do circuit breaker, usando defaults: {e}")
-            return cls()
+        """
+        Instancia com os limites de config/settings.yaml (risk.circuit_breaker).
+        Chaves ausentes usam os defaults do construtor; valores inválidos ou
+        falha ao carregar a config levantam exceção (fail-fast) — os chamadores
+        tratam exceção como bloqueio de novas entradas (fail-closed).
+        """
+        from trading_bot.core.config import AppConfig
+        cb_cfg = AppConfig.load().get("risk", "circuit_breaker", default={}) or {}
+        kwargs = {
+            nome: cb_cfg[nome]
+            for nome in ("daily_loss_limit", "drawdown_inception", "drawdown_rolling_30d")
+            if nome in cb_cfg
+        }
+        return cls(**kwargs)
 
     def check(
         self,

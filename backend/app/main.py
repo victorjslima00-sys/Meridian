@@ -334,6 +334,10 @@ async def ai_committee_worker():
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    # FAIL-FAST: config de risco inválida derruba o boot com erro claro,
+    # em vez de deixar o bot operar com thresholds quebrados.
+    from trading_bot.risk.circuit_breaker import CircuitBreaker
+    CircuitBreaker.from_config()
     asyncio.create_task(ai_committee_worker())
 
 
