@@ -37,7 +37,8 @@ class TestTelegramNotifier(unittest.TestCase):
                     "callback_query": {
                         "id": "cb_1",
                         "data": "approve",
-                        "message": {"message_id": 123}
+                        "message": {"message_id": 123},
+                        "from": {"id": "fake_chat_id"}
                     }
                 }
             ]
@@ -69,7 +70,8 @@ class TestTelegramNotifier(unittest.TestCase):
                     "callback_query": {
                         "id": "cb_1",
                         "data": "reject",
-                        "message": {"message_id": 123}
+                        "message": {"message_id": 123},
+                        "from": {"id": "fake_chat_id"}
                     }
                 }
             ]
@@ -80,6 +82,49 @@ class TestTelegramNotifier(unittest.TestCase):
         
         self.assertFalse(result)
         self.assertEqual(mock_post.call_count, 2)
+
+    @patch("trading_bot.core.telegram.requests.post")
+    @patch("trading_bot.core.telegram.requests.get")
+    @patch("trading_bot.core.telegram.time.sleep")
+    @patch("trading_bot.core.telegram.time.time")
+    def test_ask_for_approval_ignora_usuario_nao_autorizado(
+        self, mock_time, mock_sleep, mock_get, mock_post
+    ):
+        """Callback 'approve' de outro usuário (ou sem 'from') NÃO pode aprovar.
+
+        Protege a verificação de autoria adicionada em febfb52: se ela for
+        removida, este teste falha (a aprovação indevida passaria).
+        """
+        # 1ª iteração processa o callback intruso; 2ª checagem estoura o timeout
+        mock_time.side_effect = [0, 1, 70]
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.raise_for_status.return_value = None
+        mock_post_resp.json.return_value = {"result": {"message_id": 123}}
+        mock_post.return_value = mock_post_resp
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.raise_for_status.return_value = None
+        mock_get_resp.json.return_value = {
+            "result": [
+                {
+                    "update_id": 1,
+                    "callback_query": {
+                        "id": "cb_1",
+                        "data": "approve",
+                        "message": {"message_id": 123},
+                        "from": {"id": "intruso_999"}
+                    }
+                }
+            ]
+        }
+        mock_get.return_value = mock_get_resp
+
+        result = self.notifier.ask_for_approval("Approve order?", 1)
+
+        self.assertFalse(result)
+        # answerCallbackQuery não deve ser chamado: só o sendMessage inicial
+        self.assertEqual(mock_post.call_count, 1)
 
     @patch("trading_bot.core.telegram.requests.post")
     @patch("trading_bot.core.telegram.requests.get")

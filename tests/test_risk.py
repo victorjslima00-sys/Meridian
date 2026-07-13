@@ -39,6 +39,27 @@ def test_circuit_breaker_drawdown_30d():
     assert "Drawdown 30d" in status.reason
 
 
+def test_circuit_breaker_rejeita_threshold_negativo():
+    """Sinal errado inverteria a lógica do check() — deve falhar na construção."""
+    with pytest.raises(ValueError, match="daily_loss_limit"):
+        CircuitBreaker(daily_loss_limit=-0.03)
+
+
+def test_circuit_breaker_rejeita_threshold_implausivel():
+    with pytest.raises(ValueError, match="drawdown_inception"):
+        CircuitBreaker(drawdown_inception=0.9)
+    with pytest.raises(ValueError, match="drawdown_rolling_30d"):
+        CircuitBreaker(drawdown_rolling_30d=0)
+
+
+def test_circuit_breaker_from_config_carrega_valores_do_yaml():
+    """Config do repo tem valores válidos e positivos — from_config deve aceitar."""
+    cb = CircuitBreaker.from_config()
+    assert 0 < cb.daily_loss_limit <= 0.5
+    assert 0 < cb.drawdown_inception <= 0.5
+    assert 0 < cb.drawdown_rolling_30d <= 0.5
+
+
 def test_circuit_breaker_equity_30d_zero_skips():
     """equity_30d_ago=0 nao deve causar divisao por zero."""
     cb = CircuitBreaker(daily_loss_limit=0.05, drawdown_inception=0.20)

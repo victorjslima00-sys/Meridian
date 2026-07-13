@@ -156,6 +156,56 @@ class TestMarketAnalyst:
 
 class TestRiskManager:
 
+    @pytest.fixture(autouse=True)
+    def _breaker_liberado(self):
+        # O breaker agora é FAIL-CLOSED: sem equity_snapshots ele bloqueia tudo.
+        # Estes testes cobrem a lógica de Kelly/correlação, então liberamos o gate.
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade",
+            return_value=True,
+        ):
+            yield
+
+    def test_rejeita_quando_circuit_breaker_ativo(self):
+        from backend.app.agents.risk_manager import RiskManager
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade",
+            return_value=False,
+        ):
+            result = RiskManager(saldo_livre=1000.0).evaluate_trade(
+                {
+                    "signal": "BUY",
+                    "last_price": 50000.0,
+                    "target_price": 55000.0,
+                    "stop_loss": 48000.0,
+                    "confidence": 70,
+                },
+                ticker="BTC-USD",
+                open_tickers=[],
+            )
+        assert result["approved"] is False
+        assert "Circuit Breaker" in result["reason"]
+
+    def test_rejeita_fail_closed_quando_breaker_lanca_excecao(self):
+        from backend.app.agents.risk_manager import RiskManager
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade",
+            side_effect=RuntimeError("db indisponível"),
+        ):
+            result = RiskManager(saldo_livre=1000.0).evaluate_trade(
+                {
+                    "signal": "BUY",
+                    "last_price": 50000.0,
+                    "target_price": 55000.0,
+                    "stop_loss": 48000.0,
+                    "confidence": 70,
+                },
+                ticker="BTC-USD",
+                open_tickers=[],
+            )
+        assert result["approved"] is False
+        assert "fail-closed" in result["reason"]
+
     def test_approves_trade_with_sufficient_capital(self):
         from backend.app.agents.risk_manager import RiskManager
         result = RiskManager(saldo_livre=1000.0).evaluate_trade(

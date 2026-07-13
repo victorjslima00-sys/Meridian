@@ -1,0 +1,12 @@
+# Regras do projeto Meridian
+
+- Este é um bot de trading B3 em PAPER TRADING. Nunca implementar envio real de ordens sem instrução explícita do usuário.
+- FAIL-CLOSED: se filtro de risco, circuit breaker ou feed não tiver dado confiável, BLOQUEAR novas entradas (gerenciar saídas é permitido).
+- Toda resposta de LLM e entrada externa validada com Pydantic e invariantes semânticas (em BUY: stop_loss < preço < target_price).
+- Uma fonte de verdade: execution.mode vem só de config/settings.yaml.
+- Sem segredos hardcoded e sem defaults inseguros de API key.
+- Escritas em portfolio/trades numa única transação.
+- Loops autônomos nunca morrem em silêncio (try/except + alerta Telegram + heartbeat).
+- Backtest sem look-ahead (sinais só com ts < current_date).
+- Bugfix = primeiro teste que reproduz o bug e falha, depois correção, depois suíte inteira verde: `PYTHONPATH=. pytest tests/ --ignore=tests/e2e`
+- Não commitar data/*.db, .env, *.pem. Não tocar em .agents/.
