@@ -37,7 +37,8 @@ class TestTelegramNotifier(unittest.TestCase):
                     "callback_query": {
                         "id": "cb_1",
                         "data": "approve",
-                        "message": {"message_id": 123}
+                        "message": {"message_id": 123},
+                        "from": {"id": "fake_chat_id"}
                     }
                 }
             ]
@@ -69,7 +70,8 @@ class TestTelegramNotifier(unittest.TestCase):
                     "callback_query": {
                         "id": "cb_1",
                         "data": "reject",
-                        "message": {"message_id": 123}
+                        "message": {"message_id": 123},
+                        "from": {"id": "fake_chat_id"}
                     }
                 }
             ]
