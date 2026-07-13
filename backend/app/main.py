@@ -48,6 +48,7 @@ def get_status():
 
 
 import sqlite3
+import logging
 from .data.database import (
     get_portfolio,
     get_trades,
@@ -55,7 +56,27 @@ from .data.database import (
     depositar_no_disponivel,
     retirar_do_disponivel,
     DB_PATH,
+    hoje_b3,
+    has_snapshot_for,
+    compute_current_equity,
+    save_equity_snapshot,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _alerta_telegram(msg: str) -> None:
+    """Alerta best-effort via Telegram; nunca derruba o worker."""
+    try:
+        from trading_bot.core.config import AppConfig
+        from trading_bot.core.telegram import TelegramNotifier
+        cfg = AppConfig.load()
+        TelegramNotifier(
+            cfg.get("notifications", "telegram_bot_token", default=""),
+            cfg.get("notifications", "telegram_chat_id", default=""),
+        ).send_message(msg)
+    except Exception as e:
+        logger.error(f"Falha ao enviar alerta Telegram: {e}")
 
 from .agents.market_analyst import MarketAnalyst
 from .agents.risk_manager import RiskManager
@@ -77,6 +98,42 @@ async def ai_committee_worker():
     while True:
         await asyncio.sleep(5)  # start 5s after boot
         print("Starting AI committee scan loop...", flush=True)
+
+        # Snapshot diário de equity (data do pregão B3) — base do circuit breaker
+        try:
+            hoje = hoje_b3()
+            if not has_snapshot_for(hoje):
+                equity = await asyncio.to_thread(compute_current_equity)
+                save_equity_snapshot(hoje, equity)
+                await broadcast_log(
+                    "System", f"Equity snapshot {hoje}: R$ {equity:.2f}", "info"
+                )
+        except Exception as e:
+            logger.error(f"Falha no snapshot diário de equity: {e}")
+            await broadcast_log(
+                "System", f"Falha no snapshot diário de equity: {e}", "error"
+            )
+            await asyncio.to_thread(
+                _alerta_telegram, f"⚠️ [Meridian] Falha no snapshot diário de equity: {e}"
+            )
+
+        # Circuit breaker: avaliado 1x por ciclo. FAIL-CLOSED: erro = bloqueia
+        # novas entradas; a fase de saída (Phase 1) roda sempre.
+        try:
+            from trading_bot.risk.circuit_breaker import CircuitBreaker
+            entradas_liberadas = await asyncio.to_thread(
+                CircuitBreaker.from_config().can_trade
+            )
+        except Exception as e:
+            logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entradas.")
+            entradas_liberadas = False
+        if not entradas_liberadas:
+            await broadcast_log(
+                "System",
+                "Circuit breaker ativo: novas entradas bloqueadas (gestão de saídas segue normal).",
+                "warning",
+            )
+
         for ticker in tickers_to_watch:
             print(f"Scanning {ticker}...", flush=True)
 
@@ -211,6 +268,8 @@ async def ai_committee_worker():
                 conn.close()
 
             # --- PHASE 2: ENTRY LOOP (Find New Opportunities) ---
+            if not entradas_liberadas:
+                continue
             await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
             await asyncio.sleep(2)
 
@@ -341,6 +400,19 @@ class TradeRequest(BaseModel):
 def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_key)):
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantidade deve ser maior que 0")
+
+    # Entrada nova também respeita o circuit breaker (FAIL-CLOSED)
+    try:
+        from trading_bot.risk.circuit_breaker import CircuitBreaker
+        entradas_liberadas = CircuitBreaker.from_config().can_trade()
+    except Exception as e:
+        logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entrada manual.")
+        entradas_liberadas = False
+    if not entradas_liberadas:
+        raise HTTPException(
+            status_code=423,
+            detail="Circuit breaker ativo: novas entradas bloqueadas (fail-closed).",
+        )
 
     from .data.database import get_portfolio
 

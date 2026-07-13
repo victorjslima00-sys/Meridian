@@ -1,11 +1,22 @@
+import logging
 import sqlite3
 import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 # Raiz do projeto = 3 níveis acima de backend/app/data/
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DB_PATH = str(PROJECT_ROOT / "data" / "trading_bot.db")
+
+# Datas de snapshot alinhadas ao pregão da B3, não a UTC
+TZ_B3 = ZoneInfo("America/Sao_Paulo")
+
+
+def hoje_b3() -> datetime.date:
+    return datetime.datetime.now(TZ_B3).date()
 
 
 def get_connection(isolation_level=None):
@@ -74,6 +85,17 @@ def init_db():
             exit_reason TEXT,
             ai_rationale TEXT,
             status TEXT
+        )
+        """
+        )
+
+        # Equity Snapshots — 1 registro por dia de pregão (data em America/Sao_Paulo)
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS equity_snapshots (
+            date       TEXT PRIMARY KEY,
+            equity     REAL NOT NULL,
+            created_at TIMESTAMP
         )
         """
         )
@@ -283,3 +305,128 @@ def get_risk_metrics() -> Dict[str, float]:
         }
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Equity Snapshots — base do Circuit Breaker (drawdowns reais)
+# ---------------------------------------------------------------------------
+
+def compute_current_equity() -> float:
+    """
+    Equity real = caixa livre (saldo_disponivel - em_posicoes)
+                + valor mark-to-market das posições ativas (shares × preço atual).
+    Se o feed falhar para um ticker (preço 0.0), usa entry_price como fallback —
+    nesse caso a parcela degrada para o capital alocado na entrada.
+    """
+    from .feed import get_current_price
+
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1"
+        )
+        pf = cursor.fetchone()
+        if not pf:
+            raise RuntimeError("Portfolio não encontrado para cálculo de equity.")
+        caixa_livre = (pf["saldo_disponivel"] or 0.0) - (pf["em_posicoes"] or 0.0)
+
+        cursor.execute(
+            "SELECT ticker, shares, entry_price FROM trades WHERE status = 'active'"
+        )
+        posicoes = cursor.fetchall()
+    finally:
+        conn.close()
+
+    mtm = 0.0
+    for pos in posicoes:
+        price = get_current_price(pos["ticker"])
+        if price <= 0:
+            price = pos["entry_price"] or 0.0
+        mtm += (pos["shares"] or 0.0) * price
+
+    return round(caixa_livre + mtm, 4)
+
+
+def save_equity_snapshot(snapshot_date: datetime.date, equity: float) -> None:
+    """Grava (ou substitui) o snapshot de equity do dia numa transação única."""
+    conn = get_connection(isolation_level="IMMEDIATE")
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO equity_snapshots (date, equity, created_at) VALUES (?, ?, ?)",
+            (
+                snapshot_date.isoformat(),
+                equity,
+                datetime.datetime.now(TZ_B3).isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def has_snapshot_for(snapshot_date: datetime.date) -> bool:
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM equity_snapshots WHERE date = ? LIMIT 1",
+            (snapshot_date.isoformat(),),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def get_equity_refs(ref_date: Optional[datetime.date] = None) -> Optional[Dict[str, float]]:
+    """
+    Referências de equity para o Circuit Breaker, a partir dos snapshots:
+      - initial: snapshot mais antigo (inception)
+      - start_of_day: snapshot de ref_date (gravado no início do dia); se ainda
+        não existir, o mais recente anterior a ref_date
+      - equity_30d: snapshot mais recente com date <= ref_date - 30 dias;
+        com histórico curto, usa o mais antigo disponível como proxy
+    Retorna None se não houver NENHUM snapshot (chamador deve tratar como
+    fail-closed).
+    """
+    if ref_date is None:
+        ref_date = hoje_b3()
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT equity FROM equity_snapshots ORDER BY date ASC LIMIT 1")
+        row = cursor.fetchone()
+        if not row:
+            return None
+        initial = row[0]
+
+        cursor.execute(
+            "SELECT equity FROM equity_snapshots WHERE date <= ? ORDER BY date DESC LIMIT 1",
+            (ref_date.isoformat(),),
+        )
+        row = cursor.fetchone()
+        if not row:
+            # Só existem snapshots futuros a ref_date — sem referência confiável
+            return None
+        start_of_day = row[0]
+
+        cutoff_30d = (ref_date - datetime.timedelta(days=30)).isoformat()
+        cursor.execute(
+            "SELECT equity FROM equity_snapshots WHERE date <= ? ORDER BY date DESC LIMIT 1",
+            (cutoff_30d,),
+        )
+        row = cursor.fetchone()
+        # Histórico curto: snapshot mais antigo serve de proxy para 30d atrás
+        equity_30d = row[0] if row else initial
+    finally:
+        conn.close()
+
+    return {
+        "initial": initial,
+        "start_of_day": start_of_day,
+        "equity_30d": equity_30d,
+    }

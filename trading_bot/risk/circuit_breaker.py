@@ -27,6 +27,22 @@ class CircuitBreaker:
         self.drawdown_inception = drawdown_inception
         self.drawdown_rolling_30d = drawdown_rolling_30d
 
+    @classmethod
+    def from_config(cls) -> "CircuitBreaker":
+        """Instancia com os limites de config/settings.yaml (risk.circuit_breaker)."""
+        try:
+            from trading_bot.core.config import AppConfig
+            cb_cfg = AppConfig.load().get("risk", "circuit_breaker", default={}) or {}
+            # abs(): alguns configs guardam os limites como negativos
+            return cls(
+                daily_loss_limit=abs(cb_cfg.get("daily_loss_limit", 0.05)),
+                drawdown_inception=abs(cb_cfg.get("drawdown_inception", 0.20)),
+                drawdown_rolling_30d=abs(cb_cfg.get("drawdown_rolling_30d", 0.15)),
+            )
+        except Exception as e:
+            logger.error(f"Erro ao carregar config do circuit breaker, usando defaults: {e}")
+            return cls()
+
     def check(
         self,
         current_equity: float,
@@ -69,27 +85,34 @@ class CircuitBreaker:
     def can_trade(self, ref_date=None) -> bool:
         """
         Retorna True se o circuit breaker NÃO está disparado (seguro para operar).
+
+        FAIL-CLOSED: sem snapshots de equity suficientes ou com erro de banco,
+        retorna False (bloqueia novas entradas; gestão de saídas não passa por aqui).
         """
-        import sys
-        import os
-        from pathlib import Path
-        
-        # Add backend to path dynamically if needed, or just import
         try:
-            from backend.app.data.database import get_portfolio
-            portfolio = get_portfolio()
-            current_equity = portfolio.get('patrimonio_total', 1.0)
-            if current_equity <= 0:
-                current_equity = 1.0
+            from backend.app.data.database import compute_current_equity, get_equity_refs
+
+            refs = get_equity_refs(ref_date)
+            if refs is None:
+                logger.warning(
+                    "CIRCUIT BREAKER FAIL-CLOSED: nenhum equity_snapshot disponível — "
+                    "bloqueando novas entradas até o primeiro snapshot do dia."
+                )
+                return False
+
+            current_equity = compute_current_equity()
         except Exception as e:
-            logger.error(f"Erro ao buscar portfolio real, usando fallback neutro: {e}")
-            current_equity = 1.0
-            
+            logger.error(
+                f"CIRCUIT BREAKER FAIL-CLOSED: erro ao obter equity/snapshots ({e}) — "
+                "bloqueando novas entradas."
+            )
+            return False
+
         status = self.check(
             current_equity=current_equity,
-            initial_equity=current_equity,  # TODO: We need real initial equity logic later
-            equity_start_of_day=current_equity,
-            equity_30d_ago=current_equity,
+            initial_equity=refs["initial"],
+            equity_start_of_day=refs["start_of_day"],
+            equity_30d_ago=refs["equity_30d"],
         )
         if status.triggered:
             logger.warning(f"CIRCUIT BREAKER ACIONADO: {status.reason}")
