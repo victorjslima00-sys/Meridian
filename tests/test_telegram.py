@@ -95,8 +95,14 @@ class TestTelegramNotifier(unittest.TestCase):
         Protege a verificação de autoria adicionada em febfb52: se ela for
         removida, este teste falha (a aprovação indevida passaria).
         """
-        # 1ª iteração processa o callback intruso; 2ª checagem estoura o timeout
-        mock_time.side_effect = [0, 1, 70]
+        # 1ª iteração processa o callback intruso; depois o loop estoura o timeout.
+        # side_effect como callable (não lista fixa): retorna 0, depois 1, e daí
+        # em diante sempre 70. Assim o teste é imune a chamadas extras de
+        # time.time() — ex.: LogRecord.__init__ chama time.time() no Python 3.11
+        # (no 3.13 usa time.time_ns()), o que drenava a lista fixa e causava
+        # StopIteration só no 3.11. Ver root cause no PR #3.
+        _times = iter([0, 1])
+        mock_time.side_effect = lambda: next(_times, 70)
 
         mock_post_resp = MagicMock()
         mock_post_resp.raise_for_status.return_value = None
