@@ -1,0 +1,16 @@
+# Dependências de desenvolvimento / CI (teste, lint, pesquisa).
+# NÃO são instaladas em produção — o deploy usa apenas requirements.txt.
+# Instale com: pip install -r requirements-dev.txt
+-r requirements.txt
+
+# Pesquisa / otimização: usada só em trading_bot/signals/optimizer.py,
+# que é importado APENAS por tests/test_optimizer.py — nunca pelo backend
+# em runtime. Não declará-la aqui quebrava a coleção do pytest no CI.
+genetic_algorithm==1.0.0
+
+# Lint (tests/test_lint.py usa flake8.api).
+flake8==7.1.1
+
+# Ferramentas de teste (cobertura e cliente HTTP para TestClient/httpx).
+pytest-cov
+httpx
