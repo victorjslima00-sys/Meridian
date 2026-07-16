@@ -21,7 +21,11 @@ class TestTelegramNotifier(unittest.TestCase):
     @patch("trading_bot.core.telegram.time.sleep")
     @patch("trading_bot.core.telegram.time.time")
     def test_ask_for_approval_approve(self, mock_time, mock_sleep, mock_get, mock_post):
-        mock_time.side_effect = [0, 1]
+        # side_effect como callable (não lista fixa): 0, depois 1, e daí em diante
+        # sempre 70 (>60s → timeout). Imune a chamadas extras de time.time() —
+        # ex.: LogRecord.__init__ chama time.time() no Python <=3.12. Ver PR #3.
+        _times = iter([0, 1])
+        mock_time.side_effect = lambda: next(_times, 70)
 
         mock_post_resp = MagicMock()
         mock_post_resp.raise_for_status.return_value = None
@@ -56,7 +60,10 @@ class TestTelegramNotifier(unittest.TestCase):
     @patch("trading_bot.core.telegram.time.sleep")
     @patch("trading_bot.core.telegram.time.time")
     def test_ask_for_approval_reject(self, mock_time, mock_sleep, mock_get, mock_post):
-        mock_time.side_effect = [0, 1]
+        # side_effect como callable (não lista fixa): 0, depois 1, e daí em diante
+        # sempre 70 (>60s → timeout). Imune a chamadas extras de time.time(). Ver PR #3.
+        _times = iter([0, 1])
+        mock_time.side_effect = lambda: next(_times, 70)
 
         mock_post_resp = MagicMock()
         mock_post_resp.json.return_value = {"result": {"message_id": 123}}
@@ -137,7 +144,11 @@ class TestTelegramNotifier(unittest.TestCase):
     @patch("trading_bot.core.telegram.time.sleep")
     @patch("trading_bot.core.telegram.time.time")
     def test_ask_for_approval_timeout(self, mock_time, mock_sleep, mock_get, mock_post):
-        mock_time.side_effect = [0, 10, 30, 70] # timeout_minutes=1 is 60s, so 70 > 60, breaks loop
+        # side_effect como callable (não lista fixa): start=0, dois polls dentro do
+        # timeout (10, 30) e daí em diante sempre 70 (>60s → sai do loop). Imune a
+        # chamadas extras de time.time(). Mantém 2 polls. Ver PR #3.
+        _times = iter([0, 10, 30])
+        mock_time.side_effect = lambda: next(_times, 70)
 
         mock_post_resp = MagicMock()
         mock_post_resp.json.return_value = {"result": {"message_id": 123}}
