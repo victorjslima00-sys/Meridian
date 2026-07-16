@@ -3,9 +3,38 @@ from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import random
+from contextlib import asynccontextmanager, suppress
 from pydantic import BaseModel
 
-app = FastAPI(title="Meridian AI Core")
+from . import worker_state
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Ciclo de vida da app (substitui @app.on_event, deprecated).
+    Sobe o worker supervisionado; no shutdown, cancela a task limpo.
+    """
+    from .data.database import init_db
+    init_db()
+    # FAIL-FAST: config de risco inválida derruba o boot com erro claro,
+    # em vez de deixar o bot operar com thresholds quebrados.
+    from trading_bot.risk.circuit_breaker import CircuitBreaker
+    CircuitBreaker.from_config()
+
+    worker_state.state.mark_starting()
+    task = asyncio.create_task(worker_supervisor())
+    task.add_done_callback(_log_if_supervisor_died)
+    app.state.worker_task = task
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title="Meridian AI Core", lifespan=lifespan)
 
 import os
 
@@ -39,10 +68,15 @@ def verify_api_key(api_key: str = Security(api_key_header)):
 
 @app.get("/api/status")
 def get_status():
+    # Reflete o estado real do worker: nunca "online" com o loop morto/stale.
+    snap = worker_state.state.snapshot()
     return {
-        "status": "online",
+        "status": snap["status"],           # online | degraded | stopped
         "mode": "paper_trading",
-        "uptime": "99.9%",
+        "worker_alive": snap["worker_alive"],
+        "worker_status": snap["worker_status"],
+        "last_scan_at": snap["last_scan_at"],
+        "restart_count": snap["restart_count"],
         "active_agents": 3,
     }
 
@@ -83,10 +117,15 @@ from .agents.risk_manager import RiskManager
 from .agents.executor import ExecutorAgent
 
 
-async def ai_committee_worker():
+async def _run_one_scan_cycle():
     """
-    Continuous loop that runs the AI Committee every 60 seconds.
+    Uma iteração completa do comitê: snapshot diário de equity, avaliação do
+    circuit breaker e varredura de todos os tickers (PHASE 1 saídas + PHASE 2
+    entradas). Isolada em função própria para que ai_committee_worker() possa
+    envolvê-la em try/except sem que uma falha pontual derrube o loop.
     """
+    print("Starting AI committee scan loop...", flush=True)
+
     try:
         from trading_bot.core.config import AppConfig
         cfg = AppConfig.load()
@@ -95,250 +134,305 @@ async def ai_committee_worker():
     except Exception:
         tickers_to_watch = ["PETR4.SA", "VALE3.SA"]
 
-    while True:
-        await asyncio.sleep(5)  # start 5s after boot
-        print("Starting AI committee scan loop...", flush=True)
+    # Snapshot diário de equity (data do pregão B3) — base do circuit breaker
+    try:
+        hoje = hoje_b3()
+        if not has_snapshot_for(hoje):
+            equity = await asyncio.to_thread(compute_current_equity)
+            save_equity_snapshot(hoje, equity)
+            await broadcast_log(
+                "System", f"Equity snapshot {hoje}: R$ {equity:.2f}", "info"
+            )
+    except Exception as e:
+        logger.error(f"Falha no snapshot diário de equity: {e}")
+        await broadcast_log(
+            "System", f"Falha no snapshot diário de equity: {e}", "error"
+        )
+        await asyncio.to_thread(
+            _alerta_telegram, f"⚠️ [Meridian] Falha no snapshot diário de equity: {e}"
+        )
 
-        # Snapshot diário de equity (data do pregão B3) — base do circuit breaker
+    # Circuit breaker: avaliado 1x por ciclo. FAIL-CLOSED: erro = bloqueia
+    # novas entradas; a fase de saída (Phase 1) roda sempre.
+    try:
+        from trading_bot.risk.circuit_breaker import CircuitBreaker
+        entradas_liberadas = await asyncio.to_thread(
+            CircuitBreaker.from_config().can_trade
+        )
+    except Exception as e:
+        logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entradas.")
+        entradas_liberadas = False
+    if not entradas_liberadas:
+        await broadcast_log(
+            "System",
+            "Circuit breaker ativo: novas entradas bloqueadas (gestão de saídas segue normal).",
+            "warning",
+        )
+
+    for ticker in tickers_to_watch:
+        print(f"Scanning {ticker}...", flush=True)
+
+        # Use data feed to get the latest price directly for evaluation
+        from .data.feed import fetch_recent_data
+
+        df_recent = await asyncio.to_thread(fetch_recent_data, ticker, period="1d", interval="15m")
+        if df_recent is None or len(df_recent) == 0:
+            continue
+        current_price = df_recent.iloc[-1]["close"]
+
+        # Database connection
+        from .data.database import get_connection
+        conn = get_connection()
         try:
-            hoje = hoje_b3()
-            if not has_snapshot_for(hoje):
-                equity = await asyncio.to_thread(compute_current_equity)
-                save_equity_snapshot(hoje, equity)
-                await broadcast_log(
-                    "System", f"Equity snapshot {hoje}: R$ {equity:.2f}", "info"
+            cursor = conn.cursor()
+
+            # --- PHASE 1: EXIT LOOP (Manage Open Positions) ---
+            cursor.execute(
+                "SELECT id, side, entry_price, target_price, stop_loss FROM trades WHERE ticker = ? AND status = 'active'",
+                (ticker,),
+            )
+            active_trade = cursor.fetchone()
+
+            if active_trade:
+                trade_id, side, entry_price, target_price, stop_loss = active_trade
+
+                close_trade = False
+                close_reason = ""
+
+                # Update live PnL in the database so the frontend can display it
+                if entry_price > 0:
+                    live_pnl_pct = (
+                        ((current_price - entry_price) / entry_price) * 100
+                        if side == "BUY"
+                        else ((entry_price - current_price) / entry_price) * 100
+                    )
+                else:
+                    live_pnl_pct = 0.0
+                cursor.execute(
+                    "UPDATE trades SET pnl_pct = ? WHERE id = ?",
+                    (live_pnl_pct, trade_id),
                 )
-        except Exception as e:
-            logger.error(f"Falha no snapshot diário de equity: {e}")
-            await broadcast_log(
-                "System", f"Falha no snapshot diário de equity: {e}", "error"
-            )
-            await asyncio.to_thread(
-                _alerta_telegram, f"⚠️ [Meridian] Falha no snapshot diário de equity: {e}"
-            )
+                conn.commit()
 
-        # Circuit breaker: avaliado 1x por ciclo. FAIL-CLOSED: erro = bloqueia
-        # novas entradas; a fase de saída (Phase 1) roda sempre.
-        try:
-            from trading_bot.risk.circuit_breaker import CircuitBreaker
-            entradas_liberadas = await asyncio.to_thread(
-                CircuitBreaker.from_config().can_trade
-            )
-        except Exception as e:
-            logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entradas.")
-            entradas_liberadas = False
+                # Breakeven Logic (50% to target)
+                if (
+                    side == "BUY"
+                    and target_price > entry_price
+                    and stop_loss < entry_price
+                ):
+                    halfway = entry_price + (target_price - entry_price) * 0.5
+                    if current_price >= halfway:
+                        cursor.execute(
+                            "UPDATE trades SET stop_loss = ? WHERE id = ?",
+                            (entry_price, trade_id),
+                        )
+                        conn.commit()
+                        stop_loss = entry_price
+                        await broadcast_log(
+                            "RiskManager",
+                            f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
+                            "success",
+                        )
+                elif (
+                    side == "SELL"
+                    and target_price < entry_price
+                    and stop_loss > entry_price
+                ):
+                    halfway = entry_price - (entry_price - target_price) * 0.5
+                    if current_price <= halfway:
+                        cursor.execute(
+                            "UPDATE trades SET stop_loss = ? WHERE id = ?",
+                            (entry_price, trade_id),
+                        )
+                        conn.commit()
+                        stop_loss = entry_price
+                        await broadcast_log(
+                            "RiskManager",
+                            f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
+                            "success",
+                        )
+
+                # Basic Stop Loss / Take Profit Logic
+                if side == "BUY":
+                    if target_price > 0 and current_price >= target_price:
+                        close_trade, close_reason = (
+                            True,
+                            f"Take Profit hit at {current_price}",
+                        )
+                    elif stop_loss > 0 and current_price <= stop_loss:
+                        close_trade, close_reason = (
+                            True,
+                            f"Stop Loss hit at {current_price}",
+                        )
+                elif side == "SELL":
+                    if target_price > 0 and current_price <= target_price:
+                        close_trade, close_reason = (
+                            True,
+                            f"Take Profit hit at {current_price}",
+                        )
+                    elif stop_loss > 0 and current_price >= stop_loss:
+                        close_trade, close_reason = (
+                            True,
+                            f"Stop Loss hit at {current_price}",
+                        )
+
+                if close_trade:
+                    await broadcast_log(
+                        "System",
+                        f"Closing active trade on {ticker}: {close_reason}",
+                        "warning",
+                    )
+                    executor = ExecutorAgent()
+                    res = executor.close_order(
+                        trade_id, current_price, close_reason
+                    )
+                    await broadcast_log(
+                        "ExecutorAgent",
+                        f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
+                        "success",
+                    )
+                else:
+                    await broadcast_log(
+                        "System",
+                        f"{ticker} já possui posição aberta. Monitorando (Current: {current_price})...",
+                        "info",
+                    )
+
+                continue
+        finally:
+            conn.close()
+
+        # --- PHASE 2: ENTRY LOOP (Find New Opportunities) ---
         if not entradas_liberadas:
+            continue
+        await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
+        await asyncio.sleep(2)
+
+        # 1. Analyst (now uses Gemini async)
+        analyst = MarketAnalyst(ticker)
+        analysis = await analyst.analyze()
+        await broadcast_log(
+            "MarketAnalyst",
+            f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}",
+            "info",
+        )
+        await asyncio.sleep(2)
+
+        # 2. Risk Manager (com checagem de correlação)
+        if analysis["signal"] != "HOLD":
             await broadcast_log(
-                "System",
-                "Circuit breaker ativo: novas entradas bloqueadas (gestão de saídas segue normal).",
+                "RiskManager",
+                f"Evaluating {analysis['signal']} on {ticker}...",
                 "warning",
             )
+            pf = get_portfolio()
+            saldo_livre = pf.get("saldo_livre", 0.0)
 
-        for ticker in tickers_to_watch:
-            print(f"Scanning {ticker}...", flush=True)
-
-            # Use data feed to get the latest price directly for evaluation
-            from .data.feed import fetch_recent_data
-
-            df_recent = await asyncio.to_thread(fetch_recent_data, ticker, period="1d", interval="15m")
-            if df_recent is None or len(df_recent) == 0:
-                continue
-            current_price = df_recent.iloc[-1]["close"]
-
-            # Database connection
+            # Buscar todos os tickers com posição ativa para checar correlação
             from .data.database import get_connection
-            conn = get_connection()
+            _conn = get_connection()
             try:
-                cursor = conn.cursor()
-
-                # --- PHASE 1: EXIT LOOP (Manage Open Positions) ---
-                cursor.execute(
-                    "SELECT id, side, entry_price, target_price, stop_loss FROM trades WHERE ticker = ? AND status = 'active'",
-                    (ticker,),
-                )
-                active_trade = cursor.fetchone()
-
-                if active_trade:
-                    trade_id, side, entry_price, target_price, stop_loss = active_trade
-
-                    close_trade = False
-                    close_reason = ""
-
-                    # Update live PnL in the database so the frontend can display it
-                    if entry_price > 0:
-                        live_pnl_pct = (
-                            ((current_price - entry_price) / entry_price) * 100
-                            if side == "BUY"
-                            else ((entry_price - current_price) / entry_price) * 100
-                        )
-                    else:
-                        live_pnl_pct = 0.0
-                    cursor.execute(
-                        "UPDATE trades SET pnl_pct = ? WHERE id = ?",
-                        (live_pnl_pct, trade_id),
-                    )
-                    conn.commit()
-
-                    # Breakeven Logic (50% to target)
-                    if (
-                        side == "BUY"
-                        and target_price > entry_price
-                        and stop_loss < entry_price
-                    ):
-                        halfway = entry_price + (target_price - entry_price) * 0.5
-                        if current_price >= halfway:
-                            cursor.execute(
-                                "UPDATE trades SET stop_loss = ? WHERE id = ?",
-                                (entry_price, trade_id),
-                            )
-                            conn.commit()
-                            stop_loss = entry_price
-                            await broadcast_log(
-                                "RiskManager",
-                                f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
-                                "success",
-                            )
-                    elif (
-                        side == "SELL"
-                        and target_price < entry_price
-                        and stop_loss > entry_price
-                    ):
-                        halfway = entry_price - (entry_price - target_price) * 0.5
-                        if current_price <= halfway:
-                            cursor.execute(
-                                "UPDATE trades SET stop_loss = ? WHERE id = ?",
-                                (entry_price, trade_id),
-                            )
-                            conn.commit()
-                            stop_loss = entry_price
-                            await broadcast_log(
-                                "RiskManager",
-                                f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
-                                "success",
-                            )
-
-                    # Basic Stop Loss / Take Profit Logic
-                    if side == "BUY":
-                        if target_price > 0 and current_price >= target_price:
-                            close_trade, close_reason = (
-                                True,
-                                f"Take Profit hit at {current_price}",
-                            )
-                        elif stop_loss > 0 and current_price <= stop_loss:
-                            close_trade, close_reason = (
-                                True,
-                                f"Stop Loss hit at {current_price}",
-                            )
-                    elif side == "SELL":
-                        if target_price > 0 and current_price <= target_price:
-                            close_trade, close_reason = (
-                                True,
-                                f"Take Profit hit at {current_price}",
-                            )
-                        elif stop_loss > 0 and current_price >= stop_loss:
-                            close_trade, close_reason = (
-                                True,
-                                f"Stop Loss hit at {current_price}",
-                            )
-
-                    if close_trade:
-                        await broadcast_log(
-                            "System",
-                            f"Closing active trade on {ticker}: {close_reason}",
-                            "warning",
-                        )
-                        executor = ExecutorAgent()
-                        res = executor.close_order(
-                            trade_id, current_price, close_reason
-                        )
-                        await broadcast_log(
-                            "ExecutorAgent",
-                            f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
-                            "success",
-                        )
-                    else:
-                        await broadcast_log(
-                            "System",
-                            f"{ticker} já possui posição aberta. Monitorando (Current: {current_price})...",
-                            "info",
-                        )
-
-                    continue
+                open_tickers = [
+                    row[0]
+                    for row in _conn.execute(
+                        "SELECT DISTINCT ticker FROM trades WHERE status='active'"
+                    ).fetchall()
+                ]
             finally:
-                conn.close()
+                _conn.close()
 
-            # --- PHASE 2: ENTRY LOOP (Find New Opportunities) ---
-            if not entradas_liberadas:
-                continue
-            await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
-            await asyncio.sleep(2)
-
-            # 1. Analyst (now uses Gemini async)
-            analyst = MarketAnalyst(ticker)
-            analysis = await analyst.analyze()
-            await broadcast_log(
-                "MarketAnalyst",
-                f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}",
-                "info",
+            rm = RiskManager(saldo_livre=saldo_livre)
+            decision = rm.evaluate_trade(
+                analysis, ticker=ticker, open_tickers=open_tickers
             )
             await asyncio.sleep(2)
 
-            # 2. Risk Manager (com checagem de correlação)
-            if analysis["signal"] != "HOLD":
-                await broadcast_log(
-                    "RiskManager",
-                    f"Evaluating {analysis['signal']} on {ticker}...",
-                    "warning",
+            if decision["approved"]:
+                await broadcast_log("RiskManager", decision["reason"], "success")
+                await asyncio.sleep(1)
+
+                # 3. Executor
+                executor = ExecutorAgent()
+                res = executor.execute_order(ticker, decision, analysis)
+                if res["status"] == "executed":
+                    await broadcast_log(
+                        "ExecutorAgent",
+                        f"Executed! {res['shares']:.6f} shares of {ticker} @ {res['price']}",
+                        "success",
+                    )
+            else:
+                await broadcast_log("RiskManager", decision["reason"], "error")
+
+
+async def ai_committee_worker():
+    """
+    Loop resiliente do comitê. Cada iteração roda isolada: uma falha pontual
+    (ex.: schema inesperado do yfinance) é logada com stack trace + alerta
+    Telegram e a iteração seguinte continua. O heartbeat (mark_scan) é gravado
+    ANTES do sleep, para que um travamento dentro do próprio sleep também deixe
+    o worker_alive stale após o timeout.
+    """
+    while True:
+        try:
+            await _run_one_scan_cycle()
+            worker_state.state.mark_scan()
+        except asyncio.CancelledError:
+            raise  # cancelamento limpo (shutdown/testes) deve propagar
+        except Exception as e:
+            logger.exception("Falha na iteração do worker")
+            await asyncio.to_thread(
+                _alerta_telegram, f"⚠️ [Meridian] Falha na iteração do worker: {e}"
+            )
+        await asyncio.sleep(worker_state.SCAN_INTERVAL_SECONDS)
+
+
+async def worker_supervisor():
+    """
+    Supervisiona ai_committee_worker(). Se o worker morrer de vez (exceção que
+    escapa da guarda por iteração), loga, alerta no Telegram e reinicia com
+    backoff exponencial. Esgotadas MAX_RESTARTS tentativas consecutivas, marca
+    o estado como PARADO (nunca "online") e desiste.
+
+    O contador de restart só zera por ESTABILIDADE (ver WorkerState.mark_scan):
+    um worker que falha logo após cada ciclo não zera o contador e chega a
+    PARADO, em vez de reiniciar para sempre.
+    """
+    while True:
+        worker_state.state.on_worker_start()
+        try:
+            await ai_committee_worker()
+            return  # saída normal (não ocorre — loop infinito)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception("Worker morreu de vez")
+            worker_state.state.record_crash()
+            rc = worker_state.state.restart_count
+            if rc > worker_state.MAX_RESTARTS:
+                worker_state.state.mark_stopped()
+                await asyncio.to_thread(
+                    _alerta_telegram,
+                    "🛑 [Meridian] Worker PARADO — tentativas de restart esgotadas. "
+                    "Intervenção manual necessária.",
                 )
-                pf = get_portfolio()
-                saldo_livre = pf.get("saldo_livre", 0.0)
-
-                # Buscar todos os tickers com posição ativa para checar correlação
-                from .data.database import get_connection
-                _conn = get_connection()
-                try:
-                    open_tickers = [
-                        row[0]
-                        for row in _conn.execute(
-                            "SELECT DISTINCT ticker FROM trades WHERE status='active'"
-                        ).fetchall()
-                    ]
-                finally:
-                    _conn.close()
-
-                rm = RiskManager(saldo_livre=saldo_livre)
-                decision = rm.evaluate_trade(
-                    analysis, ticker=ticker, open_tickers=open_tickers
-                )
-                await asyncio.sleep(2)
-
-                if decision["approved"]:
-                    await broadcast_log("RiskManager", decision["reason"], "success")
-                    await asyncio.sleep(1)
-
-                    # 3. Executor
-                    executor = ExecutorAgent()
-                    res = executor.execute_order(ticker, decision, analysis)
-                    if res["status"] == "executed":
-                        await broadcast_log(
-                            "ExecutorAgent",
-                            f"Executed! {res['shares']:.6f} shares of {ticker} @ {res['price']}",
-                            "success",
-                        )
-                else:
-                    await broadcast_log("RiskManager", decision["reason"], "error")
-
-        await asyncio.sleep(60)
+                return
+            await asyncio.to_thread(
+                _alerta_telegram,
+                f"⚠️ [Meridian] Worker caiu (restart {rc}/{worker_state.MAX_RESTARTS}): {e}",
+            )
+            delay = min(2 ** (rc - 1), worker_state.BACKOFF_CAP_SECONDS)
+            await asyncio.sleep(delay)
 
 
-@app.on_event("startup")
-async def startup_event():
-    init_db()
-    # FAIL-FAST: config de risco inválida derruba o boot com erro claro,
-    # em vez de deixar o bot operar com thresholds quebrados.
-    from trading_bot.risk.circuit_breaker import CircuitBreaker
-    CircuitBreaker.from_config()
-    asyncio.create_task(ai_committee_worker())
+def _log_if_supervisor_died(task: asyncio.Task) -> None:
+    """Rede de segurança: loga se o próprio supervisor terminar inesperadamente."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.critical("Supervisor do worker terminou com exceção: %s", exc)
+        worker_state.state.mark_stopped()
+        _alerta_telegram(f"🛑 [Meridian] Supervisor do worker caiu: {exc}")
 
 
 @app.get("/api/positions")
