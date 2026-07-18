@@ -8,13 +8,19 @@ _run_exit_scan() varre SÓ tickers com status='active' (custo independe do
 tamanho do universo, ao contrário do laço lento que varre todo mundo a
 cada ciclo — ver BACKLOG.md). _price_is_trustworthy() é o gate FAIL-CLOSED:
 preço não confiável nunca decide nada sobre a posição, só mantém como está.
+
+Sub-etapa 2b: PHASE 1 sai do laço lento (_run_one_scan_cycle) — a gestão de
+saídas passa a ser 100% do exit_loop/_run_exit_scan. Isso remove, de
+brinde, o `continue` que impedia (como efeito colateral) o laço lento de
+tentar abrir uma segunda posição num ticker já ativo. TestSlowLoopSkipsAlreadyActiveTicker
+cobre essa regressão com uma guarda explícita nova.
 """
 import math
 import os
 import sqlite3
 import tempfile
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -251,3 +257,84 @@ class TestExitScanFailClosed:
 
         MockExecutor.return_value.close_order.assert_not_called()
         assert _trade_status(temp_db_path, trade_id) == "active"
+
+
+class _FakeAppConfig:
+    """Substitui AppConfig.load() com um universo pequeno e controlado,
+    sem depender do config/settings.yaml + universe.yaml reais (50 tickers
+    de verdade), que não são o que este teste de regressão quer exercitar."""
+
+    def __init__(self, tickers):
+        self._tickers = tickers
+
+    def get(self, *keys, default=None):
+        if keys == ("_universe", "tickers"):
+            return self._tickers
+        return default
+
+
+class TestSlowLoopSkipsAlreadyActiveTicker:
+    """Regressão (P3-A Etapa 2b): removida a PHASE 1 do laço lento, o
+    `continue` que barrava (como efeito colateral) entrada duplicada num
+    ticker já posicionado também some. Sem uma guarda explícita nova, o
+    laço lento tentaria abrir uma segunda posição, e só o índice único
+    (P3-A Etapa 1) barraria — com IntegrityError em vez de comportamento
+    correto, que é o que o plano original queria evitar.
+
+    MarketAnalyst é mockado na CLASSE (não só ExecutorAgent): a asserção
+    forte é que o ticker já ativo nem chega a ser analisado — a guarda
+    pula ANTES da análise, não só antes da execução.
+    """
+
+    async def test_ticker_ja_ativo_e_pulado_sem_chamar_market_analyst(
+        self, temp_db_path
+    ):
+        _insert_active_trade(
+            temp_db_path, "AAAA.SA", "BUY",
+            entry_price=10.0, target_price=12.0, stop_loss=9.0,
+        )
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            from backend.app import main
+
+            fake_cfg = _FakeAppConfig(["AAAA", "BBBB"])
+            fake_breaker = MagicMock()
+            fake_breaker.can_trade.return_value = True
+
+            with patch(
+                "trading_bot.core.config.AppConfig.load", return_value=fake_cfg
+            ), \
+                 patch(
+                     "trading_bot.risk.circuit_breaker.CircuitBreaker.from_config",
+                     return_value=fake_breaker,
+                 ), \
+                 patch.object(main, "has_snapshot_for", return_value=True), \
+                 patch.object(main, "MarketAnalyst") as MockAnalyst, \
+                 patch.object(main, "ExecutorAgent") as MockExecutor, \
+                 patch(
+                     "backend.app.data.feed.fetch_recent_data",
+                     return_value=_make_price_row(close=10.5),
+                 ):
+                # Nota: este mock de fetch_recent_data só é necessário
+                # enquanto a PHASE 1 ainda existir no laço lento (o fetch de
+                # topo que ela usa) — em 2b esse fetch é removido por ser
+                # código morto (MarketAnalyst busca seus próprios dados).
+
+                MockAnalyst.return_value.analyze = AsyncMock(
+                    return_value={"signal": "HOLD", "reason": "sem sinal"}
+                )
+
+                await main._run_one_scan_cycle()
+        finally:
+            database_module.DB_PATH = original_path
+
+        # AAAA.SA já tem posição ativa: nem deve ser instanciado o analyst
+        # para ele. BBBB.SA (livre) deve ser analisado normalmente.
+        analisados = [c.args[0] for c in MockAnalyst.call_args_list]
+        assert "AAAA.SA" not in analisados
+        assert "BBBB.SA" in analisados
+
+        # Nunca tentou abrir uma segunda posição no ticker já ativo.
+        MockExecutor.return_value.execute_order.assert_not_called()

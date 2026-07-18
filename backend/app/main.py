@@ -13,7 +13,11 @@ from . import worker_state
 async def lifespan(app: FastAPI):
     """
     Ciclo de vida da app (substitui @app.on_event, deprecated).
-    Sobe o worker supervisionado; no shutdown, cancela a task limpo.
+    Sobe o worker supervisionado (entradas) + o exit_loop (saídas,
+    independente — P3-A Etapa 2); no shutdown, cancela as duas tasks limpo.
+
+    exit_loop ainda NÃO tem supervisor próprio (ver docstring dela e
+    BACKLOG.md — pendência explícita da Etapa 4).
     """
     from .data.database import init_db
     init_db()
@@ -26,12 +30,19 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(worker_supervisor())
     task.add_done_callback(_log_if_supervisor_died)
     app.state.worker_task = task
+
+    exit_task = asyncio.create_task(exit_loop())
+    app.state.exit_task = exit_task
+
     try:
         yield
     finally:
         task.cancel()
+        exit_task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        with suppress(asyncio.CancelledError):
+            await exit_task
 
 
 app = FastAPI(title="Meridian AI Core", lifespan=lifespan)
@@ -313,10 +324,17 @@ async def _run_exit_scan():
 
 async def _run_one_scan_cycle():
     """
-    Uma iteração completa do comitê: snapshot diário de equity, avaliação do
-    circuit breaker e varredura de todos os tickers (PHASE 1 saídas + PHASE 2
-    entradas). Isolada em função própria para que ai_committee_worker() possa
-    envolvê-la em try/except sem que uma falha pontual derrube o loop.
+    Uma iteração completa do laço LENTO (entradas): snapshot diário de
+    equity, avaliação do circuit breaker e varredura do universo em busca
+    de novas oportunidades. Isolada em função própria para que
+    ai_committee_worker() possa envolvê-la em try/except sem que uma falha
+    pontual derrube o loop.
+
+    A gestão de posições ativas (antiga PHASE 1) saiu daqui — ver
+    exit_loop()/_run_exit_scan(), que roda isolada e rápida (P3-A Etapa 2).
+    Isso resolve a latência de stop-loss: antes, o stop de uma posição só
+    era reavaliado 1x por ciclo completo deste laço lento, que passava de
+    10 min com 50 tickers (ver BACKLOG.md).
     """
     print("Starting AI committee scan loop...", flush=True)
 
@@ -347,7 +365,8 @@ async def _run_one_scan_cycle():
         )
 
     # Circuit breaker: avaliado 1x por ciclo. FAIL-CLOSED: erro = bloqueia
-    # novas entradas; a fase de saída (Phase 1) roda sempre.
+    # novas entradas; a gestão de saídas (exit_loop, independente deste
+    # laço) roda sempre, mesmo com o circuit breaker ativo.
     try:
         from trading_bot.risk.circuit_breaker import CircuitBreaker
         entradas_liberadas = await asyncio.to_thread(
@@ -366,137 +385,27 @@ async def _run_one_scan_cycle():
     for ticker in tickers_to_watch:
         print(f"Scanning {ticker}...", flush=True)
 
-        # Use data feed to get the latest price directly for evaluation
-        from .data.feed import fetch_recent_data
-
-        df_recent = await asyncio.to_thread(fetch_recent_data, ticker, period="1d", interval="15m")
-        if df_recent is None or len(df_recent) == 0:
-            continue
-        current_price = df_recent.iloc[-1]["close"]
-
-        # Database connection
+        # Guarda explícita (P3-A Etapa 2b): sem a antiga PHASE 1 aqui, o
+        # `continue` que impedia (como efeito colateral) uma segunda
+        # entrada num ticker já posicionado também sumiu — a gestão dessas
+        # posições passou para o exit_loop, isolado. Sem esta guarda, o
+        # índice único idx_trades_one_active_per_ticker (P3-A Etapa 1)
+        # ainda impediria a duplicata, mas via IntegrityError em vez de
+        # simplesmente pular — comportamento correto, não um erro.
         from .data.database import get_connection
-        conn = get_connection()
+
+        _conn = get_connection()
         try:
-            cursor = conn.cursor()
-
-            # --- PHASE 1: EXIT LOOP (Manage Open Positions) ---
-            cursor.execute(
-                "SELECT id, side, entry_price, target_price, stop_loss FROM trades WHERE ticker = ? AND status = 'active'",
+            ja_possui_posicao = _conn.execute(
+                "SELECT 1 FROM trades WHERE ticker = ? AND status = 'active'",
                 (ticker,),
-            )
-            active_trade = cursor.fetchone()
-
-            if active_trade:
-                trade_id, side, entry_price, target_price, stop_loss = active_trade
-
-                close_trade = False
-                close_reason = ""
-
-                # Update live PnL in the database so the frontend can display it
-                if entry_price > 0:
-                    live_pnl_pct = (
-                        ((current_price - entry_price) / entry_price) * 100
-                        if side == "BUY"
-                        else ((entry_price - current_price) / entry_price) * 100
-                    )
-                else:
-                    live_pnl_pct = 0.0
-                cursor.execute(
-                    "UPDATE trades SET pnl_pct = ? WHERE id = ?",
-                    (live_pnl_pct, trade_id),
-                )
-                conn.commit()
-
-                # Breakeven Logic (50% to target)
-                if (
-                    side == "BUY"
-                    and target_price > entry_price
-                    and stop_loss < entry_price
-                ):
-                    halfway = entry_price + (target_price - entry_price) * 0.5
-                    if current_price >= halfway:
-                        cursor.execute(
-                            "UPDATE trades SET stop_loss = ? WHERE id = ?",
-                            (entry_price, trade_id),
-                        )
-                        conn.commit()
-                        stop_loss = entry_price
-                        await broadcast_log(
-                            "RiskManager",
-                            f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
-                            "success",
-                        )
-                elif (
-                    side == "SELL"
-                    and target_price < entry_price
-                    and stop_loss > entry_price
-                ):
-                    halfway = entry_price - (entry_price - target_price) * 0.5
-                    if current_price <= halfway:
-                        cursor.execute(
-                            "UPDATE trades SET stop_loss = ? WHERE id = ?",
-                            (entry_price, trade_id),
-                        )
-                        conn.commit()
-                        stop_loss = entry_price
-                        await broadcast_log(
-                            "RiskManager",
-                            f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
-                            "success",
-                        )
-
-                # Basic Stop Loss / Take Profit Logic
-                if side == "BUY":
-                    if target_price > 0 and current_price >= target_price:
-                        close_trade, close_reason = (
-                            True,
-                            f"Take Profit hit at {current_price}",
-                        )
-                    elif stop_loss > 0 and current_price <= stop_loss:
-                        close_trade, close_reason = (
-                            True,
-                            f"Stop Loss hit at {current_price}",
-                        )
-                elif side == "SELL":
-                    if target_price > 0 and current_price <= target_price:
-                        close_trade, close_reason = (
-                            True,
-                            f"Take Profit hit at {current_price}",
-                        )
-                    elif stop_loss > 0 and current_price >= stop_loss:
-                        close_trade, close_reason = (
-                            True,
-                            f"Stop Loss hit at {current_price}",
-                        )
-
-                if close_trade:
-                    await broadcast_log(
-                        "System",
-                        f"Closing active trade on {ticker}: {close_reason}",
-                        "warning",
-                    )
-                    executor = ExecutorAgent()
-                    res = executor.close_order(
-                        trade_id, current_price, close_reason
-                    )
-                    await broadcast_log(
-                        "ExecutorAgent",
-                        f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
-                        "success",
-                    )
-                else:
-                    await broadcast_log(
-                        "System",
-                        f"{ticker} já possui posição aberta. Monitorando (Current: {current_price})...",
-                        "info",
-                    )
-
-                continue
+            ).fetchone()
         finally:
-            conn.close()
+            _conn.close()
+        if ja_possui_posicao:
+            continue
 
-        # --- PHASE 2: ENTRY LOOP (Find New Opportunities) ---
+        # --- ENTRY LOOP (Find New Opportunities) ---
         if not entradas_liberadas:
             continue
         await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
@@ -556,6 +465,35 @@ async def _run_one_scan_cycle():
                     )
             else:
                 await broadcast_log("RiskManager", decision["reason"], "error")
+
+
+async def exit_loop():
+    """
+    Laço RÁPIDO e independente do laço lento de entradas (P3-A Etapa 2):
+    só releitura de posições ativas e gestão de stop/target, a cada
+    EXIT_INTERVAL_SECONDS (~5s). Cada iteração roda isolada, mesmo padrão
+    de resiliência do ai_committee_worker — uma falha pontual não mata o
+    loop, só a próxima iteração é adiada.
+
+    PENDÊNCIA CONHECIDA (P3-A Etapa 4, não implementada ainda): este loop
+    NÃO está sob supervisão de restart-com-backoff como o worker principal
+    (worker_supervisor). Se ele morrer de vez (exceção escapando do
+    try/except abaixo — não deveria acontecer dado o `except Exception`
+    amplo, mas não há uma segunda rede de segurança), a gestão de saídas
+    para silenciosamente e ninguém reinicia. É intencional: a Etapa 4
+    resolve isso generalizando o supervisor para os dois loops.
+    """
+    while True:
+        try:
+            await _run_exit_scan()
+        except asyncio.CancelledError:
+            raise  # cancelamento limpo (shutdown/testes) deve propagar
+        except Exception as e:
+            logger.exception("Falha na iteração do exit_loop")
+            await asyncio.to_thread(
+                _alerta_telegram, f"⚠️ [Meridian] Falha na iteração do exit_loop: {e}"
+            )
+        await asyncio.sleep(worker_state.EXIT_INTERVAL_SECONDS)
 
 
 async def ai_committee_worker():

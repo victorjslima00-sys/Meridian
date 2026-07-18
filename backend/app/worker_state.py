@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 # --- Parâmetros de supervisão (tests podem monkeypatchar) -------------------
 HEARTBEAT_TIMEOUT_SECONDS = 300   # sem heartbeat por > 5 min → worker_alive False
-SCAN_INTERVAL_SECONDS = 60        # intervalo entre ciclos do worker
+SCAN_INTERVAL_SECONDS = 60        # intervalo entre ciclos do worker (laço lento, entradas)
+EXIT_INTERVAL_SECONDS = 5         # intervalo do laço rápido de saídas (P3-A Etapa 2)
 MAX_RESTARTS = 5                  # restarts consecutivos antes de desistir
 BACKOFF_CAP_SECONDS = 30          # teto do backoff exponencial
 STABLE_RESET_CYCLES = 5           # ciclos estáveis para zerar restart_count
