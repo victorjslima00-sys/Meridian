@@ -77,8 +77,12 @@ class ExecutorAgent:
                 )
             except sqlite3.IntegrityError:
                 # Backstop do índice único: outra conexão venceu a corrida
-                # entre a checagem acima e este INSERT. Nada foi escrito
-                # ainda nesta transação — não há o que desfazer.
+                # entre a checagem acima e este INSERT. O BEGIN IMMEDIATE já
+                # foi disparado por essa tentativa de INSERT (mesmo falha),
+                # então a transação segue aberta segurando o lock de escrita
+                # até fecharmos — rollback explícito libera na hora, em vez
+                # de depender do close() implícito no finally.
+                conn.rollback()
                 return {
                     "status": "skipped_existing_position",
                     "ticker": ticker,
@@ -165,8 +169,10 @@ class ExecutorAgent:
             )
             if cursor.rowcount == 0:
                 # Perdemos a corrida (ou já estava fechado antes desta
-                # chamada). Nada foi alterado nesta transação — não credita
-                # o portfolio.
+                # chamada). O UPDATE não afetou nenhuma linha, mas a
+                # transação IMMEDIATE segue aberta — rollback explícito
+                # libera o lock imediatamente. Não credita o portfolio.
+                conn.rollback()
                 return {"status": "already_closed", "trade_id": trade_id}
 
             # Update portfolio
