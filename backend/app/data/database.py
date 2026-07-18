@@ -94,6 +94,19 @@ def init_db():
         """
         )
 
+        # 1 posição ativa por ticker (P3-A Etapa 1). Índice PARCIAL (só cobre
+        # status='active'): um ticker pode ter várias linhas 'closed' no
+        # histórico, só não pode ter duas 'active' ao mesmo tempo. É o
+        # backstop real contra a corrida de execute_order — a checagem em
+        # Python (SELECT antes do INSERT) sozinha é raçosa (TOCTOU); este
+        # índice é quem garante a exclusão mútua de fato via IntegrityError.
+        cursor.execute(
+            """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_one_active_per_ticker
+        ON trades(ticker) WHERE status = 'active'
+        """
+        )
+
         # Equity Snapshots — 1 registro por dia de pregão (data em America/Sao_Paulo)
         cursor.execute(
             """

@@ -8,6 +8,14 @@ class ExecutorAgent:
     def __init__(self):
         self.db_path = DB_PATH
 
+    def _connect(self) -> sqlite3.Connection:
+        """Conexão padrão do executor: IMMEDIATE (escreve logo na primeira
+        instrução) + busy_timeout, para esperar (em vez de estourar
+        'database is locked' na hora) quando outra conexão segura o lock."""
+        conn = sqlite3.connect(self.db_path, isolation_level="IMMEDIATE")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
     def execute_order(
         self, ticker: str, decision: Dict[str, Any], analysis: Dict[str, Any]
     ):
@@ -29,26 +37,53 @@ class ExecutorAgent:
         rationale = f"{analyst_reason} | {rm_reason}"
         side = analysis.get("signal", "BUY")
 
-        conn = sqlite3.connect(self.db_path, isolation_level="IMMEDIATE")
+        conn = self._connect()
         try:
             cursor = conn.cursor()
 
+            # Guarda transacional (early-exit): checagem dentro da mesma
+            # transação IMMEDIATE, evita tentar o INSERT no caso comum.
+            # Sozinha ela é raçosa (TOCTOU: duas conexões podem passar aqui
+            # "ao mesmo tempo" antes de qualquer uma escrever) — quem
+            # realmente garante 1-ativo-por-ticker é o índice único parcial
+            # abaixo, via IntegrityError.
             cursor.execute(
-                """
-            INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
-            """,
-                (
-                    ticker,
-                    side,
-                    shares,
-                    current_price,
-                    target_price,
-                    stop_loss,
-                    datetime.datetime.now(),
-                    rationale,
-                ),
+                "SELECT 1 FROM trades WHERE ticker = ? AND status = 'active'",
+                (ticker,),
             )
+            if cursor.fetchone():
+                return {
+                    "status": "skipped_existing_position",
+                    "ticker": ticker,
+                    "reason": "Já existe posição ativa para este ticker.",
+                }
+
+            try:
+                cursor.execute(
+                    """
+                INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                """,
+                    (
+                        ticker,
+                        side,
+                        shares,
+                        current_price,
+                        target_price,
+                        stop_loss,
+                        datetime.datetime.now(),
+                        rationale,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # Backstop do índice único: outra conexão venceu a corrida
+                # entre a checagem acima e este INSERT. Nada foi escrito
+                # ainda nesta transação — não há o que desfazer.
+                return {
+                    "status": "skipped_existing_position",
+                    "ticker": ticker,
+                    "reason": "Já existe posição ativa para este ticker (concorrência).",
+                }
 
             # Deduct from portfolio
             cursor.execute(
@@ -90,7 +125,7 @@ class ExecutorAgent:
         """
         Closes an active order.
         """
-        conn = sqlite3.connect(self.db_path, isolation_level="IMMEDIATE")
+        conn = self._connect()
         try:
             cursor = conn.cursor()
 
@@ -115,15 +150,24 @@ class ExecutorAgent:
 
             gross_value = shares * current_price
 
-            # Update trade
+            # CAS: só transiciona quem está 'active' agora, dentro desta
+            # mesma transação IMMEDIATE. rowcount é a fonte de verdade —
+            # não o valor de status lido no SELECT acima (que pode já estar
+            # obsoleto se outra conexão fechou o trade entre o SELECT e
+            # este UPDATE).
             cursor.execute(
                 """
-            UPDATE trades 
+            UPDATE trades
             SET status = 'closed', exit_price = ?, exit_date = ?, pnl_pct = ?, exit_reason = ?
-            WHERE id = ?
+            WHERE id = ? AND status = 'active'
             """,
                 (current_price, datetime.datetime.now(), pnl_pct, reason, trade_id),
             )
+            if cursor.rowcount == 0:
+                # Perdemos a corrida (ou já estava fechado antes desta
+                # chamada). Nada foi alterado nesta transação — não credita
+                # o portfolio.
+                return {"status": "already_closed", "trade_id": trade_id}
 
             # Update portfolio
             cursor.execute(
