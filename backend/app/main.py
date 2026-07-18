@@ -409,7 +409,6 @@ async def _run_one_scan_cycle():
         if not entradas_liberadas:
             continue
         await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
-        await asyncio.sleep(2)
 
         # 1. Analyst (now uses Gemini async)
         analyst = MarketAnalyst(ticker)
@@ -419,7 +418,6 @@ async def _run_one_scan_cycle():
             f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}",
             "info",
         )
-        await asyncio.sleep(2)
 
         # 2. Risk Manager (com checagem de correlação)
         if analysis["signal"] != "HOLD":
@@ -448,11 +446,9 @@ async def _run_one_scan_cycle():
             decision = rm.evaluate_trade(
                 analysis, ticker=ticker, open_tickers=open_tickers
             )
-            await asyncio.sleep(2)
 
             if decision["approved"]:
                 await broadcast_log("RiskManager", decision["reason"], "success")
-                await asyncio.sleep(1)
 
                 # 3. Executor
                 executor = ExecutorAgent()
