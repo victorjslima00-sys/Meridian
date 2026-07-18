@@ -1,5 +1,9 @@
 import time
 import logging
+import threading
+from collections import OrderedDict
+from typing import Optional, Tuple
+
 import yfinance as yf
 import pandas as pd
 
@@ -19,12 +23,98 @@ def _normalize_ticker(ticker: str) -> str:
     return ticker
 
 
+# -----------------------------------------------------------------------
+# Cache de preço (P3-A Etapa 2d)
+# -----------------------------------------------------------------------
+# Compartilhado por todo mundo que chama fetch_recent_data (exit_loop,
+# MarketAnalyst, get_current_price, get_candles): sem isso, N posições
+# ativas em exit_loop geram N requisições de rede a cada
+# EXIT_INTERVAL_SECONDS (~5s) — com poucas posições simultâneas já se bate
+# no rate limit que este projeto mediu empiricamente (ver BACKLOG.md: gaps
+# de ~11s já apareciam com ~12 req/min sustentado, MENOS do que N=1
+# posição ativa gera sozinha no intervalo atual). O cache desacopla a taxa
+# de rede do número de chamadores: no máximo 1 requisição de rede por
+# chave (ticker, period, interval) por janela de TTL, não importa quantos
+# "laços" pedem a mesma coisa quase ao mesmo tempo.
+#
+# fetch_recent_data roda em THREADS REAIS via asyncio.to_thread, não em
+# corrotinas — os dois laços (exit_loop e o laço lento de entradas) podem
+# estar literalmente dentro desta função ao mesmo tempo, em threads do SO
+# diferentes. Por isso os locks aqui são threading.Lock, não asyncio.Lock
+# (que só serializa corrotinas agendadas no event loop — não tem efeito
+# nenhum sobre concorrência real entre threads de um ThreadPoolExecutor).
+#
+# Lock POR CHAVE, não um lock único global: um lock global serializaria
+# até buscas de tickers DIFERENTES sem necessidade nenhuma (ver
+# TestPriceCacheConcurrency.test_tickers_diferentes_concorrentes_nao_se_bloqueiam_por_um_lock_global).
+# Cada chave ganha seu próprio threading.Lock, criado sob demanda; um
+# meta-lock curto (_cache_meta_lock) protege só a estrutura dos dicts
+# (_cache, _key_locks) em si — nunca é mantido durante a chamada de rede,
+# que é a parte lenta.
+PRICE_CACHE_TTL_SECONDS = 15    # tests podem monkeypatchar
+PRICE_CACHE_MAX_ENTRIES = 200   # ~50 tickers × combinações (period, interval) usadas no código
+
+_cache_meta_lock = threading.Lock()
+_cache: "OrderedDict[Tuple[str, str, str], Tuple[float, pd.DataFrame]]" = OrderedDict()
+_key_locks: dict = {}
+
+
+def _cache_key(ticker: str, period: str, interval: str) -> Tuple[str, str, str]:
+    return (ticker, period, interval)
+
+
+def _cache_get(key: Tuple[str, str, str]) -> Optional[pd.DataFrame]:
+    """None se não há entrada válida (ausente OU expirada pelo TTL).
+    Sempre retorna uma CÓPIA — nunca a referência interna — para que uma
+    mutação do chamador não corrompa o cache nem vaze para outro chamador
+    que peça a mesma chave depois."""
+    with _cache_meta_lock:
+        entry = _cache.get(key)
+        if entry is None:
+            return None
+        fetched_at, df = entry
+        if time.monotonic() - fetched_at > PRICE_CACHE_TTL_SECONDS:
+            return None
+        return df.copy()
+
+
+def _cache_put(key: Tuple[str, str, str], df: pd.DataFrame) -> None:
+    """Só é chamada com um resultado BEM-SUCEDIDO — ver fetch_recent_data.
+    Uma falha nunca vira entrada de cache: se cacheássemos o "não sei",
+    um erro transitório de rede ficaria congelado até o TTL expirar,
+    quando o certo é deixar a PRÓXIMA chamada tentar de novo.
+
+    Evicção FIFO por ordem de escrita quando PRICE_CACHE_MAX_ENTRIES é
+    excedido — o universo tem ~50 tickers hoje, mas nada garante isso pra
+    sempre; sem teto, o cache cresceria sem limite se o universo mudar."""
+    with _cache_meta_lock:
+        _cache[key] = (time.monotonic(), df.copy())
+        _cache.move_to_end(key)
+        while len(_cache) > PRICE_CACHE_MAX_ENTRIES:
+            oldest_key, _ = _cache.popitem(last=False)
+            # Nunca remove um lock que está em uso (fetch em andamento para
+            # aquela chave) — só limpa locks já ociosos.
+            lock = _key_locks.get(oldest_key)
+            if lock is not None and not lock.locked():
+                del _key_locks[oldest_key]
+
+
+def _get_key_lock(key: Tuple[str, str, str]) -> threading.Lock:
+    with _cache_meta_lock:
+        lock = _key_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _key_locks[key] = lock
+        return lock
+
+
 def fetch_recent_data(
     ticker: str, period: str = "5d", interval: str = "1h", max_retries: int = 3
 ):
     """
-    Busca dados OHLCV recentes usando yfinance.
-    Inclui retry com backoff exponencial para tolerância a falhas de rede.
+    Busca dados OHLCV recentes usando yfinance, com cache curto compartilhado
+    (ver seção "Cache de preço" acima) e retry com backoff exponencial para
+    tolerância a falhas de rede.
 
     Args:
         ticker:      Ticker do ativo (ex: "BTC-USD", "PETR4")
@@ -33,10 +123,39 @@ def fetch_recent_data(
         max_retries: Número máximo de tentativas antes de desistir
 
     Returns:
-        DataFrame normalizado ou None em caso de falha total.
+        DataFrame normalizado (cópia independente, segura para o chamador
+        mutar) ou None em caso de falha total. Falha NUNCA é cacheada.
     """
     normalized = _normalize_ticker(ticker)
+    key = _cache_key(normalized, period, interval)
 
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
+    lock = _get_key_lock(key)
+    with lock:
+        # Double-checked locking: enquanto esperávamos este lock, outra
+        # thread pode ter terminado de buscar (e cacheado) a mesma chave —
+        # é exatamente isso que colapsa duas requisições concorrentes em
+        # uma só chamada de rede.
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+
+        df = _fetch_from_yfinance(normalized, period, interval, max_retries)
+        if df is not None:
+            _cache_put(key, df)
+            return df.copy()
+        return None
+
+
+def _fetch_from_yfinance(
+    normalized: str, period: str, interval: str, max_retries: int
+) -> Optional[pd.DataFrame]:
+    """Busca de verdade no yfinance, com retry + backoff exponencial.
+    Isolada de fetch_recent_data para que o cache decida SE isto é
+    chamado, sem se misturar com COMO a busca em si funciona."""
     for attempt in range(max_retries):
         try:
             df = yf.download(

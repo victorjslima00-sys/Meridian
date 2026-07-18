@@ -128,6 +128,50 @@ from .agents.risk_manager import RiskManager
 from .agents.executor import ExecutorAgent
 
 import math
+import time
+
+
+# -----------------------------------------------------------------------
+# Deduplicação de alerta (P3-A Etapa 2d)
+# -----------------------------------------------------------------------
+# exit_loop roda a cada ~5s (EXIT_INTERVAL_SECONDS). Sem deduplicação, uma
+# condição de preço não confiável PERSISTENTE (feed real fora do ar, não
+# só rate limit transitório — o cache de preço em feed.py já resolve o
+# caso transitório) dispararia um alerta Telegram a cada iteração,
+# indefinidamente. Alarme que grita sem parar vira alarme ignorado.
+#
+# Alerta na primeira ocorrência da condição para um ticker; silencia
+# repetições da MESMA condição; reenvia um lembrete após
+# ALERT_COOLDOWN_SECONDS com o problema ainda ativo (nunca silêncio
+# total — CLAUDE.md: "loops autônomos nunca morrem em silêncio"); e trata
+# uma recuperação seguida de nova falha como condição NOVA (alerta de
+# novo), não como continuação da anterior.
+ALERT_COOLDOWN_SECONDS = 600  # 10 min — tests podem monkeypatchar
+
+_last_alert_state: dict = {}
+# ticker -> {"reason": str, "last_sent_at": float (monotonic)}
+
+
+def _should_alert_price_untrustworthy(ticker: str, reason: str) -> bool:
+    """True se um alerta deve ser enviado agora para este ticker+motivo.
+    Sempre registra o envio (efeito colateral) quando retorna True, para
+    que a PRÓXIMA chamada saiba que já alertou."""
+    now = time.monotonic()
+    prev = _last_alert_state.get(ticker)
+    if prev is None or prev["reason"] != reason:
+        _last_alert_state[ticker] = {"reason": reason, "last_sent_at": now}
+        return True
+    if now - prev["last_sent_at"] >= ALERT_COOLDOWN_SECONDS:
+        prev["last_sent_at"] = now
+        return True
+    return False
+
+
+def _clear_alert_state(ticker: str) -> None:
+    """Chamado quando a condição se resolve (preço volta a ser confiável).
+    A PRÓXIMA falha para este ticker é tratada como ocorrência nova —
+    alerta de novo, não fica presa ao cooldown da falha anterior."""
+    _last_alert_state.pop(ticker, None)
 
 
 def _price_is_trustworthy(price, open_=None, high=None, low=None) -> bool:
@@ -208,12 +252,21 @@ async def _run_exit_scan():
                 "Exit scan: preço não confiável para %s (%r) — mantendo "
                 "posição, nenhuma ação tomada.", ticker, current_price
             )
-            await asyncio.to_thread(
-                _alerta_telegram,
-                f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
-                f"({current_price!r}) — posição mantida (fail-closed).",
-            )
+            # Log sempre acontece (barato); o Telegram é deduplicado —
+            # exit_loop roda a cada poucos segundos, e uma condição
+            # persistente não pode virar um alerta a cada iteração.
+            if _should_alert_price_untrustworthy(ticker, "untrustworthy_price"):
+                await asyncio.to_thread(
+                    _alerta_telegram,
+                    f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
+                    f"({current_price!r}) — posição mantida (fail-closed).",
+                )
             continue
+
+        # Preço confiável de novo: limpa o estado de alerta deste ticker,
+        # para que uma falha FUTURA seja tratada como condição nova (não
+        # presa ao cooldown de uma falha antiga já resolvida).
+        _clear_alert_state(ticker)
 
         from .data.database import get_connection
 

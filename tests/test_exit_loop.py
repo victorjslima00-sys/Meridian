@@ -19,6 +19,7 @@ import math
 import os
 import sqlite3
 import tempfile
+import time
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -338,3 +339,112 @@ class TestSlowLoopSkipsAlreadyActiveTicker:
 
         # Nunca tentou abrir uma segunda posição no ticker já ativo.
         MockExecutor.return_value.execute_order.assert_not_called()
+
+
+class TestAlertDeduplication:
+    """P3-A Etapa 2d: exit_loop roda a cada ~5s. Sem deduplicação, uma
+    condição de preço não confiável PERSISTENTE (não só rate limit
+    transitório) dispararia um alerta Telegram a cada iteração — alarme
+    que grita sem parar vira alarme ignorado (já errado 2x nisso, ver
+    histórico do BACKLOG). Alerta na primeira ocorrência, silencia
+    repetições da mesma condição, reenvia um lembrete após o cooldown com
+    o problema ainda ativo (nunca silêncio total — CLAUDE.md).
+
+    Reset de _last_alert_state é global, via tests/conftest.py — não
+    local aqui (esse dict também é usado, e pode ser sujado, por outras
+    classes deste arquivo, ex.: TestExitScanFailClosed)."""
+
+    def test_primeira_ocorrencia_alerta(self):
+        from backend.app import main
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+
+    def test_segunda_ocorrencia_imediata_nao_realerta(self):
+        from backend.app import main
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is False
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is False
+
+    def test_ticker_diferente_alerta_independente(self):
+        from backend.app import main
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+        assert main._should_alert_price_untrustworthy("VALE3.SA", "untrustworthy_price") is True
+
+    def test_mudanca_de_estado_apos_recuperacao_realerta(self):
+        from backend.app import main
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is False
+        main._clear_alert_state("PETR4.SA")  # preço voltou a ser confiável
+        assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+
+    def test_cooldown_expirado_com_problema_ativo_realerta(self):
+        from backend.app import main
+        with patch.object(main, "ALERT_COOLDOWN_SECONDS", 0.05):
+            assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+            assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is False
+            time.sleep(0.12)
+            assert main._should_alert_price_untrustworthy("PETR4.SA", "untrustworthy_price") is True
+
+    async def test_run_exit_scan_nao_realerta_em_scans_consecutivos_com_preco_ruim(
+        self, temp_db_path
+    ):
+        """Integração: duas chamadas seguidas de _run_exit_scan com o
+        mesmo preço inválido persistente devem gerar 1 alerta, não 2."""
+        _insert_active_trade(
+            temp_db_path, "HAPV3.SA", "BUY",
+            entry_price=30.0, target_price=40.0, stop_loss=28.0,
+        )
+        df_ruim = _make_price_row(close=None)
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch(
+                "backend.app.data.feed.fetch_recent_data", return_value=df_ruim
+            ), \
+                 patch("backend.app.main.ExecutorAgent"), \
+                 patch("backend.app.main._alerta_telegram") as mock_alerta:
+                from backend.app.main import _run_exit_scan
+                await _run_exit_scan()
+                await _run_exit_scan()
+        finally:
+            database_module.DB_PATH = original_path
+
+        assert mock_alerta.call_count == 1
+
+    async def test_run_exit_scan_realerta_apos_recuperacao_e_nova_falha(
+        self, temp_db_path
+    ):
+        """Preço ruim -> alerta. Preço bom -> sem alerta, estado limpo.
+        Preço ruim de novo -> alerta de novo (condição nova, não repetição)."""
+        _insert_active_trade(
+            temp_db_path, "FLRY3.SA", "BUY",
+            entry_price=30.0, target_price=40.0, stop_loss=28.0,
+        )
+        df_ruim = _make_price_row(close=None)
+        df_bom = _make_price_row(close=32.0)  # entre stop e target, não fecha
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch("backend.app.main.ExecutorAgent"), \
+                 patch("backend.app.main._alerta_telegram") as mock_alerta:
+                from backend.app.main import _run_exit_scan
+
+                with patch(
+                    "backend.app.data.feed.fetch_recent_data", return_value=df_ruim
+                ):
+                    await _run_exit_scan()  # 1º alerta
+
+                with patch(
+                    "backend.app.data.feed.fetch_recent_data", return_value=df_bom
+                ):
+                    await _run_exit_scan()  # recupera, sem alerta
+
+                with patch(
+                    "backend.app.data.feed.fetch_recent_data", return_value=df_ruim
+                ):
+                    await _run_exit_scan()  # 2º alerta (condição nova)
+        finally:
+            database_module.DB_PATH = original_path
+
+        assert mock_alerta.call_count == 2
