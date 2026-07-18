@@ -19,6 +19,25 @@ def hoje_b3() -> datetime.date:
     return datetime.datetime.now(TZ_B3).date()
 
 
+def _alerta_telegram_startup(msg: str) -> None:
+    """Alerta best-effort via Telegram durante o boot. Nunca deve mascarar a
+    falha real de integridade do banco — se o próprio envio falhar (ex.:
+    config ausente), só loga e segue; o RuntimeError do chamador é quem
+    efetivamente aborta o startup. Duplicado do padrão em backend/app/main.py
+    (não importado de lá para evitar import circular: main.py já importa
+    deste módulo)."""
+    try:
+        from trading_bot.core.config import AppConfig
+        from trading_bot.core.telegram import TelegramNotifier
+        cfg = AppConfig.load()
+        TelegramNotifier(
+            cfg.get("notifications", "telegram_bot_token", default=""),
+            cfg.get("notifications", "telegram_chat_id", default=""),
+        ).send_message(msg)
+    except Exception as e:
+        logger.error("Falha ao enviar alerta Telegram de integridade: %s", e)
+
+
 def now_b3() -> datetime.datetime:
     """Datetime timezone-aware no fuso da B3 (para heartbeat do worker)."""
     return datetime.datetime.now(TZ_B3)
@@ -91,6 +110,54 @@ def init_db():
             ai_rationale TEXT,
             status TEXT
         )
+        """
+        )
+
+        # 1 posição ativa por ticker (P3-A Etapa 1). Índice PARCIAL (só cobre
+        # status='active'): um ticker pode ter várias linhas 'closed' no
+        # histórico, só não pode ter duas 'active' ao mesmo tempo. É o
+        # backstop real contra a corrida de execute_order — a checagem em
+        # Python (SELECT antes do INSERT) sozinha é raçosa (TOCTOU); este
+        # índice é quem garante a exclusão mútua de fato via IntegrityError.
+        #
+        # Verificação defensiva ANTES de criar o índice: um banco existente
+        # (upgrade, não uma instalação nova) pode já ter duplicata histórica
+        # de posição 'active' por ticker, de antes deste fix. Criar o índice
+        # às cegas nesse caso derruba o startup com um IntegrityError
+        # críptico, sem dizer qual ticker nem por quê. Detectar e falhar com
+        # diagnóstico é fail-closed; falhar às cegas é só quebrado.
+        cursor.execute(
+            "SELECT ticker, COUNT(*) FROM trades WHERE status = 'active' "
+            "GROUP BY ticker HAVING COUNT(*) > 1"
+        )
+        duplicatas = cursor.fetchall()
+        if duplicatas:
+            tickers_afetados = ", ".join(
+                f"{ticker} ({qtd}x)" for ticker, qtd in duplicatas
+            )
+            msg = (
+                f"Integridade violada em 'trades': {len(duplicatas)} ticker(s) "
+                f"com mais de uma posição 'active' simultânea — {tickers_afetados}. "
+                f"Resolva manualmente (feche ou mescle as duplicatas na tabela "
+                f"trades) antes de subir o serviço. Não é seguro criar o índice "
+                f"único idx_trades_one_active_per_ticker com dado inconsistente "
+                f"— o startup foi abortado propositalmente."
+            )
+            logger.error(msg)
+            # O alerta é best-effort por definição (ver docstring de
+            # _alerta_telegram_startup), mas blindamos o call site também:
+            # uma falha aqui — dela própria, não só do envio HTTP que ela já
+            # protege — jamais pode impedir o RuntimeError real de propagar.
+            try:
+                _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
+            except Exception as e:
+                logger.error("Falha inesperada ao alertar startup abortado: %s", e)
+            raise RuntimeError(msg)
+
+        cursor.execute(
+            """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_one_active_per_ticker
+        ON trades(ticker) WHERE status = 'active'
         """
         )
 
