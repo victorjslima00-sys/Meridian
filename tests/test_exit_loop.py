@@ -448,3 +448,33 @@ class TestAlertDeduplication:
             database_module.DB_PATH = original_path
 
         assert mock_alerta.call_count == 2
+
+
+class TestExitScanUsesDerivedTtl:
+    """P3-A Etapa 2e: _run_exit_scan deve passar o TTL derivado
+    (worker_state.exit_price_cache_ttl_seconds()) para fetch_recent_data,
+    não confiar no default global do cache (que é o TTL de ENTRADA)."""
+
+    async def test_run_exit_scan_passa_ttl_derivado_para_fetch(self, temp_db_path):
+        from backend.app import worker_state
+
+        _insert_active_trade(
+            temp_db_path, "PETR4.SA", "BUY",
+            entry_price=30.0, target_price=40.0, stop_loss=28.0,
+        )
+        df = _make_price_row(close=32.0)  # entre stop e target, não fecha
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch(
+                "backend.app.data.feed.fetch_recent_data", return_value=df
+            ) as mock_fetch:
+                from backend.app.main import _run_exit_scan
+                await _run_exit_scan()
+        finally:
+            database_module.DB_PATH = original_path
+
+        mock_fetch.assert_called_once()
+        _, kwargs = mock_fetch.call_args
+        assert kwargs.get("ttl") == worker_state.exit_price_cache_ttl_seconds()

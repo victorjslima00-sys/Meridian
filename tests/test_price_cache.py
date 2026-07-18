@@ -18,6 +18,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
+from backend.app import worker_state
 from backend.app.data import feed
 
 
@@ -240,3 +241,74 @@ class TestPriceCacheEviction:
         assert "TICK0.SA" not in tickers_no_cache
         assert "TICK1.SA" not in tickers_no_cache
         assert "TICK4.SA" in tickers_no_cache
+
+
+class TestFetchRecentDataRespectsExplicitTtl:
+    """fetch_recent_data aceita um ttl explícito por chamada (P3-A Etapa
+    2e) — o caminho de saída usa um TTL mais curto que o default, sem
+    mudar o comportamento de quem não passa ttl (MarketAnalyst,
+    get_current_price, get_candles continuam no PRICE_CACHE_TTL_SECONDS)."""
+
+    def test_ttl_explicito_mais_curto_expira_antes_do_default(self):
+        with patch.object(feed, "PRICE_CACHE_TTL_SECONDS", 100), patch(
+            "backend.app.data.feed.yf.download",
+            side_effect=lambda *a, **kw: _make_yf_df(),
+        ) as mock_dl:
+            feed.fetch_recent_data(
+                "PETR4.SA", period="1d", interval="15m", ttl=0.05
+            )
+            time.sleep(0.12)
+            # Com o default (100s) isso ainda seria HIT — só expira porque
+            # o ttl explícito (0.05s) foi o que realmente valeu.
+            feed.fetch_recent_data(
+                "PETR4.SA", period="1d", interval="15m", ttl=0.05
+            )
+
+        assert mock_dl.call_count == 2
+
+    def test_sem_ttl_explicito_usa_o_default_global(self):
+        with patch.object(feed, "PRICE_CACHE_TTL_SECONDS", 100), patch(
+            "backend.app.data.feed.yf.download",
+            side_effect=lambda *a, **kw: _make_yf_df(),
+        ) as mock_dl:
+            feed.fetch_recent_data("VALE3.SA", period="5d", interval="15m")
+            feed.fetch_recent_data("VALE3.SA", period="5d", interval="15m")
+
+        assert mock_dl.call_count == 1  # dentro do default de 100s, HIT
+
+
+class TestExitPriceCacheTtlDerivation:
+    """P3-A Etapa 2e: TTL de saída = 2 × EXIT_INTERVAL_SECONDS, DERIVADO
+    (não um número solto) — para que a fórmula do atraso de pior caso
+    documentada em worker_state.py continue valendo mesmo se alguém mudar
+    o intervalo do laço de saída."""
+
+    def test_ttl_de_saida_e_multiplo_do_intervalo(self):
+        """Propriedade geral: sem isso, o teto TTL+INTERVALO da fórmula
+        documentada deixa de valer (vira TTL+INTERVALO-resto)."""
+        ttl = worker_state.exit_price_cache_ttl_seconds()
+        interval = worker_state.EXIT_INTERVAL_SECONDS
+        assert ttl % interval == 0, (
+            f"TTL de saída ({ttl}s) não é múltiplo do intervalo "
+            f"({interval}s) — a fórmula do pior caso documentada quebra."
+        )
+
+    def test_ttl_de_saida_e_2x_o_intervalo(self):
+        """Trava a decisão específica (2x), não só a divisibilidade geral —
+        se o multiplicador mudar sem querer, isso pega."""
+        assert (
+            worker_state.exit_price_cache_ttl_seconds()
+            == 2 * worker_state.EXIT_INTERVAL_SECONDS
+        )
+
+    def test_ttl_de_saida_acompanha_mudanca_no_intervalo(self):
+        """DERIVADO de verdade: não pode ser um valor congelado que
+        desalinha se EXIT_INTERVAL_SECONDS mudar depois (config futura,
+        ou monkeypatch em outro teste)."""
+        with patch.object(worker_state, "EXIT_INTERVAL_SECONDS", 7):
+            assert worker_state.exit_price_cache_ttl_seconds() == 14
+
+    def test_ttl_de_entrada_nao_foi_alterado(self):
+        """Decisão explícita: TTL de entrada fica como está (15s) — não
+        vale mexer só por estética se não muda comportamento."""
+        assert feed.PRICE_CACHE_TTL_SECONDS == 15

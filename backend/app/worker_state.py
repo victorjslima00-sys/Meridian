@@ -27,6 +27,43 @@ STABLE_RESET_CYCLES = 5           # ciclos estáveis para zerar restart_count
 STABLE_RESET_SECONDS = 600        # OU tempo estável (10 min) para zerar
 
 
+# --- TTL do cache de preço no caminho de SAÍDA (P3-A Etapa 2e) --------------
+# O laço de saída (exit_loop/_run_exit_scan) usa um TTL de cache mais curto
+# que o default de entrada (feed.PRICE_CACHE_TTL_SECONDS) — saída tolera
+# muito menos dado velho que entrada (CLAUDE.md: "gerenciar saídas é
+# permitido" mesmo com o resto bloqueado; ver também BACKLOG.md sobre
+# latência de stop-loss).
+#
+# FÓRMULA DO ATRASO MÁXIMO NA DETECÇÃO DE UM STOP (medida contra o pior
+# caso: o preço cruza o stop logo depois de uma leitura fresca cachear o
+# valor antigo):
+#
+#     atraso_pior_caso = (⌊TTL / EXIT_INTERVAL⌋ + 1) × EXIT_INTERVAL
+#                      = TTL + EXIT_INTERVAL − (TTL mod EXIT_INTERVAL)
+#
+# Isso é NO MÁXIMO TTL + EXIT_INTERVAL, e SÓ atinge esse teto quando TTL é
+# múltiplo exato de EXIT_INTERVAL (TTL mod EXIT_INTERVAL == 0) — por isso o
+# TTL de saída é DERIVADO de EXIT_INTERVAL_SECONDS (2×), nunca um número
+# solto: um valor solto que deixasse de ser múltiplo do intervalo faria a
+# fórmula acima "vazar" (o atraso real fica MENOR que TTL+INTERVALO, mas de
+# um jeito não-óbvio — o teto documentado deixaria de ser exato sem que
+# ninguém percebesse ao mudar uma das duas constantes isoladamente).
+#
+# Ressalva: esta conta assume execução de scan instantânea. Na prática,
+# _run_exit_scan busca N tickers em sequência antes do próximo
+# asyncio.sleep(EXIT_INTERVAL_SECONDS), então o espaçamento real entre
+# scans é EXIT_INTERVAL_SECONDS + tempo_de_busca — com mais posições
+# ativas ou rede lenta, o atraso real do pior caso só cresce, nunca
+# encolhe. A fórmula acima é um piso, não uma garantia absoluta.
+def exit_price_cache_ttl_seconds() -> int:
+    """TTL do cache de preço para fetch_recent_data(..., ttl=...) no
+    exit_loop. Lida ao vivo (não congelada em import) — se
+    EXIT_INTERVAL_SECONDS for monkeypatchado (teste) ou mudar (config
+    futura), o valor derivado acompanha automaticamente, sem risco de
+    desalinhar a fórmula documentada acima."""
+    return 2 * EXIT_INTERVAL_SECONDS
+
+
 class WorkerState:
     """Estado mutável do worker. Instância única em `state` (abaixo)."""
 

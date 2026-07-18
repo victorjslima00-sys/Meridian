@@ -234,7 +234,8 @@ async def _run_exit_scan():
         from .data.feed import fetch_recent_data
 
         df_recent = await asyncio.to_thread(
-            fetch_recent_data, ticker, period="1d", interval="15m"
+            fetch_recent_data, ticker, period="1d", interval="15m",
+            ttl=worker_state.exit_price_cache_ttl_seconds(),
         )
         if df_recent is None or len(df_recent) == 0:
             continue

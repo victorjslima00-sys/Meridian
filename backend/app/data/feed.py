@@ -63,17 +63,20 @@ def _cache_key(ticker: str, period: str, interval: str) -> Tuple[str, str, str]:
     return (ticker, period, interval)
 
 
-def _cache_get(key: Tuple[str, str, str]) -> Optional[pd.DataFrame]:
+def _cache_get(key: Tuple[str, str, str], ttl: float) -> Optional[pd.DataFrame]:
     """None se não há entrada válida (ausente OU expirada pelo TTL).
     Sempre retorna uma CÓPIA — nunca a referência interna — para que uma
     mutação do chamador não corrompa o cache nem vaze para outro chamador
-    que peça a mesma chave depois."""
+    que peça a mesma chave depois. `ttl` é decidido pelo CHAMADOR de
+    fetch_recent_data a cada leitura — não fica gravado junto da entrada —
+    então o mesmo dado pode ser considerado "fresco o bastante" por um
+    caminho e "velho demais" por outro sem nenhum conflito."""
     with _cache_meta_lock:
         entry = _cache.get(key)
         if entry is None:
             return None
         fetched_at, df = entry
-        if time.monotonic() - fetched_at > PRICE_CACHE_TTL_SECONDS:
+        if time.monotonic() - fetched_at > ttl:
             return None
         return df.copy()
 
@@ -109,7 +112,8 @@ def _get_key_lock(key: Tuple[str, str, str]) -> threading.Lock:
 
 
 def fetch_recent_data(
-    ticker: str, period: str = "5d", interval: str = "1h", max_retries: int = 3
+    ticker: str, period: str = "5d", interval: str = "1h", max_retries: int = 3,
+    ttl: Optional[float] = None,
 ):
     """
     Busca dados OHLCV recentes usando yfinance, com cache curto compartilhado
@@ -121,6 +125,12 @@ def fetch_recent_data(
         period:      Período de histórico (ex: "5d", "1mo")
         interval:    Intervalo dos candles (ex: "15m", "1h", "1d")
         max_retries: Número máximo de tentativas antes de desistir
+        ttl:         TTL específico (segundos) para ESTA chamada. Se None
+                     (default), usa PRICE_CACHE_TTL_SECONDS. Caminhos com
+                     necessidade de frescor diferente do padrão (ex.:
+                     exit_loop — ver worker_state.exit_price_cache_ttl_seconds())
+                     passam um valor explícito; quem não passa nada mantém
+                     o comportamento de sempre.
 
     Returns:
         DataFrame normalizado (cópia independente, segura para o chamador
@@ -128,8 +138,9 @@ def fetch_recent_data(
     """
     normalized = _normalize_ticker(ticker)
     key = _cache_key(normalized, period, interval)
+    effective_ttl = ttl if ttl is not None else PRICE_CACHE_TTL_SECONDS
 
-    cached = _cache_get(key)
+    cached = _cache_get(key, effective_ttl)
     if cached is not None:
         return cached
 
@@ -139,7 +150,7 @@ def fetch_recent_data(
         # thread pode ter terminado de buscar (e cacheado) a mesma chave —
         # é exatamente isso que colapsa duas requisições concorrentes em
         # uma só chamada de rede.
-        cached = _cache_get(key)
+        cached = _cache_get(key, effective_ttl)
         if cached is not None:
             return cached
 
