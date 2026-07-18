@@ -116,6 +116,200 @@ from .agents.market_analyst import MarketAnalyst
 from .agents.risk_manager import RiskManager
 from .agents.executor import ExecutorAgent
 
+import math
+
+
+def _price_is_trustworthy(price, open_=None, high=None, low=None) -> bool:
+    """FAIL-CLOSED para decisões de saída: um preço não confiável nunca deve
+    disparar (nem impedir) o fechamento de uma posição por engano. A decisão
+    certa diante de dado ruim é NÃO decidir nada — manter a posição como
+    está, nunca 'vender por precaução'.
+
+    Rejeita: None, não numérico, <= 0, NaN — e o artefato conhecido do
+    yfinance de o candle do dia corrente vir com Open/High/Low zerados (ver
+    também o patch cosmético em get_candles). Mesmo com um close que pareça
+    válido, um candle com O/H/L zerados é sinal de dado incompleto — não
+    confiável o bastante para decidir um stop-loss/take-profit.
+    """
+    if price is None:
+        return False
+    try:
+        price = float(price)
+    except (TypeError, ValueError):
+        return False
+    if math.isnan(price) or price <= 0:
+        return False
+
+    if open_ is not None and high is not None and low is not None:
+        try:
+            o, h, low_ = float(open_), float(high), float(low)
+        except (TypeError, ValueError):
+            return False
+        if o == 0 and h == 0 and low_ == 0:
+            return False
+
+    return True
+
+
+async def _run_exit_scan():
+    """PHASE 1 isolada (P3-A Etapa 2): percorre SÓ tickers com posição
+    ativa — não o universo inteiro. Custo independe do tamanho do universo,
+    o que resolve a latência de stop-loss descrita no BACKLOG.md (antes,
+    a checagem de stop de um ticker só rodava 1x por ciclo completo do
+    laço lento, e um ciclo passava de 10 min com 50 tickers).
+
+    Aplica breakeven + stop/target e fecha via close_order — já idempotente
+    (CAS, P3-A Etapa 1): mesmo que esta função rode concorrentemente com
+    outra chamada para o mesmo trade, no máximo uma credita o portfolio.
+    """
+    from .data.database import get_connection
+
+    conn = get_connection()
+    try:
+        active_tickers = [
+            row[0]
+            for row in conn.execute(
+                "SELECT DISTINCT ticker FROM trades WHERE status = 'active'"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    for ticker in active_tickers:
+        from .data.feed import fetch_recent_data
+
+        df_recent = await asyncio.to_thread(
+            fetch_recent_data, ticker, period="1d", interval="15m"
+        )
+        if df_recent is None or len(df_recent) == 0:
+            continue
+
+        last_row = df_recent.iloc[-1]
+        current_price = last_row["close"]
+
+        if not _price_is_trustworthy(
+            current_price,
+            open_=last_row.get("open"),
+            high=last_row.get("high"),
+            low=last_row.get("low"),
+        ):
+            logger.warning(
+                "Exit scan: preço não confiável para %s (%r) — mantendo "
+                "posição, nenhuma ação tomada.", ticker, current_price
+            )
+            await asyncio.to_thread(
+                _alerta_telegram,
+                f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
+                f"({current_price!r}) — posição mantida (fail-closed).",
+            )
+            continue
+
+        from .data.database import get_connection
+
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, side, entry_price, target_price, stop_loss FROM "
+                "trades WHERE ticker = ? AND status = 'active'",
+                (ticker,),
+            )
+            active_trade = cursor.fetchone()
+            if not active_trade:
+                # Fechado por outra via entre o SELECT DISTINCT e agora
+                # (ex.: fechamento manual via API). Nada a fazer.
+                continue
+
+            trade_id, side, entry_price, target_price, stop_loss = active_trade
+
+            # Atualiza PnL ao vivo (mesma lógica de antes, agora isolada aqui)
+            if entry_price > 0:
+                live_pnl_pct = (
+                    ((current_price - entry_price) / entry_price) * 100
+                    if side == "BUY"
+                    else ((entry_price - current_price) / entry_price) * 100
+                )
+            else:
+                live_pnl_pct = 0.0
+            cursor.execute(
+                "UPDATE trades SET pnl_pct = ? WHERE id = ?",
+                (live_pnl_pct, trade_id),
+            )
+            conn.commit()
+
+            # Breakeven (50% do caminho até o alvo)
+            if (
+                side == "BUY"
+                and target_price > entry_price
+                and stop_loss < entry_price
+            ):
+                halfway = entry_price + (target_price - entry_price) * 0.5
+                if current_price >= halfway:
+                    cursor.execute(
+                        "UPDATE trades SET stop_loss = ? WHERE id = ?",
+                        (entry_price, trade_id),
+                    )
+                    conn.commit()
+                    stop_loss = entry_price
+                    await broadcast_log(
+                        "RiskManager",
+                        f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
+                        "success",
+                    )
+            elif (
+                side == "SELL"
+                and target_price < entry_price
+                and stop_loss > entry_price
+            ):
+                halfway = entry_price - (entry_price - target_price) * 0.5
+                if current_price <= halfway:
+                    cursor.execute(
+                        "UPDATE trades SET stop_loss = ? WHERE id = ?",
+                        (entry_price, trade_id),
+                    )
+                    conn.commit()
+                    stop_loss = entry_price
+                    await broadcast_log(
+                        "RiskManager",
+                        f"Breakeven ativado para {ticker}: Stop Loss movido para R$ {entry_price:.2f}",
+                        "success",
+                    )
+
+            close_trade = False
+            close_reason = ""
+            if side == "BUY":
+                if target_price > 0 and current_price >= target_price:
+                    close_trade, close_reason = True, f"Take Profit hit at {current_price}"
+                elif stop_loss > 0 and current_price <= stop_loss:
+                    close_trade, close_reason = True, f"Stop Loss hit at {current_price}"
+            elif side == "SELL":
+                if target_price > 0 and current_price <= target_price:
+                    close_trade, close_reason = True, f"Take Profit hit at {current_price}"
+                elif stop_loss > 0 and current_price >= stop_loss:
+                    close_trade, close_reason = True, f"Stop Loss hit at {current_price}"
+        finally:
+            conn.close()
+
+        if close_trade:
+            await broadcast_log(
+                "System",
+                f"Closing active trade on {ticker}: {close_reason}",
+                "warning",
+            )
+            executor = ExecutorAgent()
+            res = executor.close_order(trade_id, current_price, close_reason)
+            await broadcast_log(
+                "ExecutorAgent",
+                f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
+                "success",
+            )
+        else:
+            await broadcast_log(
+                "System",
+                f"{ticker} já possui posição aberta. Monitorando (Current: {current_price})...",
+                "info",
+            )
+
 
 async def _run_one_scan_cycle():
     """
