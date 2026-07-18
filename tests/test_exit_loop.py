@@ -478,3 +478,93 @@ class TestExitScanUsesDerivedTtl:
         mock_fetch.assert_called_once()
         _, kwargs = mock_fetch.call_args
         assert kwargs.get("ttl") == worker_state.exit_price_cache_ttl_seconds()
+
+
+class TestRunExitScanEffectiveness:
+    """P3-A Etapa 3 (heartbeat granular): _run_exit_scan retorna True se a
+    passada foi PLENAMENTE efetiva — todo ticker ativo teve preço
+    confiável avaliado, ou não havia nenhum ticker ativo (nada podia ter
+    ficado desprotegido). Retorna False se ao menos UM ticker ativo teve
+    preço não confiável nesta passada, mesmo que outros tenham sido
+    avaliados normalmente — o sinal é sobre a saúde do sistema como um
+    todo, não sobre um ticker isolado (esse já tem seu próprio alerta,
+    deduplicado, desde a Etapa 2d)."""
+
+    async def test_zero_posicoes_ativas_e_efetiva(self, temp_db_path):
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            from backend.app.main import _run_exit_scan
+            resultado = await _run_exit_scan()
+        finally:
+            database_module.DB_PATH = original_path
+
+        assert resultado is True
+
+    async def test_tres_ativas_todas_com_preco_confiavel_e_efetiva(
+        self, temp_db_path
+    ):
+        _insert_active_trade(
+            temp_db_path, "AAAA.SA", "BUY",
+            entry_price=10.0, target_price=20.0, stop_loss=5.0,
+        )
+        _insert_active_trade(
+            temp_db_path, "BBBB.SA", "BUY",
+            entry_price=10.0, target_price=20.0, stop_loss=5.0,
+        )
+        _insert_active_trade(
+            temp_db_path, "CCCC.SA", "BUY",
+            entry_price=10.0, target_price=20.0, stop_loss=5.0,
+        )
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch(
+                "backend.app.data.feed.fetch_recent_data",
+                return_value=_make_price_row(close=12.0),
+            ), patch("backend.app.main.ExecutorAgent"):
+                from backend.app.main import _run_exit_scan
+                resultado = await _run_exit_scan()
+        finally:
+            database_module.DB_PATH = original_path
+
+        assert resultado is True
+
+    async def test_uma_de_tres_com_preco_ruim_nao_e_efetiva(self, temp_db_path):
+        """Mesmo com 2 avaliações boas, 1 ruim já torna a passada
+        NÃO efetiva — o sinal agregado não pode esconder uma posição
+        que ficou sem avaliação."""
+        _insert_active_trade(
+            temp_db_path, "AAAA.SA", "BUY",
+            entry_price=10.0, target_price=20.0, stop_loss=5.0,
+        )
+        _insert_active_trade(
+            temp_db_path, "BBBB.SA", "BUY",
+            entry_price=10.0, target_price=20.0, stop_loss=5.0,
+        )
+        _insert_active_trade(
+            temp_db_path, "CCCC.SA", "BUY",
+            entry_price=10.0, target_price=20.0, stop_loss=5.0,
+        )
+
+        def fetch_side_effect(ticker, *args, **kwargs):
+            if ticker == "BBBB.SA":
+                return _make_price_row(close=None)  # preço ruim só para este
+            return _make_price_row(close=12.0)
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch(
+                "backend.app.data.feed.fetch_recent_data",
+                side_effect=fetch_side_effect,
+            ), patch("backend.app.main.ExecutorAgent"), patch(
+                "backend.app.main._alerta_telegram"
+            ):
+                from backend.app.main import _run_exit_scan
+                resultado = await _run_exit_scan()
+        finally:
+            database_module.DB_PATH = original_path
+
+        assert resultado is False

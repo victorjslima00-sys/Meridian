@@ -73,6 +73,16 @@ class WorkerState:
         self.restart_count: int = 0
         self.cycles_since_restart: int = 0
         self.restart_epoch_start: datetime.datetime = now_b3()
+        # Heartbeat granular do exit_loop (P3-A Etapa 3) — dois sinais
+        # DELIBERADAMENTE separados: last_exit_activity_at prova que o laço
+        # está rodando; last_effective_exit_scan_at prova que ele está de
+        # fato PROTEGENDO (toda posição ativa avaliada com preço confiável,
+        # ou nenhuma existia — zero posições é uma passada trivialmente
+        # efetiva). Um laço vivo mas inefetivo (girando sem avaliar nada,
+        # por rate limit ou feed fora do ar) não pode passar por saudável —
+        # ver is_alive().
+        self.last_exit_activity_at: Optional[datetime.datetime] = None
+        self.last_effective_exit_scan_at: Optional[datetime.datetime] = None
 
     # -- Transições ---------------------------------------------------------
     def mark_starting(self) -> None:
@@ -96,6 +106,18 @@ class WorkerState:
 
     def mark_stopped(self) -> None:
         self.status = "stopped"
+
+    def mark_exit_activity(self, effective: bool) -> None:
+        """Chamado pelo exit_loop ao fim de CADA iteração bem-sucedida
+        (sem exceção — mesma convenção de mark_scan/ai_committee_worker).
+        `effective` vem do retorno de _run_exit_scan(): True se toda
+        posição ativa foi avaliada com preço confiável (ou não havia
+        nenhuma). last_exit_activity_at sempre avança;
+        last_effective_exit_scan_at só avança quando effective=True."""
+        now = now_b3()
+        self.last_exit_activity_at = now
+        if effective:
+            self.last_effective_exit_scan_at = now
 
     # -- Reset por estabilidade --------------------------------------------
     def _maybe_reset_restart_count(self) -> None:
@@ -122,11 +144,22 @@ class WorkerState:
             self.restart_count = 0
 
     # -- Leitura ------------------------------------------------------------
-    def is_alive(self) -> bool:
-        if self.status != "running" or self.last_scan_at is None:
+    def _fresh(self, ts: Optional[datetime.datetime]) -> bool:
+        if ts is None:
             return False
-        elapsed = (now_b3() - self.last_scan_at).total_seconds()
-        return elapsed < HEARTBEAT_TIMEOUT_SECONDS
+        return (now_b3() - ts).total_seconds() < HEARTBEAT_TIMEOUT_SECONDS
+
+    def is_alive(self) -> bool:
+        """worker_alive exige TUDO fresco: o worker de entrada (status +
+        last_scan_at, como sempre) E os dois sinais do exit_loop
+        (atividade E efetividade — ver mark_exit_activity). Um sistema só
+        é "vivo" se a saída, que é quem protege capital, está viva E
+        funcionando de verdade."""
+        if self.status != "running" or not self._fresh(self.last_scan_at):
+            return False
+        return self._fresh(self.last_exit_activity_at) and self._fresh(
+            self.last_effective_exit_scan_at
+        )
 
     def snapshot(self) -> Dict[str, Any]:
         alive = self.is_alive()
@@ -135,6 +168,14 @@ class WorkerState:
             "worker_alive": alive,
             "worker_status": self.status,
             "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
+            "last_exit_activity_at": (
+                self.last_exit_activity_at.isoformat()
+                if self.last_exit_activity_at else None
+            ),
+            "last_effective_exit_scan_at": (
+                self.last_effective_exit_scan_at.isoformat()
+                if self.last_effective_exit_scan_at else None
+            ),
             "restart_count": self.restart_count,
         }
 

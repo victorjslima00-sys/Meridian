@@ -33,6 +33,10 @@ def _reset_state():
 def test_heartbeat_fresco_apos_scan():
     state.on_worker_start()
     state.mark_scan()
+    # A partir da Etapa 3 (heartbeat granular), worker_alive também exige
+    # os sinais do exit_loop frescos — sem isso o sistema não é "vivo" de
+    # verdade (ver TestExitLoopHeartbeat abaixo para o motivo).
+    state.mark_exit_activity(effective=True)
     assert state.is_alive() is True
     assert state.snapshot()["worker_alive"] is True
     assert state.snapshot()["status"] == "online"
@@ -220,6 +224,135 @@ def test_api_status_online_quando_worker_vivo():
 
     state.on_worker_start()
     state.mark_scan()
+    state.mark_exit_activity(effective=True)  # ver nota na Etapa 3 acima
     resp = main.get_status()
     assert resp["worker_alive"] is True
     assert resp["status"] == "online"
+
+
+# --- Heartbeat granular do exit_loop (P3-A Etapa 3) -------------------------
+#
+# Dois sinais, propositalmente separados: last_exit_activity_at prova que o
+# LAÇO está rodando; last_effective_exit_scan_at prova que ele está de fato
+# PROTEGENDO (toda posição ativa avaliada com preço confiável, ou nenhuma
+# existia). worker_alive exige os dois frescos -- um laço vivo mas inefetivo
+# ("girando" sem avaliar nada por rate limit/feed fora do ar) não pode
+# passar por saudável, é o padrão do poller que ficou 40 min girando em
+# erro de SSL: processo vivo, trabalho zero.
+
+class TestExitLoopHeartbeat:
+    def test_zero_posicoes_ativas_mantem_worker_alive(self):
+        """Zero posições ativas é uma passada trivialmente efetiva --
+        nada podia ter ficado desprotegido -- e não pode derrubar o
+        sinal de saúde."""
+        state.on_worker_start()
+        state.mark_scan()
+        state.mark_exit_activity(effective=True)
+        assert state.is_alive() is True
+
+    def test_falha_transitoria_no_exit_loop_nao_derruba_worker_alive(self):
+        """1 passada ruim isolada, seguida de 1 boa: não pode virar
+        alarme -- senão qualquer soluço passageiro de rate limit vira
+        ruído, e ruído demais treina todo mundo a ignorar o alarme."""
+        state.on_worker_start()
+        state.mark_scan()
+        state.mark_exit_activity(effective=True)
+        state.mark_exit_activity(effective=False)
+        assert state.is_alive() is True  # ainda bem dentro do timeout
+        state.mark_exit_activity(effective=True)  # próxima passada recupera
+        assert state.is_alive() is True
+
+    def test_degradacao_sustentada_do_exit_loop_derruba_worker_alive(self):
+        """Sem NENHUMA passada efetiva por mais que HEARTBEAT_TIMEOUT_SECONDS
+        -- o caso real (Yahoo fora do ar por minutos) -- worker_alive cai."""
+        state.on_worker_start()
+        state.mark_scan()
+        state.mark_exit_activity(effective=True)
+        # Última vez que uma passada foi efetiva: há mais que o timeout.
+        state.last_effective_exit_scan_at = ws.now_b3() - datetime.timedelta(
+            seconds=ws.HEARTBEAT_TIMEOUT_SECONDS + 1
+        )
+        assert state.is_alive() is False
+
+    def test_exit_loop_vivo_mas_inutil_nao_conta_como_vivo(self):
+        """O caso central desta etapa: last_exit_activity_at FRESCO (o
+        laço está rodando de verdade, a cada iteração) mas
+        last_effective_exit_scan_at VELHO (nenhuma avaliação confiável há
+        minutos) -- worker_alive precisa cair. 'Estou rodando' não é a
+        mesma coisa que 'estou protegendo'."""
+        state.on_worker_start()
+        state.mark_scan()
+        state.mark_exit_activity(effective=True)
+        state.last_effective_exit_scan_at = ws.now_b3() - datetime.timedelta(
+            seconds=ws.HEARTBEAT_TIMEOUT_SECONDS + 1
+        )
+        state.last_exit_activity_at = ws.now_b3()  # o laço acabou de rodar
+        assert state.is_alive() is False
+        assert (ws.now_b3() - state.last_exit_activity_at).total_seconds() < 1
+
+    def test_worker_alive_falso_sem_nenhuma_atividade_do_exit_loop(self):
+        """Simétrico ao test_worker_alive_falso_sem_nenhum_scan já
+        existente: antes da primeira iteração do exit_loop completar,
+        os campos são None -- não fresco, não vivo. Mesmo padrão já
+        usado para last_scan_at, agora também para os sinais de saída."""
+        state.on_worker_start()
+        state.mark_scan()
+        assert state.last_exit_activity_at is None
+        assert state.last_effective_exit_scan_at is None
+        assert state.is_alive() is False
+
+    def test_api_status_expoe_timestamps_do_exit_loop_separadamente(self):
+        from backend.app import main
+
+        state.on_worker_start()
+        state.mark_scan()
+        state.mark_exit_activity(effective=True)
+        resp = main.get_status()
+        assert resp["last_exit_activity_at"] is not None
+        assert resp["last_effective_exit_scan_at"] is not None
+
+    async def test_exit_loop_efetivo_atualiza_os_dois_sinais(self):
+        """Fiação de ponta a ponta: exit_loop() de verdade chama
+        mark_exit_activity com o retorno de _run_exit_scan()."""
+        from backend.app import main
+
+        chamadas = {"n": 0}
+
+        async def fake_scan():
+            chamadas["n"] += 1
+            if chamadas["n"] >= 2:
+                raise asyncio.CancelledError()
+            return True  # passada efetiva
+
+        assert state.last_exit_activity_at is None
+        assert state.last_effective_exit_scan_at is None
+        with patch.object(main, "_run_exit_scan", side_effect=fake_scan), \
+             patch.object(ws, "EXIT_INTERVAL_SECONDS", 0):
+            with pytest.raises(asyncio.CancelledError):
+                await main.exit_loop()
+
+        assert state.last_exit_activity_at is not None
+        assert state.last_effective_exit_scan_at is not None
+
+    async def test_exit_loop_inefetivo_marca_atividade_sem_marcar_efetividade(self):
+        """Passada que roda mas retorna False (preço não confiável em
+        algum ticker ativo): last_exit_activity_at avança,
+        last_effective_exit_scan_at NÃO — é essa diferença que faz o
+        laço vivo-mas-inútil aparecer no sinal."""
+        from backend.app import main
+
+        chamadas = {"n": 0}
+
+        async def fake_scan():
+            chamadas["n"] += 1
+            if chamadas["n"] >= 2:
+                raise asyncio.CancelledError()
+            return False  # passada NÃO efetiva
+
+        with patch.object(main, "_run_exit_scan", side_effect=fake_scan), \
+             patch.object(ws, "EXIT_INTERVAL_SECONDS", 0):
+            with pytest.raises(asyncio.CancelledError):
+                await main.exit_loop()
+
+        assert state.last_exit_activity_at is not None
+        assert state.last_effective_exit_scan_at is None

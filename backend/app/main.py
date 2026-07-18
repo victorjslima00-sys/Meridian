@@ -87,6 +87,14 @@ def get_status():
         "worker_alive": snap["worker_alive"],
         "worker_status": snap["worker_status"],
         "last_scan_at": snap["last_scan_at"],
+        # P3-A Etapa 3: dois sinais separados do exit_loop — atividade
+        # (o laço está rodando) e efetividade (o laço está de fato
+        # avaliando stop/target com preço confiável). Expostos à parte de
+        # last_scan_at (que é só do laço lento de entradas) para que quem
+        # observa consiga distinguir "laço de saída girando" de "laço de
+        # saída girando E protegendo".
+        "last_exit_activity_at": snap["last_exit_activity_at"],
+        "last_effective_exit_scan_at": snap["last_effective_exit_scan_at"],
         "restart_count": snap["restart_count"],
         "active_agents": 3,
     }
@@ -206,7 +214,7 @@ def _price_is_trustworthy(price, open_=None, high=None, low=None) -> bool:
     return True
 
 
-async def _run_exit_scan():
+async def _run_exit_scan() -> bool:
     """PHASE 1 isolada (P3-A Etapa 2): percorre SÓ tickers com posição
     ativa — não o universo inteiro. Custo independe do tamanho do universo,
     o que resolve a latência de stop-loss descrita no BACKLOG.md (antes,
@@ -216,6 +224,15 @@ async def _run_exit_scan():
     Aplica breakeven + stop/target e fecha via close_order — já idempotente
     (CAS, P3-A Etapa 1): mesmo que esta função rode concorrentemente com
     outra chamada para o mesmo trade, no máximo uma credita o portfolio.
+
+    Returns:
+        True se esta passada foi PLENAMENTE efetiva — todo ticker ativo
+        teve preço confiável avaliado, ou não havia nenhum ticker ativo
+        (nada podia ter ficado desprotegido). False se ao menos um ticker
+        ativo teve preço não confiável nesta passada (ver P3-A Etapa 3 —
+        heartbeat granular: "o laço está rodando" e "o laço está
+        protegendo" são sinais distintos, um vivo mas inefetivo não pode
+        passar por saudável).
     """
     from .data.database import get_connection
 
@@ -230,6 +247,8 @@ async def _run_exit_scan():
     finally:
         conn.close()
 
+    all_trustworthy = True
+
     for ticker in active_tickers:
         from .data.feed import fetch_recent_data
 
@@ -238,6 +257,10 @@ async def _run_exit_scan():
             ttl=worker_state.exit_price_cache_ttl_seconds(),
         )
         if df_recent is None or len(df_recent) == 0:
+            # Falha total do fetch (ex.: rate limit esgotando os retries) —
+            # este ticker ficou sem avaliação nesta passada. Mesma
+            # categoria de "não efetivo" que preço não confiável abaixo.
+            all_trustworthy = False
             continue
 
         last_row = df_recent.iloc[-1]
@@ -262,6 +285,7 @@ async def _run_exit_scan():
                     f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
                     f"({current_price!r}) — posição mantida (fail-closed).",
                 )
+            all_trustworthy = False
             continue
 
         # Preço confiável de novo: limpa o estado de alerta deste ticker,
@@ -374,6 +398,8 @@ async def _run_exit_scan():
                 f"{ticker} já possui posição aberta. Monitorando (Current: {current_price})...",
                 "info",
             )
+
+    return all_trustworthy
 
 
 async def _run_one_scan_cycle():
@@ -525,6 +551,12 @@ async def exit_loop():
     de resiliência do ai_committee_worker — uma falha pontual não mata o
     loop, só a próxima iteração é adiada.
 
+    Heartbeat granular (P3-A Etapa 3): mark_exit_activity é chamado só no
+    caminho de SUCESSO (iteração completou sem exceção — mesma convenção
+    de mark_scan/ai_committee_worker), com o retorno de _run_exit_scan()
+    indicando se a passada foi efetiva. Um "activity" batido mesmo em
+    exceção mediria só "o laço tentou", não "o laço completou algo real".
+
     PENDÊNCIA CONHECIDA (P3-A Etapa 4, não implementada ainda): este loop
     NÃO está sob supervisão de restart-com-backoff como o worker principal
     (worker_supervisor). Se ele morrer de vez (exceção escapando do
@@ -535,7 +567,8 @@ async def exit_loop():
     """
     while True:
         try:
-            await _run_exit_scan()
+            effective = await _run_exit_scan()
+            worker_state.state.mark_exit_activity(effective=effective)
         except asyncio.CancelledError:
             raise  # cancelamento limpo (shutdown/testes) deve propagar
         except Exception as e:
