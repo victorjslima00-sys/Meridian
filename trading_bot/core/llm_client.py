@@ -32,13 +32,18 @@ class ResilientLLMClient(LLMClientInterface):
     def generate_text(self, prompt: str) -> Optional[LLMResponse]:
         """Versão síncrona — para uso em scripts (fase2, fase3, etc.)."""
         try:
-            return asyncio.run(self._call_gemini(prompt))
+            asyncio.get_running_loop()
         except RuntimeError:
+            pass
+        else:
             logger.error(
                 "generate_text() síncrono chamado dentro de contexto async. "
                 "Use await generate_text_async() em código FastAPI/async."
             )
             return None
+
+        try:
+            return asyncio.run(self._call_gemini(prompt))
         except Exception as e:
             logger.warning("Falha no LLM principal: %s.", e)
             return None

@@ -96,18 +96,18 @@ class TestMarketAnalyst:
         assert result["signal"] == "SELL"
 
     @pytest.mark.asyncio
-    async def test_fallback_to_math_when_llm_returns_none(self):
+    async def test_llm_offline_fails_closed_with_hold(self):
         from backend.app.agents.market_analyst import MarketAnalyst
         with patch("backend.app.agents.market_analyst.fetch_recent_data",
                    return_value=_make_price_df()), \
              patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
             MockLLM.return_value.generate_text_async = AsyncMock(return_value=None)
             result = await MarketAnalyst("BTC-USD").analyze()
-        assert result["signal"] == "BUY"
-        assert "Fallback" in result["reason"]
+        assert result["signal"] == "HOLD"
+        assert "indisponível" in result["reason"].lower()
 
     @pytest.mark.asyncio
-    async def test_fallback_to_math_when_llm_returns_invalid_json(self):
+    async def test_invalid_llm_json_fails_closed_with_hold(self):
         from backend.app.agents.market_analyst import MarketAnalyst
         bad_resp = MagicMock()
         bad_resp.content = "isso nao e json"
@@ -116,8 +116,8 @@ class TestMarketAnalyst:
              patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
             MockLLM.return_value.generate_text_async = AsyncMock(return_value=bad_resp)
             result = await MarketAnalyst("BTC-USD").analyze()
-        assert result["signal"] in ["BUY", "SELL", "HOLD"]
-        assert "Fallback" in result["reason"]
+        assert result["signal"] == "HOLD"
+        assert "inválida" in result["reason"].lower()
 
     @pytest.mark.asyncio
     async def test_returns_hold_on_insufficient_data(self):

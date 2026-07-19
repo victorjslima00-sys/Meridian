@@ -74,13 +74,12 @@ class MarketAnalyst:
         """
 
         signal = "HOLD"
-        reason = "Awaiting LLM..."
+        reason = "LLM indisponível — entrada bloqueada (fail-closed)."
         confidence = 0
         target_price = 0.0
         stop_loss = 0.0
 
         llm_response = await self.llm_client.generate_text_async(prompt)
-
         if llm_response and llm_response.content:
             try:
                 content = (
@@ -89,60 +88,24 @@ class MarketAnalyst:
                     .strip()
                 )
                 parsed = json.loads(content)
-                signal = parsed.get("signal", "HOLD").upper()
-                if signal not in ["BUY", "SELL", "HOLD"]:
+                signal = str(parsed.get("signal", "HOLD")).upper()
+                if signal not in {"BUY", "SELL", "HOLD"}:
                     signal = "HOLD"
-                confidence = int(parsed.get("confidence", 50))
+                confidence = max(0, min(100, int(parsed.get("confidence", 0))))
                 target_price = float(parsed.get("target_price", 0.0))
                 stop_loss = float(parsed.get("stop_loss", 0.0))
-                reason = parsed.get("reason", f"Gemini analyzed. Trend: {trend}")
-            except Exception as e:
+                reason = str(parsed.get("reason", f"Gemini analyzed. Trend: {trend}"))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 logger.warning(
-                    f"Failed to parse LLM response for {self.ticker}: {e}. Falling back to basic math."
+                    "Resposta LLM inválida para %s: %s. Entrada bloqueada.",
+                    self.ticker,
+                    exc,
                 )
-                try:
-                    import sys; from pathlib import Path
-                    root = Path(__file__).resolve().parent.parent.parent.parent.parent
-                    if str(root) not in sys.path: sys.path.append(str(root))
-                    from trading_bot.core.telegram import TelegramClient
-                    TelegramClient().send_message(f"⚠️ [MarketAnalyst] LLM Parse Fallback acionado para {self.ticker}. Resposta inválida da IA.")
-                except Exception:
-                    pass
-                signal = (
-                    "BUY"
-                    if trend == "Uptrend"
-                    else "SELL" if trend == "Downtrend" else "HOLD"
-                )
-                reason = f"Fallback math logic. Trend: {trend}"
-                confidence = 55
-                if signal == "BUY":
-                    target_price = last_close + (last_std * 3)
-                    stop_loss = last_close - (last_std * 1.5)
-                elif signal == "SELL":
-                    target_price = last_close - (last_std * 3)
-                    stop_loss = last_close + (last_std * 1.5)
-        else:
-            try:
-                import sys; from pathlib import Path
-                root = Path(__file__).resolve().parent.parent.parent.parent.parent
-                if str(root) not in sys.path: sys.path.append(str(root))
-                from trading_bot.core.telegram import TelegramClient
-                TelegramClient().send_message(f"⚠️ [MarketAnalyst] LLM Offline Fallback acionado para {self.ticker}. IA não respondeu.")
-            except Exception:
-                pass
-            signal = (
-                "BUY"
-                if trend == "Uptrend"
-                else "SELL" if trend == "Downtrend" else "HOLD"
-            )
-            reason = f"Fallback math logic (LLM Failed). Trend: {trend}"
-            confidence = 55
-            if signal == "BUY":
-                target_price = last_close + (last_std * 3)
-                stop_loss = last_close - (last_std * 1.5)
-            elif signal == "SELL":
-                target_price = last_close - (last_std * 3)
-                stop_loss = last_close + (last_std * 1.5)
+                signal = "HOLD"
+                confidence = 0
+                target_price = 0.0
+                stop_loss = 0.0
+                reason = "Resposta da IA inválida — entrada bloqueada (fail-closed)."
 
         return {
             "signal": signal,

@@ -37,7 +37,7 @@ jobs:
 
       - name: Lint (qualidade geral)
         run: |
-          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 \
+          flake8 . --count --exit-zero --max-complexity=15 --max-line-length=127 \
             --statistics --exclude=.venv,__pycache__,frontend,infra,.agents
 
       - name: Rodar testes (trading_bot core + backend agents)
@@ -48,6 +48,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: "test-token-ci"
           TELEGRAM_CHAT_ID: "0"
           ALLOWED_ORIGINS: "http://localhost:3000"
+          API_KEY: "ci-only-api-key-strong"
         run: |
           pytest tests/ \
             --cov=trading_bot \
@@ -63,3 +64,23 @@ jobs:
           name: coverage-report-${{ matrix.python-version }}
           path: coverage.xml
 
+
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build

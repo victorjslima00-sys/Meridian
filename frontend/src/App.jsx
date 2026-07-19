@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
-axios.defaults.headers.common['X-API-Key'] = "MERIDIAN_DEV_KEY";
+import api from './api';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 import ActiveTradeDetails from './ActiveTradeDetails';import {
   Activity, ShieldAlert, Cpu, Database,
@@ -41,7 +40,6 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-const API_BASE = 'http://localhost:8000/api';
 
 // ─── Ticker Tape Item com cor semântica ───────────────────────────────────────
 const TapeItem = ({ item }) => {
@@ -506,15 +504,15 @@ const AgentOfficeView = () => {
     news: { id: 'news', emoji: '🧑‍💼', name: 'Agente de Notícias', role: 'Sentimento Macro', x: 20, y: 30, color: '#f59e0b' },
     quant: { id: 'quant', emoji: '🧑‍🔬', name: 'Agente Quant', role: 'Análise Gráfica', x: 80, y: 30, color: '#00f3ff' },
     guardrail: { id: 'guardrail', emoji: '👮', name: 'Agente de Verificação', role: 'Compliance', x: 50, y: 70, color: '#f43f5e' },
-    broker: { id: 'broker', emoji: '🤖', name: 'Agente de Execução', role: 'Roteamento Cedro', x: 80, y: 70, color: '#10b981' }
+    broker: { id: 'broker', emoji: '🤖', name: 'Agente de Execução', role: 'Simulador local', x: 80, y: 70, color: '#10b981' }
   };
 
   const script = [
     { from: 'news', to: 'guardrail', text: 'Estou lendo notícias sobre mercado e acredito que isso pode influenciar o preço. Vou encaminhar para o Agente de Verificação.' },
     { from: 'guardrail', to: 'quant', text: 'Recebi o alerta macro. Agente Quant, favor rodar análise técnica para confirmar se há setup de entrada alinhado ao sentimento.' },
     { from: 'quant', to: 'guardrail', text: 'Análise concluída. O ativo rompeu a SMA-50 com volume. Setup confirmado. Retornando para aprovação final de risco.' },
-    { from: 'guardrail', to: 'broker', text: 'Risco aprovado. Correlação do portfólio controlada. Agente de Execução, pode disparar a ordem para a B3.' },
-    { from: 'broker', to: 'news', text: 'Ordem executada na Cedro com sucesso a mercado. Retornando ao modo de monitoramento.' }
+    { from: 'guardrail', to: 'broker', text: 'Risco aprovado. Agente de Execução, registre a ordem simulada localmente.' },
+    { from: 'broker', to: 'news', text: 'Ordem de Paper Trading registrada no SQLite. Retornando ao monitoramento.' }
   ];
 
   const [step, setStep] = useState(0);
@@ -839,7 +837,7 @@ export default function App() {
     
     const cmd = omniInput.toLowerCase();
     if (cmd.startsWith('/buy') || cmd.startsWith('/sell')) {
-      setOmniResult({ type: 'success', text: `Ordem enviada para o Motor FIX de Alta Frequência: ${cmd.toUpperCase()}` });
+      setOmniResult({ type: 'success', text: `Ordem simulada enviada ao motor local de Paper Trading: ${cmd.toUpperCase()}` });
     } else if (cmd.includes('clima') || cmd.includes('macro')) {
       setOmniResult({ type: 'ai', text: `Análise do Comitê: Volatilidade (VIX) em queda. Apetite a risco favorável. Sugestão: Aumentar exposição em Beta Alto.` });
     } else if (cmd === '/matrix') {
@@ -894,16 +892,16 @@ export default function App() {
     const load = async () => {
       try {
         const [s, p, e, tp, rm, tj, cm, mr, eq, nw] = await Promise.all([
-          axios.get(`${API_BASE}/status`),
-          axios.get(`${API_BASE}/positions`),
-          axios.get(`${API_BASE}/ecosystem`),
-          axios.get(`${API_BASE}/market_tape`),
-          axios.get(`${API_BASE}/elite/risk_metrics`).catch(()=>({data:null})),
-          axios.get(`${API_BASE}/elite/trade_journal`).catch(()=>({data:null})),
-          axios.get(`${API_BASE}/elite/correlation_matrix`).catch(()=>({data:null})),
-          axios.get(`${API_BASE}/elite/market_regime`).catch(()=>({data:null})),
-          axios.get(`${API_BASE}/elite/equity_curve`).catch(()=>({data:null})),
-          axios.get(`${API_BASE}/elite/news`).catch(()=>({data:null})),
+          api.get(`/status`),
+          api.get(`/positions`),
+          api.get(`/ecosystem`),
+          api.get(`/market_tape`),
+          api.get(`/elite/risk_metrics`).catch(()=>({data:null})),
+          api.get(`/elite/trade_journal`).catch(()=>({data:null})),
+          api.get(`/elite/correlation_matrix`).catch(()=>({data:null})),
+          api.get(`/elite/market_regime`).catch(()=>({data:null})),
+          api.get(`/elite/equity_curve`).catch(()=>({data:null})),
+          api.get(`/elite/news`).catch(()=>({data:null})),
         ]);
         setStatus(s.data); 
         setPositions(p.data);
@@ -946,11 +944,11 @@ export default function App() {
   const handleCloseTrade = async (tradeId) => {
     try {
       setApiError(null);
-      await axios.post(`${API_BASE}/trades/${tradeId}/close`);
+      await api.post(`/trades/${tradeId}/close`);
       setOmniResult({ type: 'success', text: `Ordem ${tradeId} encerrada com sucesso!` });
       
       // Force refresh positions
-      const p = await axios.get(`${API_BASE}/positions`);
+      const p = await api.get(`/positions`);
       setPositions(p.data);
     } catch (err) {
       const msg = err.response?.data?.detail || err.message;
@@ -961,9 +959,9 @@ export default function App() {
   const handleExecuteTrade = async (tradeParams) => {
     try {
       setApiError(null);
-      await axios.post(`${API_BASE}/trades/execute`, tradeParams);
+      await api.post(`/trades/execute`, tradeParams);
       // Force refresh positions
-      const p = await axios.get(`${API_BASE}/positions`);
+      const p = await api.get(`/positions`);
       setPositions(p.data);
     } catch (err) {
       const msg = err.response?.data?.detail || err.message;
@@ -975,7 +973,7 @@ export default function App() {
   // Fetch candle data when a ticker is selected for modal
   useEffect(() => {
     if (!chartModal) return;
-    axios.get(`${API_BASE}/history/${chartModal}?limit=60`)
+    api.get(`/history/${chartModal}?limit=60`)
       .then(res => {
         // format to {date, o, h, l, c, v}
         const data = res.data;
@@ -993,7 +991,7 @@ export default function App() {
   const openNode = async (node) => {
     setNodePanel(node); setNodeDetails(null);
     try {
-      const r = await axios.get(`${API_BASE}/node/${node.id}`);
+      const r = await api.get(`/node/${node.id}`);
       setNodeDetails(r.data);
     } catch (err) {
       console.error("Node fetch error:", err);
@@ -1002,7 +1000,7 @@ export default function App() {
 
   const doEmergencyStop = async () => {
     try {
-      const r = await axios.post(`${API_BASE}/system/emergency_stop`, { action: 'emergency_stop', password });
+      const r = await api.post(`/system/emergency_stop`, { action: 'emergency_stop', password });
       alert(r.data.error || r.data.msg);
       if (!r.data.error) { setShowEmergency(false); setPassword(''); }
     } catch { alert('Erro de conexão.'); }
@@ -1464,8 +1462,8 @@ export default function App() {
                   <h3 style={{ fontSize: '1.2rem', marginBottom: '0.2rem' }}>Trader Elite</h3>
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>ID: 10492-MERIDIAN • Conta {brokerSettings.mode.toUpperCase()}</p>
                   <div style={{ display: 'flex', gap: '1rem' }}>
-                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Plano: Institucional</span>
-                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Corretora: Cedro Tech</span>
+                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Ambiente: Paper Trading</span>
+                    <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Execução: Simulador local</span>
                   </div>
                 </div>
               </div>
@@ -1563,7 +1561,7 @@ export default function App() {
                   <div style={{ marginBottom: '1.5rem', padding: '1rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                       <span style={{ color: '#8b9bb4' }}>Corretora Ativa</span>
-                      <strong>Cedro Technologies</strong>
+                      <strong>Simulador local (SQLite)</strong>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#8b9bb4' }}>Status da API Key no `.env`</span>
@@ -1581,11 +1579,11 @@ export default function App() {
                       setTestingBroker(true);
                       setTimeout(() => {
                         setTestingBroker(false);
-                        alert(brokerSettings.has_cedro_key ? 'Conexão com Cedro OK!' : 'Adicione CEDRO_API_KEY no arquivo .env primeiro.');
+                        alert('O ambiente atual executa somente Paper Trading local.');
                       }, 1500);
                     }}
                   >
-                    {testingBroker ? <RefreshCw size={16} className="spin" /> : 'Validar Conexão Cedro'}
+                    {testingBroker ? <RefreshCw size={16} className="spin" /> : 'Validar Simulador Local'}
                   </button>
                 </div>
 
@@ -1597,15 +1595,12 @@ export default function App() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                     {[
                       { id: 'paper', label: 'Simulador Local (SQLite)', color: '#10b981' },
-                      { id: 'cedro_sandbox', label: 'Cedro Sandbox (Homologação)', color: '#f59e0b' },
-                      { id: 'real', label: 'Conta Real B3', color: '#f43f5e' }
+                      
+                      
                     ].map(mode => (
                       <div 
                         key={mode.id}
-                        onClick={() => {
-                          if (mode.id === 'real' && !window.confirm('ATENÇÃO: Você está mudando para conta REAL. Ordens irão para a B3. Continuar?')) return;
-                          setBrokerSettings({...brokerSettings, mode: mode.id});
-                        }}
+                        onClick={() => setBrokerSettings({...brokerSettings, mode: 'paper'})}
                         style={{ 
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                           padding: '1rem', cursor: 'pointer',
