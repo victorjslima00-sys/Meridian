@@ -60,6 +60,7 @@ risk:
   # Dimensionamento de posição (calibrar com capital inicial)
   kelly_fraction: 0.25             # 1/4 Kelly (range: 0.25-0.50 até 100+ trades)
   max_positions: 3                 # Máximo de posições simultâneas
+  max_position_fraction: 0.10       # Máximo de 10% do saldo livre por posição
   capital_initial: 300.00          # R$ 300 (capital inicial informado)
 
   # Correlação: não abrir posições em ativos com correlação > threshold
@@ -117,6 +118,7 @@ notifications:
 llm:
   primary_api_key: "${GEMINI_API_KEY}"    # Definir no .env
   fallback_api_key: "${OPENAI_API_KEY}"   # Alternativa secundária
+  failure_policy: "hold"                  # hold (seguro) | technical_fallback
 
 genetic_optimizer:
   population_size: 10

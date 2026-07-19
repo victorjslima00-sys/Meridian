@@ -161,6 +161,74 @@ class TestPortaoUnicoDeEntradas:
         assert "circuit_breaker" in motivos
 
 
+class TestExecuteManualTradeRespeitaOPortaoUnico:
+    """Ordem manual (POST /api/trades/execute, rota autenticada) precisa
+    responder pela MESMA decisão do laço automático de entradas
+    (_avaliar_portao_de_entradas) — nunca por um caminho de bloqueio
+    separado (só circuit breaker) que pode divergir do portão único e
+    deixar passar uma ordem manual com a saída esgotada/sticky."""
+
+    def _make_req(self):
+        from backend.app.main import TradeRequest
+
+        return TradeRequest(ticker="PETR4.SA", side="BUY", quantity=10)
+
+    def test_sticky_bloqueia_ordem_manual_mesmo_com_circuit_breaker_liberado(self):
+        from fastapi import HTTPException
+
+        from backend.app import main
+
+        state.mark_exit_activity(effective=True)  # saída saudável agora
+        state.set_exit_gate_sticky_block()  # mas já esgotou antes
+
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.from_config",
+            return_value=_fake_breaker(True),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                main.execute_manual_trade(self._make_req(), api_key="x")
+
+        assert exc.value.status_code == 423
+        assert "exit_loop_exhausted" in exc.value.detail
+
+    def test_saida_nao_saudavel_bloqueia_ordem_manual(self):
+        from fastapi import HTTPException
+
+        from backend.app import main
+
+        # last_exit_activity_at nunca setado = saída não saudável.
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.from_config",
+            return_value=_fake_breaker(True),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                main.execute_manual_trade(self._make_req(), api_key="x")
+
+        assert exc.value.status_code == 423
+        assert "exit_loop_unhealthy" in exc.value.detail
+
+    def test_tudo_saudavel_permite_ordem_manual(self):
+        from backend.app import main
+
+        state.mark_exit_activity(effective=True)
+
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.from_config",
+            return_value=_fake_breaker(True),
+        ), patch.object(main, "get_current_price", return_value=35.0), patch(
+            "backend.app.data.database.get_portfolio",
+            return_value={"saldo_livre": 100000.0},
+        ), patch.object(
+            main, "ExecutorAgent"
+        ) as MockExecutor:
+            MockExecutor.return_value.execute_order.return_value = {
+                "status": "success"
+            }
+            res = main.execute_manual_trade(self._make_req(), api_key="x")
+
+        assert res == {"status": "success"}
+
+
 class _FakeAppConfig:
     def __init__(self, tickers):
         self._tickers = tickers

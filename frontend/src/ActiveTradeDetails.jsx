@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries } from 'lightweight-charts';
-import axios from 'axios';
+import api from './api';
 import { Crosshair, ShieldAlert, Cpu, ChevronLeft, AlertTriangle } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8000/api';
 
 const ActiveTradeDetails = ({ trade, onBack }) => {
   const chartContainerRef = useRef(null);
@@ -13,7 +12,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
 
   useEffect(() => {
     // Fetch candle data
-    axios.get(`${API_BASE}/candles/${trade.ticker}`)
+    api.get(`/candles/${trade.ticker}`)
       .then(res => {
         if (res.data.candles) {
           setCandles(res.data.candles);
@@ -251,7 +250,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
                   <div style={{ width: '6px', height: '6px', background: '#10b981', borderRadius: '50%' }}></div> EXECUTOR ALGO
                 </div>
                 <div style={{ background: 'rgba(0,0,0,0.4)', padding: '1rem', borderRadius: '6px', borderLeft: '3px solid #10b981', fontSize: '0.85rem', lineHeight: 1.6, color: '#e2e8f0' }}>
-                  Ordem de entrada roteada via API Cedro. Execução limpa sem slippage significativo.
+                  Ordem simulada localmente no modo Paper Trading. Nenhuma ordem foi enviada à B3.
                 </div>
               </div>
 

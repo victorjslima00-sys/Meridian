@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from './api';
 import {
   AreaChart, Area, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -7,7 +7,6 @@ import {
 } from 'recharts';
 import { TrendingUp, TrendingDown, Clock, Volume2 } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8000/api';
 
 // Tooltip customizado para manter o tema escuro
 const DarkTooltip = ({ active, payload, label }) => {
@@ -40,7 +39,7 @@ export const TickerAreaChart = ({ ticker }) => {
   useEffect(() => {
     if (!ticker) return;
     setLoading(true);
-    axios.get(`${API_BASE}/history/${ticker}?limit=90`)
+    api.get(`/history/${ticker}?limit=90`)
       .then(res => {
         const prices = res.data.prices || [];
         const dates = res.data.dates || [];

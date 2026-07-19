@@ -17,6 +17,10 @@ secrets/
 
 # --- Logs ---
 logs/
+.agents/
+.todo.json
+todo.md
+terminal_logs/
 *.log
 *.jsonl
 

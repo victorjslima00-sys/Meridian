@@ -102,10 +102,10 @@ const nodeTypes = {
 const initialNodes = [
   { id: '1', type: 'trigger', position: { x: 50, y: 100 }, data: { label: 'Sinal B3 / Crypto' } },
   { id: '2', type: 'agent', position: { x: 350, y: 70 }, data: { label: 'AI Agent (Criador)' } },
-  { id: '3', type: 'model', position: { x: 200, y: 300 }, data: { label: 'Ollama Llama 3', sub: 'Chat Model' } },
-  { id: '4', type: 'memory', position: { x: 350, y: 300 }, data: { label: 'Vector DB', sub: 'Pinecone Memory' } },
+  { id: '3', type: 'model', position: { x: 200, y: 300 }, data: { label: 'Gemini 1.5 Flash', sub: 'Chat Model' } },
+  { id: '4', type: 'memory', position: { x: 350, y: 300 }, data: { label: 'Vector DB', sub: 'Sem memória vetorial' } },
   { id: '5', type: 'tool', position: { x: 500, y: 300 }, data: { label: 'Análise Técnica', sub: 'read: market', icon: 'chart' } },
-  { id: '6', type: 'tool', position: { x: 650, y: 300 }, data: { label: 'Boleta FIX', sub: 'write: order', icon: 'order' } },
+  { id: '6', type: 'tool', position: { x: 650, y: 300 }, data: { label: 'Simulador SQLite', sub: 'paper: order', icon: 'order' } },
 ];
 
 const initialEdges = [

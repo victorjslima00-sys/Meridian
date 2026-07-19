@@ -18,6 +18,10 @@ async def lifespan(app: FastAPI):
     restart isolada; no shutdown, cancela as duas tasks limpo.
     """
     from .data.database import init_db
+    from .security import validate_security_config
+    from .runtime_config import RuntimeConfig
+    validate_security_config()
+    RuntimeConfig.load()
     init_db()
     # FAIL-FAST: config de risco inválida derruba o boot com erro claro,
     # em vez de deixar o bot operar com thresholds quebrados.
@@ -53,9 +57,8 @@ ALLOWED_ORIGINS = os.environ.get(
     "ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:5173"  # dev local
 ).split(",")
 
-from fastapi import Depends, Security
-from fastapi.security import APIKeyHeader
-import hmac
+from fastapi import Depends
+from .security import verify_api_key
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,25 +68,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_KEY = os.environ.get("API_KEY", "MERIDIAN_DEV_KEY")
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
-
-def verify_api_key(api_key: str = Security(api_key_header)):
-    if not hmac.compare_digest(api_key, API_KEY):
-        raise HTTPException(
-            status_code=403,
-            detail="Could not validate credentials",
-        )
-    return api_key
-
-
 @app.get("/api/status")
 def get_status():
+    from .runtime_config import RuntimeConfig
+    runtime = RuntimeConfig.load()
     # Reflete o estado real do worker: nunca "online" com o loop morto/stale.
     snap = worker_state.state.snapshot()
     return {
         "status": snap["status"],           # online | degraded | stopped
         "mode": "paper_trading",
+        "execution_mode": runtime.execution_mode,
         "worker_alive": snap["worker_alive"],
         "worker_status": snap["worker_status"],
         "last_scan_at": snap["last_scan_at"],
@@ -573,7 +567,9 @@ async def _run_one_scan_cycle():
             continue
 
         # --- ENTRY LOOP (Find New Opportunities) ---
-        if not entradas_liberadas:
+        from .runtime_config import RuntimeConfig
+        runtime = RuntimeConfig.load()
+        if not entradas_liberadas or not runtime.autonomous_entries_enabled:
             continue
         await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
 
@@ -868,17 +864,17 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantidade deve ser maior que 0")
 
-    # Entrada nova também respeita o circuit breaker (FAIL-CLOSED)
-    try:
-        from trading_bot.risk.circuit_breaker import CircuitBreaker
-        entradas_liberadas = CircuitBreaker.from_config().can_trade()
-    except Exception as e:
-        logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entrada manual.")
-        entradas_liberadas = False
-    if not entradas_liberadas:
+    # Ordem manual passa pelo mesmo PORTÃO ÚNICO do laço automático de
+    # entradas (ver _avaliar_portao_de_entradas) — nunca um caminho de
+    # bloqueio separado, que poderia divergir e deixar uma ordem manual
+    # passar com a saída esgotada/sticky. asyncio.run() é seguro aqui: esta
+    # rota é `def` (síncrona), então roda na threadpool do FastAPI, numa
+    # thread sem event loop próprio.
+    liberado, motivos = asyncio.run(_avaliar_portao_de_entradas())
+    if not liberado:
         raise HTTPException(
             status_code=423,
-            detail="Circuit breaker ativo: novas entradas bloqueadas (fail-closed).",
+            detail=f"Entradas bloqueadas (fail-closed): {', '.join(motivos)}",
         )
 
     from .data.database import get_portfolio
@@ -1029,12 +1025,19 @@ class ActionRequest(BaseModel):
 
 
 @app.post("/api/system/emergency_stop")
-def system_emergency_stop(req: ActionRequest):
+def system_emergency_stop(
+    req: ActionRequest, api_key: str = Depends(verify_api_key)
+):
     if not EMERGENCY_PASSWORD:
-        return {"error": "Emergency password not configured on server."}
-    
+        # Fail-closed: rota mais destrutiva do arquivo (fecha TODAS as
+        # posições). Sem senha configurada, nunca executar — 503, não 200.
+        raise HTTPException(
+            status_code=503,
+            detail="Emergency password not configured on server.",
+        )
+
     import hmac
-    if not hmac.compare_digest(req.password, EMERGENCY_PASSWORD):
+    if not req.password or not hmac.compare_digest(req.password, EMERGENCY_PASSWORD):
         raise HTTPException(status_code=401, detail="Senha incorreta. Acesso negado.")
 
     try:

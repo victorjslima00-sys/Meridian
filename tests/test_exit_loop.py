@@ -271,6 +271,8 @@ class _FakeAppConfig:
     def get(self, *keys, default=None):
         if keys == ("_universe", "tickers"):
             return self._tickers
+        if keys == ("execution", "mode"):
+            return "full_auto"
         return default
 
 

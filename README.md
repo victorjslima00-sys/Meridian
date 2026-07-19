@@ -1,70 +1,112 @@
 <div align="center">
   <img src="assets/meridian_banner.jpg" alt="Meridian" width="100%">
-  
   <h1>Meridian Trading System</h1>
-  <p><strong>Inteligência Quantitativa Autônoma para a B3</strong></p>
-
-  <p>
-    <img src="https://img.shields.io/badge/Status-Fase%206-success" alt="Status">
-    <img src="https://img.shields.io/badge/Market-B3-blue" alt="Mercado">
-    <img src="https://img.shields.io/badge/Stack-Python%20%7C%20AWS%20%7C%20SQLite-lightgrey" alt="Stack">
-    <img src="https://img.shields.io/badge/Execution-100%25%20Autonomous-blueviolet" alt="Autonomia">
-  </p>
+  <p><strong>Pesquisa quantitativa e Paper Trading para a B3</strong></p>
 </div>
 
----
+> **Importante:** o Meridian executa somente **Paper Trading local**. Nenhuma ordem é enviada à Cedro ou à B3.
 
-## Instalação Rápida
+## Estado atual
+
+- Backend FastAPI com workers supervisionados para entradas e saídas.
+- Frontend React/Vite para acompanhamento e operação simulada.
+- Persistência SQLite em modo WAL.
+- Motor quantitativo, backtests, gestão de risco e circuit breaker.
+- Autenticação das rotas mutáveis por API key definida exclusivamente no ambiente.
+- Modos de execução definidos por `config/settings.yaml`.
+
+## Requisitos
+
+- Python 3.11 ou 3.12
+- Node.js 22 para o frontend
+
+## Instalação
 
 ```bash
-cd trading-bot
-pip install -r requirements.txt
+git clone https://github.com/victorjslima00-sys/Meridian.git
+cd Meridian
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements-dev.txt
+cp .env.example .env
 ```
 
-## Configuração
+Preencha os segredos no `.env`. A API não inicia sem uma `API_KEY` forte.
 
-1. Edite `config/settings.yaml` e preencha:
-   - `data.brapi_token` — token da brapi.dev (plano grátis)
-   - `notifications.telegram_bot_token` e `telegram_chat_id`
+## Configuração operacional
 
-2. Revise `config/universe.yaml` — 50 ativos pré-configurados do IBOVESPA
+A fonte de verdade é `config/settings.yaml`:
 
-## Executar Validação de Dados
+```yaml
+execution:
+  mode: manual  # manual | semi_auto | full_auto
+
+risk:
+  kelly_fraction: 0.25
+  max_positions: 3
+  max_position_fraction: 0.10
+
+llm:
+  failure_policy: hold
+```
+
+- `manual`: bloqueia novas entradas autônomas; a boleta simulada continua disponível.
+- `semi_auto`: reservado para fluxo de aprovação; não autoexecuta entradas.
+- `full_auto`: permite entradas autônomas, sempre em Paper Trading.
+- `llm.failure_policy: hold`: falhas ou respostas inválidas da IA resultam em `HOLD`.
+
+## Executar
+
+Backend:
 
 ```bash
-# Com token brapi.dev (recomendado)
-python scripts/fase0_validate_data.py --token SEU_TOKEN_BRAPI
-
-# Sem token (pula validação cruzada)
-python scripts/fase0_validate_data.py --skip-brapi
+uvicorn backend.app.main:app --reload --port 8000
 ```
 
-## Fases de Implementação
+Frontend:
 
-| Fase | Status | Descrição |
-|------|--------|-----------|
-| **0** | Concluída | Validação de dados (yfinance / brapi) |
-| **1** | Concluída | Motor de sinais + backtesting |
-| **2** | Concluída | Risco + circuit breaker + correlações |
-| **3** | Concluída | Cloud Enterprise (Terraform + AWS + CI/CD) |
-| **4** | Concluída | Otimização Quântica (Motor de Grid Search) |
-| **5** | Concluída | Automação Total (100% Autônomo) |
-| **6** | Concluída | Comitê Multi-Agentes de IA (Supervisão) |
-| **7** | Pendente | Painel Web (Frontend separado do Backend) |
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-## Qualidade e Cobertura de Código
+Por padrão, o frontend usa `/api`. Para desenvolvimento com servidores separados:
 
-O repositório possui Integração Contínua (CI) configurada com:
-- **GitHub Actions**: Deploy automatizado via SSH para EC2.
-- **Segurança Infra**: Fail2Ban, Logrotate e UFW no servidor Ubuntu.
-- **Flake8**: Validação rigorosa de estilo e qualidade.
-- **Pytest + Coverage**: Testes abrangentes para ingestão e validação.
+```bash
+# frontend/.env.local
+VITE_API_BASE_URL=http://localhost:8000/api
+# Apenas em ambiente local e privado, se necessário:
+VITE_API_KEY=sua-api-key-local
+```
 
-## Notas de Segurança (Arquitetura Atual)
+Uma chave incluída em JavaScript nunca é um segredo real. Em produção, prefira servir o painel atrás de autenticação/proxy e manter a API fora da internet pública.
 
-- **Aviso Legal:** A integração com a corretora (Cedro) no momento atua estritamente em **Paper Trading** (simulação local). Nenhuma ordem real é executada em produção até configuração futura explícita.
+## Testes
 
-- **Comitê de IA Ativo**: Agente Guard-Rail avalia e barra qualquer otimização ou trade baseado em Fake News ou alucinação algorítmica. Triangulação obrigatória em fontes Tier-1.
-- **Autonomia Total**: O bot foi destravado da dependência humana. Confirmação manual de ordens via Telegram foi **revogada**.
-- **Stop-loss Nativo**: Ordem STOP disparada e gerenciada no momento da entrada.
-- **Circuit Breaker**: Implementado com 3 limites simultâneos (diário, inception, rolling 30d).
+```bash
+pytest tests/ --ignore=tests/e2e
+pytest tests/e2e
+cd frontend
+npm run lint
+npm run build
+```
+
+O CI executa Python 3.11/3.12, lint bloqueante, testes backend/E2E, lint e build do frontend.
+
+## Segurança e deploy
+
+- Nunca commitar `.env`, bancos `data/*.db*`, chaves `.pem`, logs ou `.agents/`.
+- Configure no GitHub Actions: `API_KEY`, `ALLOWED_ORIGINS`, `EMERGENCY_PASSWORD`, Telegram e credenciais SSH.
+- O deploy exclui segredos, bancos locais, caches, logs e dependências locais.
+- A integração Cedro permanece apenas como código experimental/stub e não é usada para execução real.
+
+## Estrutura
+
+- `backend/app/`: API, workers e agentes operacionais.
+- `trading_bot/`: dados, sinais, backtests, risco e integrações.
+- `frontend/`: painel React/Vite.
+- `config/`: universo e parâmetros operacionais.
+- `tests/`: testes unitários, concorrência e E2E.
+- `infra/aws/`: infraestrutura Terraform.

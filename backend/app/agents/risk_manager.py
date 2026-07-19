@@ -8,8 +8,10 @@ CORRELATED_GROUPS: List[List[str]] = [
 
 
 class RiskManager:
-    def __init__(self, saldo_livre: float):
+    def __init__(self, saldo_livre: float, config=None):
+        from ..runtime_config import RuntimeConfig
         self.saldo_livre = saldo_livre
+        self.config = config or RuntimeConfig.load()
 
     def _is_correlated_with_open(self, ticker: str, open_tickers: List[str]) -> bool:
         """Verifica se o ticker está no mesmo grupo de correlação de algum ativo aberto."""
@@ -35,7 +37,10 @@ class RiskManager:
         kelly_pct = win_rate - ((1.0 - win_rate) / win_loss_ratio)
 
         # Max risk allowed is 10% for exceptional opportunities
-        safe_kelly = min(kelly_pct * 0.5, 0.10)
+        safe_kelly = min(
+            kelly_pct * self.config.kelly_fraction,
+            self.config.max_position_fraction,
+        )
 
         if safe_kelly < 0:
             return 0.0
@@ -53,6 +58,12 @@ class RiskManager:
         """
         if open_tickers is None:
             open_tickers = []
+
+        if len(open_tickers) >= self.config.max_positions:
+            return {
+                "approved": False,
+                "reason": f"Limite de {self.config.max_positions} posições atingido.",
+            }
 
         if analyst_signal["signal"] == "HOLD":
             return {"approved": False, "reason": "Analyst recommends HOLD."}
@@ -128,5 +139,5 @@ class RiskManager:
             "allocated_capital": pos_size,
             "target_price": target_price,
             "stop_loss": stop_loss,
-            "reason": f"Aprovado. Risco:Retorno {win_loss_ratio:.2f} | Confiança {confidence}%. Alocando R$ {pos_size:.2f} (Max 10%).",
+            "reason": f"Aprovado. Risco:Retorno {win_loss_ratio:.2f} | Confiança {confidence}%. Alocando R$ {pos_size:.2f} (limite configurado).",
         }
