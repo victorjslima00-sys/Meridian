@@ -64,6 +64,69 @@ def exit_price_cache_ttl_seconds() -> int:
     return 2 * EXIT_INTERVAL_SECONDS
 
 
+class LoopSupervisionState:
+    """Contabilidade de restart/backoff de UM laço supervisionado — P3-A
+    Etapa 4. Cada laço (entrada, saída) tem sua PRÓPRIA instância: a
+    instabilidade de um não pode derrubar a supervisão do outro, que pode
+    estar são. É por isso que este objeto existe separado de WorkerState
+    (que mantém os campos da entrada inline, por compatibilidade com o
+    código anterior à Etapa 4) em vez de um contador global único.
+
+    use_cycles_for_stability=False (usado pelo exit_loop, cadência ~5s):
+    o reset por estabilidade usa SÓ STABLE_RESET_SECONDS, nunca contagem
+    de ciclos. STABLE_RESET_CYCLES=5 foi calibrado para a cadência da
+    entrada (60s/ciclo → 5 min); na saída (5s/ciclo) isso seria só 25s,
+    tempo curto demais pra provar qualquer estabilidade de verdade.
+    """
+
+    def __init__(self, use_cycles_for_stability: bool = True) -> None:
+        self.status: str = "starting"   # starting | running | stopped
+        self.restart_count: int = 0
+        self.cycles_since_restart: int = 0
+        self.restart_epoch_start: datetime.datetime = now_b3()
+        self.use_cycles_for_stability = use_cycles_for_stability
+
+    def mark_starting(self) -> None:
+        self.status = "starting"
+
+    def on_start(self) -> None:
+        """Chamado pelo supervisor antes de cada (re)entrada no laço."""
+        self.status = "running"
+        self.cycles_since_restart = 0
+        self.restart_epoch_start = now_b3()
+
+    def mark_cycle_complete(self) -> None:
+        """Chamado a cada iteração bem-sucedida do laço supervisionado —
+        reavalia a janela de estabilidade."""
+        self.status = "running"
+        self.cycles_since_restart += 1
+        self._maybe_reset_restart_count()
+
+    def record_crash(self) -> None:
+        self.restart_count += 1
+
+    def mark_stopped(self) -> None:
+        self.status = "stopped"
+
+    def _maybe_reset_restart_count(self) -> None:
+        """Mesma lógica de WorkerState._maybe_reset_restart_count, agora
+        reutilizável por laço. Ver docstring da classe sobre
+        use_cycles_for_stability."""
+        if self.restart_count == 0:
+            return
+        elapsed = (now_b3() - self.restart_epoch_start).total_seconds()
+        stable = elapsed >= STABLE_RESET_SECONDS
+        if self.use_cycles_for_stability:
+            stable = stable or self.cycles_since_restart >= STABLE_RESET_CYCLES
+        if stable:
+            logger.info(
+                "Laço estável (%d ciclos, %.0fs) — zerando restart_count.",
+                self.cycles_since_restart,
+                elapsed,
+            )
+            self.restart_count = 0
+
+
 class WorkerState:
     """Estado mutável do worker. Instância única em `state` (abaixo)."""
 
@@ -80,9 +143,20 @@ class WorkerState:
         # ou nenhuma existia — zero posições é uma passada trivialmente
         # efetiva). Um laço vivo mas inefetivo (girando sem avaliar nada,
         # por rate limit ou feed fora do ar) não pode passar por saudável —
-        # ver is_alive().
+        # ver is_alive()/_compute_status().
         self.last_exit_activity_at: Optional[datetime.datetime] = None
         self.last_effective_exit_scan_at: Optional[datetime.datetime] = None
+        # Supervisão do exit_loop (P3-A Etapa 4) — contabilidade PRÓPRIA,
+        # nunca compartilhada com a da entrada (campos acima, inalterados
+        # desde antes da Etapa 4).
+        self.exit_supervision = LoopSupervisionState(use_cycles_for_stability=False)
+        # Bloqueio STICKY de novas entradas: setado quando exit_supervision
+        # esgota MAX_RESTARTS. Só reset() (reinício do processo em
+        # produção) limpa — NUNCA a saída voltando a ficar saudável
+        # sozinha. Esgotar restarts significa algo estruturalmente
+        # quebrado; a decisão de voltar a operar é do operador, não
+        # automática. Ver set_exit_gate_sticky_block().
+        self.exit_gate_sticky_block: bool = False
 
     # -- Transições ---------------------------------------------------------
     def mark_starting(self) -> None:
@@ -119,6 +193,13 @@ class WorkerState:
         if effective:
             self.last_effective_exit_scan_at = now
 
+    def set_exit_gate_sticky_block(self) -> None:
+        """Chamado só quando exit_supervision esgota MAX_RESTARTS (P3-A
+        Etapa 4). Deliberadamente NÃO há um método simétrico de "limpar" —
+        o único jeito de reverter isto é reset() (reinício do processo em
+        produção). Ver docstring do campo exit_gate_sticky_block."""
+        self.exit_gate_sticky_block = True
+
     # -- Reset por estabilidade --------------------------------------------
     def _maybe_reset_restart_count(self) -> None:
         """
@@ -149,23 +230,50 @@ class WorkerState:
             return False
         return (now_b3() - ts).total_seconds() < HEARTBEAT_TIMEOUT_SECONDS
 
-    def is_alive(self) -> bool:
-        """worker_alive exige TUDO fresco: o worker de entrada (status +
-        last_scan_at, como sempre) E os dois sinais do exit_loop
-        (atividade E efetividade — ver mark_exit_activity). Um sistema só
-        é "vivo" se a saída, que é quem protege capital, está viva E
-        funcionando de verdade."""
-        if self.status != "running" or not self._fresh(self.last_scan_at):
-            return False
+    def is_exit_loop_healthy(self) -> bool:
+        """Saída viva E efetiva — os dois sinais da Etapa 3 frescos.
+        Reutilizado tanto por _compute_status() (visão de sistema) quanto
+        pelo portão de entradas (decisão de negócio, Etapa 4)."""
         return self._fresh(self.last_exit_activity_at) and self._fresh(
             self.last_effective_exit_scan_at
         )
 
+    def _compute_status(self) -> str:
+        """Fonte única dos 4 estados de /api/status (P3-A Etapa 4), nesta
+        ordem de prioridade — a primeira condição que bater decide:
+
+        1. stopped: exit_supervision esgotou os restarts (sticky, mais
+           severo — capital exposto, ninguém tentando mais reiniciar).
+        2. unprotected: saída não está viva+efetiva AGORA, independente do
+           estado da entrada — cobre tanto "girando sem proteger" quanto
+           "nem está rodando" (efetividade nunca é mais fresca que
+           atividade, ver mark_exit_activity). Não pode ser "online" nem
+           cair no mesmo "degraded" de entrada-morta: são urgências
+           diferentes, uma é o modo seguro projetado, a outra é exposição
+           real sem proteção.
+        3. degraded: entrada morta/stale, mas saída viva e efetiva — o
+           estado seguro de sempre (CLAUDE.md: gerenciar saídas é
+           permitido mesmo com o resto bloqueado).
+        4. online: tudo fresco.
+        """
+        if self.exit_supervision.status == "stopped":
+            return "stopped"
+        if not self.is_exit_loop_healthy():
+            return "unprotected"
+        if self.status != "running" or not self._fresh(self.last_scan_at):
+            return "degraded"
+        return "online"
+
+    def is_alive(self) -> bool:
+        """worker_alive é estrito: só True quando o sistema está
+        plenamente 'online' (ver _compute_status)."""
+        return self._compute_status() == "online"
+
     def snapshot(self) -> Dict[str, Any]:
-        alive = self.is_alive()
+        status = self._compute_status()
         return {
-            "status": "online" if alive else ("stopped" if self.status == "stopped" else "degraded"),
-            "worker_alive": alive,
+            "status": status,
+            "worker_alive": status == "online",
             "worker_status": self.status,
             "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
             "last_exit_activity_at": (
@@ -177,6 +285,8 @@ class WorkerState:
                 if self.last_effective_exit_scan_at else None
             ),
             "restart_count": self.restart_count,
+            "exit_restart_count": self.exit_supervision.restart_count,
+            "exit_gate_sticky_block": self.exit_gate_sticky_block,
         }
 
     def reset(self) -> None:

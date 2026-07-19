@@ -17,6 +17,15 @@ testes parametrizados de TestExitScanFailClosed reusam o ticker
 deduplicação e as duas seguintes ficavam mudas — falso negativo bem
 sutil, o alerta parecia ter sumido por bug quando na verdade era
 contaminação entre testes.
+
+reset_worker_state (autouse): terceiro caso da mesma classe de problema —
+o singleton `state` (backend/app/worker_state.py) é global e, a partir da
+Etapa 4, o portão único de entradas (_avaliar_portao_de_entradas) depende
+dele em qualquer teste que chame _run_one_scan_cycle, mesmo fora de
+tests/test_worker_supervision.py (que já tem seu próprio reset local —
+redundante com este, sem problema, reset() é idempotente). Sem este
+reset global, um teste que marca a saída saudável/sticky vaza pro
+próximo teste do arquivo, ou de outro arquivo, que não esperava por isso.
 """
 import pytest
 
@@ -40,3 +49,11 @@ def reset_alert_state():
     main._last_alert_state.clear()
     yield
     main._last_alert_state.clear()
+
+
+@pytest.fixture(autouse=True)
+def reset_worker_state():
+    from backend.app.worker_state import state
+    state.reset()
+    yield
+    state.reset()

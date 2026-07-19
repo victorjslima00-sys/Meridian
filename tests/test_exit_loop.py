@@ -299,6 +299,12 @@ class TestSlowLoopSkipsAlreadyActiveTicker:
         database_module.DB_PATH = temp_db_path
         try:
             from backend.app import main
+            from backend.app.worker_state import state as worker_state_state
+
+            # P3-A Etapa 4: o portão único de entradas também exige a
+            # saída saudável (ver _avaliar_portao_de_entradas) — sem isso
+            # o teste bloquearia AMBOS os tickers, não só o já ativo.
+            worker_state_state.mark_exit_activity(effective=True)
 
             fake_cfg = _FakeAppConfig(["AAAA", "BBBB"])
             fake_breaker = MagicMock()

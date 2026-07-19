@@ -13,11 +13,9 @@ from . import worker_state
 async def lifespan(app: FastAPI):
     """
     Ciclo de vida da app (substitui @app.on_event, deprecated).
-    Sobe o worker supervisionado (entradas) + o exit_loop (saídas,
-    independente — P3-A Etapa 2); no shutdown, cancela as duas tasks limpo.
-
-    exit_loop ainda NÃO tem supervisor próprio (ver docstring dela e
-    BACKLOG.md — pendência explícita da Etapa 4).
+    Sobe os DOIS supervisores — entrada (worker_supervisor) e saída
+    (exit_loop_supervisor, P3-A Etapa 4) — cada um com contabilidade de
+    restart isolada; no shutdown, cancela as duas tasks limpo.
     """
     from .data.database import init_db
     init_db()
@@ -31,7 +29,9 @@ async def lifespan(app: FastAPI):
     task.add_done_callback(_log_if_supervisor_died)
     app.state.worker_task = task
 
-    exit_task = asyncio.create_task(exit_loop())
+    worker_state.state.exit_supervision.mark_starting()
+    exit_task = asyncio.create_task(exit_loop_supervisor())
+    exit_task.add_done_callback(_log_if_exit_supervisor_died)
     app.state.exit_task = exit_task
 
     try:
@@ -137,6 +137,7 @@ from .agents.executor import ExecutorAgent
 
 import math
 import time
+from typing import Optional
 
 
 # -----------------------------------------------------------------------
@@ -148,38 +149,74 @@ import time
 # caso transitório) dispararia um alerta Telegram a cada iteração,
 # indefinidamente. Alarme que grita sem parar vira alarme ignorado.
 #
-# Alerta na primeira ocorrência da condição para um ticker; silencia
-# repetições da MESMA condição; reenvia um lembrete após
-# ALERT_COOLDOWN_SECONDS com o problema ainda ativo (nunca silêncio
-# total — CLAUDE.md: "loops autônomos nunca morrem em silêncio"); e trata
-# uma recuperação seguida de nova falha como condição NOVA (alerta de
-# novo), não como continuação da anterior.
+# Alerta na primeira ocorrência da condição para uma CHAVE (ticker, ou um
+# identificador de sistema — ver Etapa 4); silencia repetições da MESMA
+# condição; reenvia um lembrete após um cooldown com o problema ainda
+# ativo (nunca silêncio total — CLAUDE.md: "loops autônomos nunca morrem
+# em silêncio"); e trata uma recuperação seguida de nova falha como
+# condição NOVA (alerta de novo), não como continuação da anterior.
 ALERT_COOLDOWN_SECONDS = 600  # 10 min — tests podem monkeypatchar
+EXIT_LOOP_EXHAUSTED_REMINDER_SECONDS = 1800  # 30 min (P3-A Etapa 4)
 
 _last_alert_state: dict = {}
-# ticker -> {"reason": str, "last_sent_at": float (monotonic)}
+# chave -> {"reason": str, "last_sent_at": float (monotonic)}
+# chave é o ticker para alertas de preço; para alertas de sistema
+# (Etapa 4) é um identificador fixo tipo "__exit_loop__".
 
 
-def _should_alert_price_untrustworthy(ticker: str, reason: str) -> bool:
-    """True se um alerta deve ser enviado agora para este ticker+motivo.
-    Sempre registra o envio (efeito colateral) quando retorna True, para
-    que a PRÓXIMA chamada saiba que já alertou."""
+def _should_alert(key: str, reason: str, cooldown_seconds: Optional[float] = None) -> bool:
+    """Mecanismo geral de deduplicação (P3-A Etapa 2d, generalizado na
+    Etapa 4 para o lembrete de exit_loop esgotado, que usa um cooldown
+    próprio mais longo). True se um alerta deve ser enviado agora para
+    esta chave+motivo. Sempre registra o envio (efeito colateral) quando
+    retorna True, para que a PRÓXIMA chamada saiba que já alertou."""
+    cooldown = cooldown_seconds if cooldown_seconds is not None else ALERT_COOLDOWN_SECONDS
     now = time.monotonic()
-    prev = _last_alert_state.get(ticker)
+    prev = _last_alert_state.get(key)
     if prev is None or prev["reason"] != reason:
-        _last_alert_state[ticker] = {"reason": reason, "last_sent_at": now}
+        _last_alert_state[key] = {"reason": reason, "last_sent_at": now}
         return True
-    if now - prev["last_sent_at"] >= ALERT_COOLDOWN_SECONDS:
+    if now - prev["last_sent_at"] >= cooldown:
         prev["last_sent_at"] = now
         return True
     return False
 
 
-def _clear_alert_state(ticker: str) -> None:
-    """Chamado quando a condição se resolve (preço volta a ser confiável).
-    A PRÓXIMA falha para este ticker é tratada como ocorrência nova —
-    alerta de novo, não fica presa ao cooldown da falha anterior."""
-    _last_alert_state.pop(ticker, None)
+def _should_alert_price_untrustworthy(ticker: str, reason: str) -> bool:
+    """Wrapper mantendo nome/assinatura da Etapa 2d — ver _should_alert
+    para o mecanismo geral."""
+    return _should_alert(ticker, reason)
+
+
+def _clear_alert_state(key: str) -> None:
+    """Chamado quando a condição se resolve (ex.: preço volta a ser
+    confiável). A PRÓXIMA falha para esta chave é tratada como ocorrência
+    nova — alerta de novo, não fica presa ao cooldown da falha anterior."""
+    _last_alert_state.pop(key, None)
+
+
+def _formatar_posicoes_abertas_para_alerta() -> str:
+    """Lista as posições ativas (ticker, entrada, stop, alvo) para o
+    alerta de desistência do exit_loop (P3-A Etapa 4, exigência
+    obrigatória) — é a informação acionável que falta num alerta genérico
+    de "algo grave aconteceu". Quando a proteção morre, saber QUAIS
+    posições ficaram expostas é o que importa, não só que algo quebrou."""
+    from .data.database import get_active_trades
+
+    try:
+        trades = get_active_trades()
+    except Exception as e:
+        return f"(falha ao listar posições abertas: {e})"
+
+    if not trades:
+        return "(nenhuma posição ativa no momento)"
+
+    linhas = [
+        f"- {t['ticker']}: entrada R$ {t['entry_price']:.2f}, "
+        f"stop R$ {t['stop_loss']:.2f}, alvo R$ {t['target_price']:.2f}"
+        for t in trades
+    ]
+    return "\n".join(linhas)
 
 
 def _price_is_trustworthy(price, open_=None, high=None, low=None) -> bool:
@@ -402,6 +439,48 @@ async def _run_exit_scan() -> bool:
     return all_trustworthy
 
 
+async def _avaliar_portao_de_entradas() -> tuple[bool, list[str]]:
+    """
+    PORTÃO ÚNICO de decisão sobre novas entradas (P3-A Etapa 4). Antes
+    desta etapa, só o circuit breaker decidia; agora a saúde do exit_loop
+    também é motivo de bloqueio — e os dois respondem pela MESMA via,
+    nunca por caminhos separados que podem um dia divergir ("um diz
+    liberado, outro diz bloqueado" num sistema que move dinheiro é
+    inaceitável).
+
+    Motivos acumuláveis (mais de um pode estar ativo ao mesmo tempo):
+    - "circuit_breaker": circuit breaker ativo ou indisponível
+      (fail-closed, comportamento já existente antes da Etapa 4).
+    - "exit_loop_unhealthy": saída não está viva+efetiva AGORA — bloqueio
+      DINÂMICO, se resolve sozinho quando a saída volta a ficar saudável.
+    - "exit_loop_exhausted": saída esgotou os restarts — bloqueio STICKY,
+      permanece mesmo que a saída volte a responder; só reinício do
+      processo limpa (ver worker_state.WorkerState.exit_gate_sticky_block).
+
+    Returns:
+        (liberado, motivos) — liberado é True só se motivos estiver vazio.
+    """
+    motivos: list[str] = []
+
+    try:
+        from trading_bot.risk.circuit_breaker import CircuitBreaker
+        pode_operar = await asyncio.to_thread(
+            CircuitBreaker.from_config().can_trade
+        )
+        if not pode_operar:
+            motivos.append("circuit_breaker")
+    except Exception as e:
+        logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entradas.")
+        motivos.append("circuit_breaker")
+
+    if worker_state.state.exit_gate_sticky_block:
+        motivos.append("exit_loop_exhausted")
+    elif not worker_state.state.is_exit_loop_healthy():
+        motivos.append("exit_loop_unhealthy")
+
+    return (len(motivos) == 0, motivos)
+
+
 async def _run_one_scan_cycle():
     """
     Uma iteração completa do laço LENTO (entradas): snapshot diário de
@@ -444,23 +523,31 @@ async def _run_one_scan_cycle():
             _alerta_telegram, f"⚠️ [Meridian] Falha no snapshot diário de equity: {e}"
         )
 
-    # Circuit breaker: avaliado 1x por ciclo. FAIL-CLOSED: erro = bloqueia
-    # novas entradas; a gestão de saídas (exit_loop, independente deste
-    # laço) roda sempre, mesmo com o circuit breaker ativo.
-    try:
-        from trading_bot.risk.circuit_breaker import CircuitBreaker
-        entradas_liberadas = await asyncio.to_thread(
-            CircuitBreaker.from_config().can_trade
-        )
-    except Exception as e:
-        logger.error(f"Circuit breaker indisponível ({e}) — bloqueando entradas.")
-        entradas_liberadas = False
+    # Portão ÚNICO de entradas (P3-A Etapa 4) — ver _avaliar_portao_de_entradas.
+    # A gestão de saídas (exit_loop, independente deste laço) roda sempre,
+    # mesmo com entradas bloqueadas por qualquer motivo.
+    entradas_liberadas, motivos_bloqueio = await _avaliar_portao_de_entradas()
     if not entradas_liberadas:
         await broadcast_log(
             "System",
-            "Circuit breaker ativo: novas entradas bloqueadas (gestão de saídas segue normal).",
+            f"Entradas bloqueadas ({', '.join(motivos_bloqueio)}) — "
+            f"gestão de saídas segue normal.",
             "warning",
         )
+        if "exit_loop_exhausted" in motivos_bloqueio:
+            # Lembrete periódico enquanto o sticky persistir — mesmo
+            # padrão "não silencia, não spama" do dedup de preço (Etapa
+            # 2d), cooldown próprio mais longo (30 min).
+            if _should_alert(
+                "__exit_loop__", "exhausted", EXIT_LOOP_EXHAUSTED_REMINDER_SECONDS
+            ):
+                posicoes = _formatar_posicoes_abertas_para_alerta()
+                await asyncio.to_thread(
+                    _alerta_telegram,
+                    "🛑 [Meridian] Lembrete: exit_loop ainda PARADO (restarts "
+                    "esgotados), entradas bloqueadas até reinício manual do "
+                    f"processo. Posições sem avaliação de stop:\n{posicoes}",
+                )
 
     for ticker in tickers_to_watch:
         print(f"Scanning {ticker}...", flush=True)
@@ -557,13 +644,9 @@ async def exit_loop():
     indicando se a passada foi efetiva. Um "activity" batido mesmo em
     exceção mediria só "o laço tentou", não "o laço completou algo real".
 
-    PENDÊNCIA CONHECIDA (P3-A Etapa 4, não implementada ainda): este loop
-    NÃO está sob supervisão de restart-com-backoff como o worker principal
-    (worker_supervisor). Se ele morrer de vez (exceção escapando do
-    try/except abaixo — não deveria acontecer dado o `except Exception`
-    amplo, mas não há uma segunda rede de segurança), a gestão de saídas
-    para silenciosamente e ninguém reinicia. É intencional: a Etapa 4
-    resolve isso generalizando o supervisor para os dois loops.
+    Supervisionado por exit_loop_supervisor() (P3-A Etapa 4) — se este
+    loop morrer de vez (exceção escapando do try/except abaixo), o
+    supervisor reinicia com backoff, isolado da contabilidade da entrada.
     """
     while True:
         try:
@@ -639,6 +722,62 @@ async def worker_supervisor():
             await asyncio.sleep(delay)
 
 
+async def exit_loop_supervisor():
+    """
+    Supervisiona exit_loop() — P3-A Etapa 4. Mesmo padrão de
+    worker_supervisor (restart com backoff exponencial), mas com
+    contabilidade PRÓPRIA (worker_state.state.exit_supervision) — a saída
+    esgotando os restarts não zera nem afeta o contador da entrada, e
+    vice-versa. Reset por estabilidade usa SÓ STABLE_RESET_SECONDS pra
+    este laço (Opção A da decisão de desenho): a 5s/ciclo, a métrica de
+    ciclos usada pela entrada (calibrada pra 60s/ciclo) representaria só
+    25s, tempo curto demais pra provar qualquer estabilidade de verdade.
+
+    Ao esgotar MAX_RESTARTS:
+    - Marca exit_supervision como "stopped" (mais severo dos 4 estados
+      de /api/status — ver WorkerState._compute_status).
+    - Ativa o bloqueio STICKY de novas entradas
+      (set_exit_gate_sticky_block) — deliberadamente SEM caminho de
+      auto-limpeza quando a saída volta a responder. Esgotar restarts
+      significa algo estruturalmente quebrado; só reinício do processo
+      (decisão explícita do operador) limpa o sticky.
+    - Alerta com a LISTA de posições abertas (ticker, entrada, stop,
+      alvo) — não um "algo grave aconteceu" genérico. Quando a proteção
+      morre, saber QUAIS posições ficaram expostas é a informação
+      acionável.
+    """
+    sup = worker_state.state.exit_supervision
+    while True:
+        sup.on_start()
+        try:
+            await exit_loop()
+            return  # saída normal (não ocorre — loop infinito)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception("exit_loop morreu de vez")
+            sup.record_crash()
+            rc = sup.restart_count
+            if rc > worker_state.MAX_RESTARTS:
+                sup.mark_stopped()
+                worker_state.state.set_exit_gate_sticky_block()
+                posicoes = _formatar_posicoes_abertas_para_alerta()
+                await asyncio.to_thread(
+                    _alerta_telegram,
+                    "🛑 [Meridian] exit_loop PARADO — tentativas de restart "
+                    "esgotadas. Novas entradas BLOQUEADAS até reinício manual "
+                    f"do processo. Posições abertas SEM avaliação de stop:\n"
+                    f"{posicoes}",
+                )
+                return
+            await asyncio.to_thread(
+                _alerta_telegram,
+                f"⚠️ [Meridian] exit_loop caiu (restart {rc}/{worker_state.MAX_RESTARTS}): {e}",
+            )
+            delay = min(2 ** (rc - 1), worker_state.BACKOFF_CAP_SECONDS)
+            await asyncio.sleep(delay)
+
+
 def _log_if_supervisor_died(task: asyncio.Task) -> None:
     """Rede de segurança: loga se o próprio supervisor terminar inesperadamente."""
     if task.cancelled():
@@ -648,6 +787,21 @@ def _log_if_supervisor_died(task: asyncio.Task) -> None:
         logger.critical("Supervisor do worker terminou com exceção: %s", exc)
         worker_state.state.mark_stopped()
         _alerta_telegram(f"🛑 [Meridian] Supervisor do worker caiu: {exc}")
+
+
+def _log_if_exit_supervisor_died(task: asyncio.Task) -> None:
+    """Rede de segurança equivalente, pro exit_loop_supervisor (P3-A
+    Etapa 4) — se o próprio SUPERVISOR (não o loop que ele supervisiona)
+    terminar com exceção não tratada, isso é sério o bastante pra também
+    ativar o bloqueio sticky de entradas, não só logar."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.critical("Supervisor do exit_loop terminou com exceção: %s", exc)
+        worker_state.state.exit_supervision.mark_stopped()
+        worker_state.state.set_exit_gate_sticky_block()
+        _alerta_telegram(f"🛑 [Meridian] Supervisor do exit_loop caiu: {exc}")
 
 
 @app.get("/api/positions")
