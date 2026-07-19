@@ -59,15 +59,50 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
   `backend/app/worker_state.py` (`mark_scan`, separar `last_activity_at` de
   `last_full_cycle_at`).
 
-- **ResilientLLMClient não é resiliente — não há segundo provedor.**
+- **P3-B — ResilientLLMClient não é resiliente: não há segundo provedor.**
   `fallback_key` (OpenAI) é armazenado no `__init__` mas nunca usado: o único
   provedor é o Gemini via `_call_gemini`. Se o Gemini cair, `generate_text`
-  retorna `None`. Hoje isso fica mascarado pelo fallback matemático do
-  MarketAnalyst (lógica de trend simples). **Tratar junto do P3**, que remove
-  esse fallback matemático — ao removê-lo, a ausência de segundo provedor LLM
-  fica exposta e precisa de solução real (implementar o fallback OpenAI ou
-  decidir explicitamente por fail-closed quando o LLM não responder).
+  retorna `None`. **Resolvido pelo P3-A**: o fallback matemático perigoso do
+  MarketAnalyst foi removido e a decisão fail-closed foi tomada — falha do LLM
+  agora sempre retorna `HOLD`, nunca abre posição por engano. **Ainda em
+  aberto (P3-B)**: isso significa que uma queda do Gemini deixa o bot
+  efetivamente parado (todo sinal vira HOLD) até o provedor voltar — seguro,
+  mas sem resiliência real. Implementar o fallback OpenAI de verdade (ou
+  decidir explicitamente que "parar" é aceitável e documentar isso como
+  comportamento pretendido, não lacuna).
   Arquivos: `trading_bot/core/llm_client.py`, `backend/app/agents/market_analyst.py`.
+
+- **`llm.failure_policy` aceita `"technical_fallback"` no YAML mas é dead
+  code.** `RuntimeConfig` valida e expõe `llm_failure_policy` (`hold` |
+  `technical_fallback`), mas nenhum consumidor (`market_analyst.py`,
+  `risk_manager.py`, `llm_client.py`) lê esse campo — o comportamento real é
+  sempre `HOLD` hardcoded em `market_analyst.py`, independente do valor
+  configurado. Não é vulnerabilidade (o hardcode é fail-safe), mas é uma
+  opção enganosa: promete um comportamento (`technical_fallback`) que nunca é
+  entregue. Ou implementar de verdade (junto do P3-B acima) ou remover a
+  opção do config até existir.
+  Arquivos: `backend/app/runtime_config.py`, `backend/app/agents/market_analyst.py`.
+
+- **`RuntimeConfig.load()` relendo `config/settings.yaml` do disco a cada
+  ticker do laço de entradas (~50x/ciclo), não 1x.** A Etapa 4 adicionou a
+  checagem de `autonomous_entries_enabled` dentro do `for ticker in
+  tickers_to_watch:`, chamando `RuntimeConfig.load()` (I/O síncrono, sem
+  cache, abre e faz parse de dois arquivos YAML) a cada iteração — antes,
+  `entradas_liberadas` já era calculado 1x fora do loop e reusado. Não é bug
+  funcional (o comportamento continua correto), é I/O síncrono redundante
+  bloqueando o event loop compartilhado com o `exit_loop` ~50x por ciclo em
+  vez de 1x. Corrigir movendo `RuntimeConfig.load()` para antes do loop, ao
+  lado de `entradas_liberadas`, reusando o resultado dentro do loop (mesmo
+  padrão já usado para `entradas_liberadas`).
+  Arquivos: `backend/app/main.py` (`_run_one_scan_cycle`).
+
+- **Docstring/comentário de `risk_manager.py` ainda citam "10%" fixo.** O
+  limite de posição virou parametrizável via `config/settings.yaml`
+  (`max_position_fraction`, hardening pós-Etapa 4), mas a docstring da classe
+  e um comentário interno ainda dizem "Maximum allocation limit bumped to
+  10%" / "Max risk allowed is 10%" — podem confundir quem for alterar o valor
+  depois, já que o número real agora vem do config, não do código.
+  Arquivos: `backend/app/agents/risk_manager.py` (linhas ~29-30, ~39).
 
 ## Higiene de dependências
 

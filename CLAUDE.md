@@ -11,3 +11,6 @@
 - Bugfix = primeiro teste que reproduz o bug e falha, depois correção, depois suíte inteira verde: `pytest tests/ --ignore=tests/e2e` (pythonpath vem do `pytest.ini`, não precisa exportar `PYTHONPATH` — funciona igual em bash/PowerShell/macOS).
 - CI (Ubuntu) é o juiz final para testes de concorrência/SQLite: locking do SQLite difere entre Windows e Linux, então verde local não garante verde no CI (e vice-versa). Nunca declarar uma correção de concorrência pronta sem confirmar o CI.
 - Não commitar data/*.db, .env, *.pem. Não tocar em .agents/.
+- Agentes em segundo plano (Workflow/subagents) só com autorização explícita
+  do usuário — vale também para revisões de código, não só para
+  implementação.
