@@ -3,12 +3,16 @@ name: Deploy Meridian Bot to AWS
 # Só roda depois que o workflow "CI" terminar com sucesso no branch main.
 # Isso garante que código quebrado nunca chega ao servidor.
 #
-# Gate extra (secrets.SERVER_IP != ''): sem os secrets de deploy
-# configurados no repositório, SSH_PRIVATE_KEY/SERVER_IP chegam vazios no
-# job e o primeiro passo (ssh-keyscan) falha na hora — toda merge em main
-# disparava uma tentativa de deploy fadada a falhar, virando ruído em vez
-# de sinal. Com o gate, o job simplesmente não roda (skipped, não failed)
-# até alguém configurar Settings → Secrets and variables → Actions:
+# Gate extra: sem os secrets de deploy configurados no repositório,
+# SSH_PRIVATE_KEY/SERVER_IP chegam vazios no job e o primeiro passo
+# (ssh-keyscan) falha na hora — toda merge em main disparava uma
+# tentativa de deploy fadada a falhar, virando ruído em vez de sinal.
+# O gate fica dentro do primeiro step (não na condição `if:` do job —
+# referenciar `secrets` ali faz o GitHub rejeitar o workflow inteiro na
+# validação, confirmado no run 29720950364), via step de checagem +
+# `if:` nos steps seguintes lendo o output dele. Sem os secrets
+# configurados, os steps de deploy ficam "skipped", não "failed", até
+# alguém configurar Settings → Secrets and variables → Actions:
 # SSH_PRIVATE_KEY, SERVER_IP, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
 # EMERGENCY_PASSWORD, API_KEY, ALLOWED_ORIGINS (ver README.md).
 # workflow_dispatch permite disparar manualmente depois de configurar,
@@ -27,16 +31,28 @@ permissions:
 
 jobs:
   deploy:
-    if: >-
-      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
-      && secrets.SERVER_IP != ''
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
+    - name: Check deploy secrets configured
+      id: check
+      run: |
+        if [ -n "$SERVER_IP" ]; then
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::SERVER_IP não configurado em Settings > Secrets and variables > Actions — deploy pulado (não é falha, é configuração pendente)."
+        fi
+      env:
+        SERVER_IP: ${{ secrets.SERVER_IP }}
+
     - name: Checkout code
+      if: steps.check.outputs.ready == 'true'
       uses: actions/checkout@v4
 
     - name: Setup SSH Key
+      if: steps.check.outputs.ready == 'true'
       run: |
         mkdir -p ~/.ssh/
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key.pem
@@ -47,12 +63,14 @@ jobs:
         SERVER_IP: ${{ secrets.SERVER_IP }}
 
     - name: Copy files to AWS
+      if: steps.check.outputs.ready == 'true'
       run: |
         rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'infra' --exclude '.env' --exclude '.agents' --exclude '.pytest_cache' --exclude '__pycache__' --exclude 'node_modules' --exclude 'data/*.db*' --exclude 'logs' -e "ssh -i ~/.ssh/deploy_key.pem" ./ ubuntu@$SERVER_IP:/app/Meridian/
       env:
         SERVER_IP: ${{ secrets.SERVER_IP }}
 
     - name: Inject Secrets & Restart Docker
+      if: steps.check.outputs.ready == 'true'
       run: |
         ssh -i ~/.ssh/deploy_key.pem ubuntu@$SERVER_IP << 'EOF'
           cd /app/Meridian
