@@ -363,7 +363,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  overflow: hidden; /* TradingView takes remaining space */
+  overflow-y: auto; /* conteúdo empilhado (narrativa + gráficos) rola em vez de cortar quando não cabe */
 }
 .pro-side-col {
   display: flex;
