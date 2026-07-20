@@ -3,6 +3,11 @@
 # Instale com: pip install -r requirements-dev.txt
 -r requirements.txt
 
+# Testes (movidos de requirements.txt — não pertencem à instalação de
+# produção, que usa só requirements.txt).
+pytest>=8.0
+pytest-asyncio>=0.23
+
 # Pesquisa / otimização: usada só em trading_bot/signals/optimizer.py,
 # que é importado APENAS por tests/test_optimizer.py — nunca pelo backend
 # em runtime. Não declará-la aqui quebrava a coleção do pytest no CI.
