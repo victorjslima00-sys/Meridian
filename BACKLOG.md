@@ -78,17 +78,27 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
   `backend/app/worker_state.py` (`mark_scan`, separar `last_activity_at` de
   `last_full_cycle_at`).
 
-- **P3-B — ResilientLLMClient não é resiliente: não há segundo provedor.**
-  `fallback_key` (OpenAI) é armazenado no `__init__` mas nunca usado: o único
-  provedor é o Gemini via `_call_gemini`. Se o Gemini cair, `generate_text`
-  retorna `None`. **Resolvido pelo P3-A**: o fallback matemático perigoso do
-  MarketAnalyst foi removido e a decisão fail-closed foi tomada — falha do LLM
-  agora sempre retorna `HOLD`, nunca abre posição por engano. **Ainda em
-  aberto (P3-B)**: isso significa que uma queda do Gemini deixa o bot
-  efetivamente parado (todo sinal vira HOLD) até o provedor voltar — seguro,
-  mas sem resiliência real. Implementar o fallback OpenAI de verdade (ou
-  decidir explicitamente que "parar" é aceitável e documentar isso como
-  comportamento pretendido, não lacuna).
+- **P3-B — Resolvido (2026-07-20): `ResilientLLMClient` agora tem cadeia de
+  fallback multi-provedor de verdade.** Motivado por um caso real: o tier
+  gratuito do Gemini (`gemini-3.1-flash-lite`) permite só 15 req/min —
+  varrer os ~50 tickers do universo em sequência rápida estoura isso em
+  segundos (429). Implementado: `gemini -> groq -> cerebras -> github_models
+  -> openai`, cada provedor só entra na cadeia se sua chave estiver
+  configurada (`GROQ_API_KEY`, `CEREBRAS_API_KEY`, `GITHUB_MODELS_TOKEN` —
+  ver `.env.example`); em falha, tenta o próximo; só retorna `None`
+  (→ `HOLD` fail-closed, decisão do P3-A) se todos os configurados falharem.
+  Groq/Cerebras/OpenAI/GitHub Models usam um único cliente compartilhado via
+  SDK `openai` (todos compatíveis com a API da OpenAI, só muda
+  `base_url`/`model`). Também adicionado `LLM_CALL_SPACING_SECONDS = 4.5`
+  em `main.py` entre chamadas consecutivas do laço de entradas, pra não
+  estourar o limite por-minuto de nenhum provedor configurado.
+  **Ainda pendente**: só o Gemini está com chave configurada até o usuário
+  criar as contas gratuitas dos demais (Groq/Cerebras não exigem cartão;
+  GitHub Models usa a conta GitHub já existente) e colar as chaves no
+  `.env`. Sem isso, o comportamento é idêntico a antes (só Gemini, fail-closed
+  em HOLD se ele falhar).
+  Arquivos: `trading_bot/core/llm_client.py`, `backend/app/main.py`,
+  `.env.example`, `tests/test_llm_client.py`.
   Arquivos: `trading_bot/core/llm_client.py`, `backend/app/agents/market_analyst.py`.
 
 - **`llm.failure_policy` aceita `"technical_fallback"` no YAML mas é dead

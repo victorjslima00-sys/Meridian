@@ -204,7 +204,11 @@ def get_portfolio() -> Dict[str, Any]:
         }
 
     d = dict(row)
-    d["patrimonio_total"] = d.get("saldo_disponivel", 0.0)
+    # patrimonio_total é a coluna real do "cofre" (capital fora do alcance
+    # do bot, só movimentado por depositar_no_disponivel/retirar_do_
+    # disponivel) — NUNCA sobrescrever com saldo_disponivel (capital
+    # entregue ao bot). Bug real encontrado pelo usuário: os dois
+    # apareciam sempre iguais no dashboard porque esta linha existia.
     d["saldo_livre"] = round(d.get("saldo_disponivel", 0) - d.get("em_posicoes", 0), 4)
     return d
 
