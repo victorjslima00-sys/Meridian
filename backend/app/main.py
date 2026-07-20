@@ -90,6 +90,11 @@ def get_status():
         "last_exit_activity_at": snap["last_exit_activity_at"],
         "last_effective_exit_scan_at": snap["last_effective_exit_scan_at"],
         "restart_count": snap["restart_count"],
+        # honest-dashboard Bloco 1: portão de entradas exposto pronto —
+        # o frontend não decide nem calcula nada, só exibe.
+        "exit_restart_count": snap["exit_restart_count"],
+        "exit_gate_sticky_block": snap["exit_gate_sticky_block"],
+        "motivos_bloqueio": snap["motivos_bloqueio"],
         "active_agents": 3,
     }
 
@@ -472,6 +477,7 @@ async def _avaliar_portao_de_entradas() -> tuple[bool, list[str]]:
     elif not worker_state.state.is_exit_loop_healthy():
         motivos.append("exit_loop_unhealthy")
 
+    worker_state.state.mark_gate_evaluated(motivos)
     return (len(motivos) == 0, motivos)
 
 

@@ -4,7 +4,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tool
 import ActiveTradeDetails from './ActiveTradeDetails';import {
   Activity, ShieldAlert, Cpu, Database,
   BarChart2, Globe, Terminal, Briefcase, X,
-  Wifi, WifiOff, TrendingUp, TrendingDown,
+  WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Bell, Settings, RefreshCw,
   DollarSign, Percent, BookOpen, History,
   Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send, BrainCircuit
@@ -40,6 +40,46 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+
+// ─── Health Badge — 4 estados reais de /api/status (honest-dashboard) ────────
+// Nenhum threshold decidido aqui: a cor é só um mapa 1:1 do campo `status`
+// que o backend já calculou (worker_state._compute_status). Motivos de
+// bloqueio (motivos_bloqueio) vêm prontos também — o front só exibe.
+const HEALTH_STATES = {
+  online: { color: '#10b981', label: 'OPERACIONAL' },
+  degraded: { color: '#f59e0b', label: 'DEGRADADO' },
+  unprotected: { color: '#fb923c', label: 'SEM PROTEÇÃO' },
+  stopped: { color: '#f43f5e', label: 'PARADO' },
+};
+
+const HealthBadge = ({ status, connected }) => {
+  if (!connected || !status) {
+    return (
+      <div className="conn-pill down">
+        <WifiOff size={12} />
+        SEM CONEXÃO
+      </div>
+    );
+  }
+  const s = HEALTH_STATES[status.status] || { color: '#8b9bb4', label: (status.status || 'DESCONHECIDO').toUpperCase() };
+  const motivos = status.motivos_bloqueio || [];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+      <div
+        className="conn-pill"
+        style={{ background: `${s.color}20`, borderColor: `${s.color}50`, color: s.color, border: '1px solid' }}
+      >
+        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: s.color, boxShadow: `0 0 6px ${s.color}`, flexShrink: 0 }} />
+        {s.label}
+      </div>
+      {motivos.length > 0 && (
+        <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', lineHeight: 1.4, paddingLeft: '0.2rem' }}>
+          {motivos.join(' · ')}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // ─── Ticker Tape Item com cor semântica ───────────────────────────────────────
 const TapeItem = ({ item }) => {
@@ -1089,10 +1129,7 @@ export default function App() {
         </nav>
 
         <div className="sidebar-footer">
-          <div className={`conn-pill ${connected ? 'up' : 'down'}`}>
-            {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
-            {connected ? 'LIVE' : 'OFFLINE'}
-          </div>
+          <HealthBadge status={status} connected={connected} />
         </div>
       </aside>
 

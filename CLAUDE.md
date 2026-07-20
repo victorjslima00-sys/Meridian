@@ -14,3 +14,5 @@
 - Agentes em segundo plano (Workflow/subagents) só com autorização explícita
   do usuário — vale também para revisões de código, não só para
   implementação.
+- No frontend, tudo que parece dado É dado vindo da API, ou não existe.
+  Nenhum placeholder que imite métrica real.

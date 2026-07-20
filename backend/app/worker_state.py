@@ -157,6 +157,12 @@ class WorkerState:
         # quebrado; a decisão de voltar a operar é do operador, não
         # automática. Ver set_exit_gate_sticky_block().
         self.exit_gate_sticky_block: bool = False
+        # Motivos da última avaliação do portão único de entradas
+        # (honest-dashboard, Bloco 1) — persistidos aqui para que /api/status
+        # possa expor POR QUE as entradas estão bloqueadas sem o frontend
+        # precisar recalcular nada. Antes deste campo, _avaliar_portao_de_
+        # entradas calculava os motivos e descartava no fim do próprio ciclo.
+        self.last_gate_motivos: list = []
 
     # -- Transições ---------------------------------------------------------
     def mark_starting(self) -> None:
@@ -192,6 +198,14 @@ class WorkerState:
         self.last_exit_activity_at = now
         if effective:
             self.last_effective_exit_scan_at = now
+
+    def mark_gate_evaluated(self, motivos: list) -> None:
+        """Chamado por _avaliar_portao_de_entradas ao fim de cada avaliação
+        (honest-dashboard, Bloco 1) — guarda o resultado para /api/status
+        expor. Sobrescreve sempre: motivos refletem a avaliação MAIS
+        recente, de qualquer chamador (laço automático ou ordem manual) —
+        ambos calculam a mesma verdade a partir do mesmo estado ao vivo."""
+        self.last_gate_motivos = list(motivos)
 
     def set_exit_gate_sticky_block(self) -> None:
         """Chamado só quando exit_supervision esgota MAX_RESTARTS (P3-A
@@ -287,6 +301,7 @@ class WorkerState:
             "restart_count": self.restart_count,
             "exit_restart_count": self.exit_supervision.restart_count,
             "exit_gate_sticky_block": self.exit_gate_sticky_block,
+            "motivos_bloqueio": list(self.last_gate_motivos),
         }
 
     def reset(self) -> None:
