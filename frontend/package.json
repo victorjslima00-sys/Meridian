@@ -10,7 +10,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@xyflow/react": "^12.11.2",
     "axios": "^1.18.1",
     "eslint-plugin-react": "^7.37.5",
     "lightweight-charts": "^5.2.0",

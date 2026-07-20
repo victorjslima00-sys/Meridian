@@ -15,7 +15,7 @@ import asyncio
 import datetime
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend.app import worker_state as ws
 from backend.app.worker_state import state
@@ -26,6 +26,12 @@ def _reset_state():
     state.reset()
     yield
     state.reset()
+
+
+def _fake_breaker(pode_operar: bool):
+    breaker = MagicMock()
+    breaker.can_trade.return_value = pode_operar
+    return breaker
 
 
 # --- Heartbeat --------------------------------------------------------------
@@ -235,6 +241,58 @@ def test_api_status_online_quando_worker_vivo():
     resp = main.get_status()
     assert resp["worker_alive"] is True
     assert resp["status"] == "online"
+
+
+# --- /api/status expõe o portão de entradas (honest-dashboard, Bloco 1) -----
+#
+# O front precisa mostrar POR QUE as entradas estão bloqueadas sem calcular
+# nada sozinho — os motivos (circuit_breaker/exit_loop_unhealthy/
+# exit_loop_exhausted) e os contadores de restart/sticky do exit_loop
+# precisam vir prontos do backend. snapshot() já calculava
+# exit_restart_count/exit_gate_sticky_block internamente, mas get_status()
+# não os repassava; motivos_bloqueio é campo novo, persistido por
+# _avaliar_portao_de_entradas a cada avaliação (não existia antes — os
+# motivos eram calculados e descartados no mesmo ciclo).
+
+class TestApiStatusExpoePortaoDeEntradas:
+    def test_expoe_exit_restart_count_e_sticky_block(self):
+        from backend.app import main
+
+        state.exit_supervision.restart_count = 2
+        state.set_exit_gate_sticky_block()
+
+        resp = main.get_status()
+
+        assert resp["exit_restart_count"] == 2
+        assert resp["exit_gate_sticky_block"] is True
+
+    async def test_motivos_bloqueio_vazio_quando_liberado(self):
+        from backend.app import main
+
+        state.mark_exit_activity(effective=True)
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.from_config",
+            return_value=_fake_breaker(True),
+        ):
+            await main._avaliar_portao_de_entradas()
+
+        resp = main.get_status()
+        assert resp["motivos_bloqueio"] == []
+
+    async def test_motivos_bloqueio_reflete_ultima_avaliacao_real(self):
+        from backend.app import main
+
+        state.mark_exit_activity(effective=True)
+        state.set_exit_gate_sticky_block()
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.from_config",
+            return_value=_fake_breaker(False),
+        ):
+            await main._avaliar_portao_de_entradas()
+
+        resp = main.get_status()
+        assert "exit_loop_exhausted" in resp["motivos_bloqueio"]
+        assert "circuit_breaker" in resp["motivos_bloqueio"]
 
 
 # --- Heartbeat granular do exit_loop (P3-A Etapa 3) -------------------------

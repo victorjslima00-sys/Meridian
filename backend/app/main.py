@@ -90,6 +90,11 @@ def get_status():
         "last_exit_activity_at": snap["last_exit_activity_at"],
         "last_effective_exit_scan_at": snap["last_effective_exit_scan_at"],
         "restart_count": snap["restart_count"],
+        # honest-dashboard Bloco 1: portão de entradas exposto pronto —
+        # o frontend não decide nem calcula nada, só exibe.
+        "exit_restart_count": snap["exit_restart_count"],
+        "exit_gate_sticky_block": snap["exit_gate_sticky_block"],
+        "motivos_bloqueio": snap["motivos_bloqueio"],
         "active_agents": 3,
     }
 
@@ -472,6 +477,7 @@ async def _avaliar_portao_de_entradas() -> tuple[bool, list[str]]:
     elif not worker_state.state.is_exit_loop_healthy():
         motivos.append("exit_loop_unhealthy")
 
+    worker_state.state.mark_gate_evaluated(motivos)
     return (len(motivos) == 0, motivos)
 
 
@@ -800,14 +806,48 @@ def _log_if_exit_supervisor_died(task: asyncio.Task) -> None:
         _alerta_telegram(f"🛑 [Meridian] Supervisor do exit_loop caiu: {exc}")
 
 
+def _enrich_trade_com_calculos(trade: dict) -> dict:
+    """Calcula, no backend, os números que o frontend não pode calcular
+    sozinho (honest-dashboard Bloco 2, CLAUDE.md: "no frontend, tudo que
+    parece dado É dado vindo da API, ou não existe"):
+
+    - alocado: capital em R$ comprometido na posição.
+    - current_price: preço atual. Fechada = exit_price real, já
+      conhecido. Ativa = derivado de entry_price + pnl_pct, o mesmo
+      pnl_pct que o exit_loop mantém fresco a cada ~5s — não é uma nova
+      fonte de dado, só move a mesma conta do navegador pro backend.
+    - pnl_monetario: resultado em R$ (não só %).
+    """
+    entry_price = trade.get("entry_price") or 0.0
+    shares = trade.get("shares") or 0.0
+    pnl_pct = trade.get("pnl_pct") or 0.0
+    side = trade.get("side")
+
+    alocado = shares * entry_price
+
+    if trade.get("status") == "closed" and trade.get("exit_price"):
+        current_price = trade["exit_price"]
+    elif side == "SELL":
+        current_price = entry_price * (1 - pnl_pct / 100)
+    else:
+        current_price = entry_price * (1 + pnl_pct / 100)
+
+    return {
+        **trade,
+        "alocado": alocado,
+        "current_price": current_price,
+        "pnl_monetario": alocado * (pnl_pct / 100),
+    }
+
+
 @app.get("/api/positions")
 def get_positions_route():
     pf = get_portfolio()
 
     from .data.database import get_active_trades, get_closed_trades
 
-    active_positions = get_active_trades()
-    closed_positions = get_closed_trades()
+    active_positions = [_enrich_trade_com_calculos(t) for t in get_active_trades()]
+    closed_positions = [_enrich_trade_com_calculos(t) for t in get_closed_trades()]
 
     return {
         "capital": {
@@ -1103,6 +1143,16 @@ async def broadcast_log(agent: str, msg: str, level: str = "info"):
 
     for ws in disconnected:
         active_connections.remove(ws)
+
+@app.get("/api/equity_snapshots")
+def get_equity_snapshots_route():
+    """honest-dashboard Bloco 3: espelha a tabela equity_snapshots, sem
+    nenhum cálculo — a curva de patrimônio real do bot, um snapshot por
+    dia de pregão (ver compute_current_equity/save_equity_snapshot)."""
+    from .data.database import get_equity_snapshots
+
+    return {"snapshots": get_equity_snapshots()}
+
 
 @app.get("/api/portfolio")
 def api_get_portfolio():
