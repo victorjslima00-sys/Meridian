@@ -806,14 +806,48 @@ def _log_if_exit_supervisor_died(task: asyncio.Task) -> None:
         _alerta_telegram(f"🛑 [Meridian] Supervisor do exit_loop caiu: {exc}")
 
 
+def _enrich_trade_com_calculos(trade: dict) -> dict:
+    """Calcula, no backend, os números que o frontend não pode calcular
+    sozinho (honest-dashboard Bloco 2, CLAUDE.md: "no frontend, tudo que
+    parece dado É dado vindo da API, ou não existe"):
+
+    - alocado: capital em R$ comprometido na posição.
+    - current_price: preço atual. Fechada = exit_price real, já
+      conhecido. Ativa = derivado de entry_price + pnl_pct, o mesmo
+      pnl_pct que o exit_loop mantém fresco a cada ~5s — não é uma nova
+      fonte de dado, só move a mesma conta do navegador pro backend.
+    - pnl_monetario: resultado em R$ (não só %).
+    """
+    entry_price = trade.get("entry_price") or 0.0
+    shares = trade.get("shares") or 0.0
+    pnl_pct = trade.get("pnl_pct") or 0.0
+    side = trade.get("side")
+
+    alocado = shares * entry_price
+
+    if trade.get("status") == "closed" and trade.get("exit_price"):
+        current_price = trade["exit_price"]
+    elif side == "SELL":
+        current_price = entry_price * (1 - pnl_pct / 100)
+    else:
+        current_price = entry_price * (1 + pnl_pct / 100)
+
+    return {
+        **trade,
+        "alocado": alocado,
+        "current_price": current_price,
+        "pnl_monetario": alocado * (pnl_pct / 100),
+    }
+
+
 @app.get("/api/positions")
 def get_positions_route():
     pf = get_portfolio()
 
     from .data.database import get_active_trades, get_closed_trades
 
-    active_positions = get_active_trades()
-    closed_positions = get_closed_trades()
+    active_positions = [_enrich_trade_com_calculos(t) for t in get_active_trades()]
+    closed_positions = [_enrich_trade_com_calculos(t) for t in get_closed_trades()]
 
     return {
         "capital": {

@@ -93,9 +93,8 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
       });
     }
 
-    const current_price = trade.side === 'BUY'
-      ? trade.entry_price * (1 + (trade.pnl_pct / 100))
-      : trade.entry_price * (1 - (trade.pnl_pct / 100));
+    // current_price vem pronto da API (honest-dashboard Bloco 2).
+    const current_price = trade.current_price;
 
     if (current_price) {
       candlestickSeries.createPriceLine({
@@ -129,7 +128,8 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
     ? (trade.entry_price - trade.stop_loss) * trade.shares
     : (trade.stop_loss - trade.entry_price) * trade.shares;
 
-  const pnlValue = (trade.pnl_pct / 100) * (trade.shares * trade.entry_price);
+  // pnl_monetario vem pronto da API (honest-dashboard Bloco 2).
+  const pnlValue = trade.pnl_monetario;
   const pnlSign = pnlValue >= 0 ? '+' : '-';
 
   return (

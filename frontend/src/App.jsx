@@ -112,20 +112,22 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
 
 // ─── Position Row com mini-sparkline ─────────────────────────────────────────
 const PositionRow = ({ pos, onClick, onClose }) => {
-  const current_price = pos.exit_price || pos.entry_price * (1 + (pos.pnl_pct / 100));
+  // current_price, alocado e pnl_monetario vêm prontos da API
+  // (honest-dashboard Bloco 2) — nada disso é recalculado aqui.
+  const current_price = pos.current_price;
   const target = pos.target_price || 0;
   const stop = pos.stop_loss || 0;
-  
+
   const priceDiff = pos.side === 'BUY' ? target - pos.entry_price : pos.entry_price - target;
-  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100, 
-    pos.side === 'BUY' 
-      ? ((current_price - pos.entry_price) / priceDiff) * 100 
+  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100,
+    pos.side === 'BUY'
+      ? ((current_price - pos.entry_price) / priceDiff) * 100
       : ((pos.entry_price - current_price) / priceDiff) * 100
   ));
-  
+
   const isGain = pos.pnl_pct >= 0;
-  const pnlMonetary = (pos.pnl_pct / 100) * (pos.shares * pos.entry_price);
-  const alocado = pos.shares * pos.entry_price;
+  const pnlMonetary = pos.pnl_monetario;
+  const alocado = pos.alocado;
 
   return (
     <tr className="pos-row" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
@@ -188,22 +190,19 @@ const PortfolioOverviewDashboard = ({ positions, patTotal, saldoLivre }) => {
     positions.active_positions.forEach(p => {
       allocData.push({
         name: p.ticker,
-        value: p.shares * p.entry_price, // Capital alocado
+        value: p.alocado, // vem pronto da API (honest-dashboard Bloco 2)
         color: p.side === 'BUY' ? '#3b82f6' : '#f59e0b'
       });
     });
   }
 
-  // Dados para Gráfico de Barras (PnL por Ativo)
-  const pnlData = positions?.active_positions ? positions.active_positions.map(p => {
-    const isGain = p.pnl_pct >= 0;
-    const pnlMonetary = p.shares * p.entry_price * (p.pnl_pct / 100);
-    return {
-      ticker: p.ticker,
-      pnl: pnlMonetary,
-      color: isGain ? '#10b981' : '#f43f5e'
-    };
-  }) : [];
+  // Dados para Gráfico de Barras (PnL por Ativo) — pnl_monetario vem
+  // pronto da API, não recalculado aqui.
+  const pnlData = positions?.active_positions ? positions.active_positions.map(p => ({
+    ticker: p.ticker,
+    pnl: p.pnl_monetario,
+    color: p.pnl_pct >= 0 ? '#10b981' : '#f43f5e'
+  })) : [];
 
   const CustomTooltip = ({ active, payload }) => {
     if (active && payload && payload.length) {
@@ -282,11 +281,11 @@ const TradePerformanceStrip = ({ trade }) => {
 
   const isGain = trade.pnl_pct >= 0;
   const pnlColor = isGain ? '#10b981' : '#f43f5e';
-  
-  // Simulando cálculos reais para display
-  const pnlMonetary = trade.shares * trade.entry_price * (trade.pnl_pct / 100);
-  
-  const targetDist = trade.target_price ? 
+
+  // pnl_monetario vem pronto da API (honest-dashboard Bloco 2).
+  const pnlMonetary = trade.pnl_monetario;
+
+  const targetDist = trade.target_price ?
     (trade.side === 'BUY' 
       ? ((trade.target_price - trade.entry_price) / trade.entry_price) * 100 
       : ((trade.entry_price - trade.target_price) / trade.entry_price) * 100
@@ -1505,23 +1504,35 @@ export default function App() {
                 </div>
               </div>
 
-              {tradeJournal?.summary && (
+              {positions?.closed_positions?.length > 0 && (
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
                   <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
                     <div className="kpi-title">Total de Trades</div>
-                    <div className="kpi-value">{tradeJournal.summary.total_trades}</div>
+                    <div className="kpi-value">{positions.closed_positions.length}</div>
                   </div>
                   <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
                     <div className="kpi-title">Winning / Losing</div>
                     <div className="kpi-value" style={{ color: 'var(--green)' }}>
-                      {tradeJournal.summary.winning} <span style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>/ {tradeJournal.summary.losing}</span>
+                      {positions.closed_positions.filter(t => t.pnl_pct >= 0).length}
+                      {' '}<span style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>
+                        / {positions.closed_positions.filter(t => t.pnl_pct < 0).length}
+                      </span>
                     </div>
                   </div>
                   <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
                     <div className="kpi-title">PnL Total (BRL)</div>
-                    <div className="kpi-value" style={{ color: tradeJournal.summary.total_pnl_brl >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                      R$ {tradeJournal.summary.total_pnl_brl.toFixed(2)}
-                    </div>
+                    {(() => {
+                      {/* Soma simples de pnl_monetario, que já vem pronto por trade
+                          da API — nenhum novo cálculo de risco/negócio aqui. */}
+                      const total = positions.closed_positions.reduce(
+                        (sum, t) => sum + (t.pnl_monetario || 0), 0
+                      );
+                      return (
+                        <div className="kpi-value" style={{ color: total >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                          R$ {total.toFixed(2)}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
@@ -1533,22 +1544,25 @@ export default function App() {
                     <thead>
                       <tr>
                         <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
-                        <th>Data Início</th><th>Duração</th><th>PnL %</th><th>Motivo</th>
+                        <th>Data Início</th><th>PnL %</th><th>Motivo</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {tradeJournal?.trades?.map((t, i) => (
-                        <tr key={t.id || t.exit_date || i}>
-                          <td><span className="ticker-badge">{t.ticker}</span></td>
-                          <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
-                          <td className="mono">R$ {t.entry_price.toFixed(2)}</td>
-                          <td className="mono">R$ {t.exit_price.toFixed(2)}</td>
-                          <td className="dim">{t.entry_date}</td>
-                          <td className="dim">{t.duration_days} d</td>
-                          <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct}%</span></td>
-                          <td className="dim">{t.exit_reason.toUpperCase()}</td>
-                        </tr>
-                      ))}
+                      {!(positions?.closed_positions?.length > 0) ? (
+                        <tr><td colSpan="7" className="empty-state">Nenhuma operação fechada ainda</td></tr>
+                      ) : (
+                        positions.closed_positions.map((t, i) => (
+                          <tr key={t.id || t.exit_date || i}>
+                            <td><span className="ticker-badge">{t.ticker}</span></td>
+                            <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
+                            <td className="mono">R$ {t.entry_price?.toFixed(2)}</td>
+                            <td className="mono">R$ {t.exit_price?.toFixed(2)}</td>
+                            <td className="dim">{t.entry_date}</td>
+                            <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct?.toFixed(2)}%</span></td>
+                            <td className="dim">{(t.exit_reason || '—').toUpperCase()}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
