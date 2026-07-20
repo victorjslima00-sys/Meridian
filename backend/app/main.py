@@ -1144,6 +1144,16 @@ async def broadcast_log(agent: str, msg: str, level: str = "info"):
     for ws in disconnected:
         active_connections.remove(ws)
 
+@app.get("/api/equity_snapshots")
+def get_equity_snapshots_route():
+    """honest-dashboard Bloco 3: espelha a tabela equity_snapshots, sem
+    nenhum cálculo — a curva de patrimônio real do bot, um snapshot por
+    dia de pregão (ver compute_current_equity/save_equity_snapshot)."""
+    from .data.database import get_equity_snapshots
+
+    return {"snapshots": get_equity_snapshots()}
+
+
 @app.get("/api/portfolio")
 def api_get_portfolio():
     from .data.database import get_portfolio

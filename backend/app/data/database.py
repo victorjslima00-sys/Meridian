@@ -452,6 +452,22 @@ def has_snapshot_for(snapshot_date: datetime.date) -> bool:
         conn.close()
 
 
+def get_equity_snapshots() -> List[Dict[str, Any]]:
+    """Histórico completo de equity_snapshots, em ordem cronológica —
+    base real da curva de patrimônio (honest-dashboard Bloco 3). Só
+    date/equity: nenhum cálculo aqui, quem quiser Sharpe/drawdown real
+    calcula a partir da série completa, não inventa em cima dela."""
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT date, equity FROM equity_snapshots ORDER BY date ASC")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+    return [{"date": r["date"], "equity": r["equity"]} for r in rows]
+
+
 def get_equity_refs(ref_date: Optional[datetime.date] = None) -> Optional[Dict[str, float]]:
     """
     Referências de equity para o Circuit Breaker, a partir dos snapshots:

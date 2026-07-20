@@ -225,6 +225,11 @@ const PortfolioOverviewDashboard = ({ positions, patTotal, saldoLivre }) => {
         </div>
       </div>
       
+      <div className="glass-panel" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.01)' }}>
+        <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Curva de Patrimônio</h3>
+        <SimplePortfolio />
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, paddingBottom: '1rem' }}>
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
           <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
