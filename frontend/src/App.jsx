@@ -7,7 +7,8 @@ import ActiveTradeDetails from './ActiveTradeDetails';import {
   WifiOff, TrendingUp, TrendingDown,
   ChevronRight, Settings, RefreshCw,
   DollarSign, Percent, BookOpen,
-  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send
+  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send,
+  Wallet, Lock
 } from 'lucide-react';
 import { RiskMetricsPanel, PositionSizingCalc, FastExecutionWidget } from './EliteCharts';
 import { PortfolioChart as SimplePortfolio } from './Charts';
@@ -75,13 +76,62 @@ const HealthBadge = ({ status, connected }) => {
   );
 };
 
-// ─── Ticker Tape Item com cor semântica ───────────────────────────────────────
-const TapeItem = ({ item }) => {
-  const isUp = item.includes('▲');
+// ─── System Health Panel — detalhe operacional real de /api/status ──────────
+// Todo campo abaixo já vem pronto do worker_state.snapshot() no backend; o
+// único cálculo feito aqui é "há quanto tempo" a partir de um timestamp ISO,
+// que é formatação de exibição (igual a toLocaleString() já usado em outros
+// pontos do arquivo), não lógica de negócio/risco.
+const EXECUTION_MODE_LABELS = {
+  manual: 'Manual — só ordens iniciadas por você',
+  semi_auto: 'Semi-automático — IA sugere, você confirma',
+  full_auto: 'Totalmente automático',
+};
+
+const timeAgo = (isoString) => {
+  if (!isoString) return 'nunca';
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  if (diffMs < 0) return 'agora';
+  const s = Math.floor(diffMs / 1000);
+  if (s < 60) return `há ${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `há ${m}min`;
+  const h = Math.floor(m / 60);
+  return `há ${h}h${m % 60 ? ` ${m % 60}min` : ''}`;
+};
+
+const HealthRow = ({ label, value, warn }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.78rem', gap: '1rem' }}>
+    <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ color: warn ? '#f59e0b' : '#e2e8f0', fontWeight: 600, fontFamily: 'monospace', textAlign: 'right' }}>{value}</span>
+  </div>
+);
+
+const SystemHealthPanel = ({ status }) => {
+  if (!status) return null;
+  const motivos = status.motivos_bloqueio || [];
   return (
-    <span className="tape-item" data-up={isUp}>
-      {item}
-    </span>
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <HealthRow label="Modo de execução" value={EXECUTION_MODE_LABELS[status.execution_mode] || status.execution_mode || '—'} />
+      <HealthRow label="Laço de entradas" value={status.worker_status || '—'} warn={status.worker_status !== 'running'} />
+      <HealthRow label="Última varredura (entradas)" value={timeAgo(status.last_scan_at)} />
+      <HealthRow label="Restarts (entradas)" value={status.restart_count ?? 0} warn={(status.restart_count || 0) > 0} />
+      <HealthRow label="Laço de saída — atividade" value={timeAgo(status.last_exit_activity_at)} />
+      <HealthRow label="Laço de saída — efetivo" value={timeAgo(status.last_effective_exit_scan_at)} />
+      <HealthRow label="Restarts (saída)" value={status.exit_restart_count ?? 0} warn={(status.exit_restart_count || 0) > 0} />
+      {status.exit_gate_sticky_block && (
+        <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)', borderRadius: '4px', color: '#f43f5e', fontSize: '0.72rem', fontWeight: 600 }}>
+          ⚠️ Bloqueio permanente: laço de saída esgotou os restarts. Só reinício manual do processo libera novas entradas.
+        </div>
+      )}
+      {motivos.length > 0 && (
+        <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Entradas bloqueadas — motivos</span>
+          {motivos.map((m, i) => (
+            <span key={i} style={{ fontSize: '0.75rem', color: '#f59e0b' }}>• {m}</span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -344,8 +394,6 @@ export default function App() {
   const [tab, setTab] = useState('overview');
   const [status, setStatus] = useState(null);
   const [positions, setPositions] = useState(null);
-  const [ecosystem, setEcosystem] = useState(null);
-  const [tapeData, setTapeData] = useState(null);
   const [apiError, setApiError] = useState(null);
   const [connected, setConnected] = useState(true);
 
@@ -391,11 +439,9 @@ export default function App() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [s, p, e, tp, rm] = await Promise.all([
+        const [s, p, rm] = await Promise.all([
           api.get(`/status`),
           api.get(`/positions`),
-          api.get(`/ecosystem`),
-          api.get(`/market_tape`),
           api.get(`/elite/risk_metrics`).catch(()=>({data:null})),
         ]);
         setStatus(s.data);
@@ -406,7 +452,6 @@ export default function App() {
           const updated = p.data.active_positions?.find(t => t.id === prev.id) || p.data.closed_positions?.find(t => t.id === prev.id);
           return updated ? { ...prev, ...updated } : prev;
         });
-        setEcosystem(e.data); setTapeData(tp.data);
 
         // Update Live PnL History — pnl_monetario vem pronto por posição
         // da API (honest-dashboard Bloco 2), só somamos aqui.
@@ -468,7 +513,7 @@ export default function App() {
     } catch { alert('Erro de conexão.'); }
   };
 
-  if (!status || !positions || !ecosystem || !tapeData) {
+  if (!status || !positions) {
     return (
       <div className="splash">
         <div className="splash-glow" />
@@ -487,6 +532,8 @@ export default function App() {
   const cap = positions.capital || {};
   const patTotal = cap.patrimonio_total || 0;
   const saldoLivre = cap.saldo_livre || 0;
+  const saldoDisponivel = cap.saldo_disponivel || 0;
+  const emPosicoes = cap.em_posicoes || 0;
 
   const totalAbsoluto = patTotal;
   const roi = (((totalAbsoluto - 100) / 100) * 100).toFixed(2);
@@ -550,13 +597,6 @@ export default function App() {
             )}
           </div>
 
-          <div className="topbar-tape" aria-label="Fita de mercado">
-            <div className="tape-scroll">
-              {tapeData.tape.map((item, i) => <TapeItem key={item.id || item.timestamp || i} item={item} />)}
-              {tapeData.tape.map((item, i) => <TapeItem key={`r-${item.id || item.timestamp || i}`} item={item} />)}
-            </div>
-          </div>
-          
           <button className="emergency-btn" onClick={() => setShowEmergency(true)}>
             <ShieldAlert size={14} /> STOP
           </button>
@@ -565,19 +605,27 @@ export default function App() {
         {/* ── PAGE CONTENT ── */}
         <div className="page-content">
 
-          {/* ACTIVE TRADE DETAILS OR OVERVIEW */}
-          {tab === 'overview' && selectedTrade ? (
+          {/* DETALHE DE TRADE (ativo ou fechado) OU CONTEÚDO DA ABA —
+              selectedTrade é setado por qualquer linha clicável (posição
+              ativa ou fechada, em qualquer aba), então o dossiê aparece
+              independente da aba atual; "VOLTAR" retorna pra aba de onde
+              veio (selectedTrade só volta a null, tab não muda). */}
+          {selectedTrade ? (
             <ErrorBoundary>
               <ActiveTradeDetails trade={selectedTrade} onBack={() => setSelectedTrade(null)} />
             </ErrorBoundary>
-          ) : tab === 'overview' && (
+          ) : (
+          <>
+          {tab === 'overview' && (
             <div className="overview-layout">
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
                 <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Capital consolidado" />
-                <KpiCard title="Saldo em Conta" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Margem livre p/ operar" />
-                <KpiCard 
-                  title="PnL Flutuante (MTM)" 
+                <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={`R$ ${saldoDisponivel.toFixed(2)}`} sub="Antes de descontar posições" />
+                <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={`R$ ${emPosicoes.toFixed(2)}`} sub="Capital preso em trades abertos" />
+                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Margem livre p/ operar" />
+                <KpiCard
+                  title="PnL Flutuante (MTM)"
                   icon={Activity} 
                   color={livePnlHistory.length > 0 && livePnlHistory[livePnlHistory.length - 1].pnl >= 0 ? '#10b981' : '#f43f5e'} 
                   value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`} 
@@ -642,6 +690,16 @@ export default function App() {
                   {(positions?.active_positions?.length > 0 || livePnlHistory.length > 0) && (
                     <LivePnlChart history={livePnlHistory} />
                   )}
+
+  {/* SAÚDE DO SISTEMA — detalhe real de /api/status */}
+                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
+                      <h3>Saúde do Sistema</h3>
+                    </div>
+                    <div style={{ padding: '0.5rem 0.75rem' }}>
+                      <SystemHealthPanel status={status} />
+                    </div>
+                  </div>
 
                   {/* BOLETA E DOM */}
                   <div className="glass-panel" style={{ flexShrink: 0 }}>
@@ -781,8 +839,10 @@ export default function App() {
                   <Users size={32} color="var(--primary)" />
                 </div>
                 <div>
-                  <h3 style={{ fontSize: '1.2rem', marginBottom: '0.2rem' }}>Trader Elite</h3>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>ID: 10492-MERIDIAN • Conta {brokerSettings.mode.toUpperCase()}</p>
+                  <h3 style={{ fontSize: '1.2rem', marginBottom: '0.2rem' }}>Meridian Bot</h3>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                    {EXECUTION_MODE_LABELS[status?.execution_mode] || status?.execution_mode || 'Modo desconhecido'} • Conta {brokerSettings.mode.toUpperCase()}
+                  </p>
                   <div style={{ display: 'flex', gap: '1rem' }}>
                     <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Ambiente: Paper Trading</span>
                     <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>Execução: Simulador local</span>
@@ -824,28 +884,48 @@ export default function App() {
               )}
 
               <div className="glass-panel">
-                <div className="panel-header"><h3>Histórico de Operações Fechadas</h3></div>
+                <div className="panel-header">
+                  <div>
+                    <h3 style={{ marginBottom: '4px' }}>Histórico de Operações Fechadas</h3>
+                    <span className="muted-tag">Clique numa linha pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
+                  </div>
+                </div>
                 <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>Ativo</th><th>Lado</th><th>Entrada</th><th>Saída</th>
-                        <th>Data Início</th><th>PnL %</th><th>Motivo</th>
+                        <th>Ativo</th><th>Lado</th><th>Qtd</th><th>Entrada</th>
+                        <th>Alvo</th><th>Stop</th><th>Saída</th>
+                        <th>Data Entrada</th><th>Data Saída</th>
+                        <th>PnL %</th><th>PnL R$</th><th>Motivo</th><th></th>
                       </tr>
                     </thead>
                     <tbody>
                       {!(positions?.closed_positions?.length > 0) ? (
-                        <tr><td colSpan="7" className="empty-state">Nenhuma operação fechada ainda</td></tr>
+                        <tr><td colSpan="13" className="empty-state">Nenhuma operação fechada ainda</td></tr>
                       ) : (
                         positions.closed_positions.map((t, i) => (
-                          <tr key={t.id || t.exit_date || i}>
+                          <tr
+                            key={t.id || t.exit_date || i}
+                            onClick={() => setSelectedTrade(t)}
+                            style={{ cursor: 'pointer' }}
+                            title="Ver dossiê completo do trade"
+                          >
                             <td><span className="ticker-badge">{t.ticker}</span></td>
                             <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
+                            <td className="mono">{t.shares?.toFixed(5)}</td>
                             <td className="mono">R$ {t.entry_price?.toFixed(2)}</td>
+                            <td className="mono dim">R$ {t.target_price?.toFixed(2)}</td>
+                            <td className="mono dim">R$ {t.stop_loss?.toFixed(2)}</td>
                             <td className="mono">R$ {t.exit_price?.toFixed(2)}</td>
                             <td className="dim">{t.entry_date}</td>
+                            <td className="dim">{t.exit_date}</td>
                             <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct?.toFixed(2)}%</span></td>
+                            <td className="mono" style={{ color: (t.pnl_monetario || 0) >= 0 ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
+                              R$ {t.pnl_monetario?.toFixed(2)}
+                            </td>
                             <td className="dim">{(t.exit_reason || '—').toUpperCase()}</td>
+                            <td><ChevronRight size={14} color="#8b9bb4" /></td>
                           </tr>
                         ))
                       )}
@@ -933,11 +1013,13 @@ export default function App() {
                   </div>
 
                   <p style={{ marginTop: '1.5rem', fontSize: '0.75rem', color: '#8b9bb4', lineHeight: 1.5 }}>
-                    Circuit Breaker ativo: Limite diário de perda configurado em <strong>-R$ 150.00</strong>. Se atingido no modo real, o sistema bloqueia novas ordens automaticamente.
+                    Circuit breaker ativo — limites definidos em <code>config/settings.yaml</code> (risk.circuit_breaker). Se atingidos, o sistema bloqueia novas entradas automaticamente.
                   </p>
                 </div>
               </div>
             </div>
+          )}
+          </>
           )}
 
         </div>

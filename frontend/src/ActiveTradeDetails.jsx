@@ -93,8 +93,10 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
       });
     }
 
-    // current_price vem pronto da API (honest-dashboard Bloco 2).
+    // current_price vem pronto da API (honest-dashboard Bloco 2) — em
+    // trade fechado, já é o próprio exit_price (ver _enrich_trade_com_calculos).
     const current_price = trade.current_price;
+    const isClosed = trade.status === 'closed';
 
     if (current_price) {
       candlestickSeries.createPriceLine({
@@ -102,7 +104,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
         color: '#eab308',
         lineWidth: 2,
         lineStyle: 0, // Solid line
-        title: 'ATUAL',
+        title: isClosed ? 'SAÍDA' : 'ATUAL',
       });
     }
 
@@ -117,6 +119,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
     };
   }, [candles, loading, trade]);
 
+  const isClosed = trade.status === 'closed';
   const pnlColor = trade.pnl_pct >= 0 ? '#10b981' : '#f43f5e';
 
   // Financial calculations
@@ -147,7 +150,11 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
               {trade.side === 'BUY' ? 'LONG' : 'SHORT'}
             </span>
           </h2>
-          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Operação aberta em {new Date(trade.entry_date).toLocaleString()}</span>
+          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            {trade.status === 'closed'
+              ? `Aberta em ${new Date(trade.entry_date).toLocaleString()} • Fechada em ${trade.exit_date ? new Date(trade.exit_date).toLocaleString() : '—'} • Motivo: ${(trade.exit_reason || '—').toUpperCase()}`
+              : `Operação aberta em ${new Date(trade.entry_date).toLocaleString()}`}
+          </span>
         </div>
       </div>
 
@@ -197,7 +204,7 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
               </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', background: 'rgba(0,0,0,0.4)' }}>
-              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Lucro/Prejuízo Atual</span>
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>{isClosed ? 'Resultado Final' : 'Lucro/Prejuízo Atual'}</span>
               <div style={{ fontSize: '1.5rem', fontWeight: 800, color: pnlColor, marginTop: '0.5rem' }}>
                 {pnlSign} R$ {Math.abs(pnlValue).toFixed(2)}
               </div>
