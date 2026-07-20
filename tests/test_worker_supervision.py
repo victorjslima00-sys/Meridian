@@ -295,6 +295,28 @@ class TestApiStatusExpoePortaoDeEntradas:
         assert "circuit_breaker" in resp["motivos_bloqueio"]
 
 
+# --- dashboard-depth Bloco D: nada fabricado sobrevive --------------------
+#
+# /api/ecosystem e /api/market_tape pareciam órfãs (o frontend não as usava
+# mais depois do honest-dashboard Bloco 4), mas na verdade continuavam
+# sendo chamadas e renderizadas (fita de cotações fake no topbar) -- e
+# active_agents: 3 em /api/status nunca foi limpo. Estes testes travam a
+# ausência dos três daqui pra frente.
+class TestNadaFabricadoSobrevive:
+    def test_status_nao_expoe_active_agents_fabricado(self):
+        from backend.app import main
+
+        resp = main.get_status()
+        assert "active_agents" not in resp
+
+    def test_rotas_fake_ecosystem_e_market_tape_nao_existem(self):
+        from backend.app import main
+
+        paths = {getattr(r, "path", None) for r in main.app.routes}
+        assert "/api/ecosystem" not in paths
+        assert "/api/market_tape" not in paths
+
+
 # --- Heartbeat granular do exit_loop (P3-A Etapa 3) -------------------------
 #
 # Dois sinais, propositalmente separados: last_exit_activity_at prova que o

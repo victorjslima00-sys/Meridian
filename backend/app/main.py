@@ -95,7 +95,6 @@ def get_status():
         "exit_restart_count": snap["exit_restart_count"],
         "exit_gate_sticky_block": snap["exit_gate_sticky_block"],
         "motivos_bloqueio": snap["motivos_bloqueio"],
-        "active_agents": 3,
     }
 
 
@@ -1025,31 +1024,6 @@ def get_candles(ticker: str):
             }
         )
     return {"ticker": ticker, "candles": candles}
-
-
-@app.get("/api/ecosystem")
-def get_ecosystem():
-    return {
-        "agents": [
-            {"id": "market_analyst", "name": "Analista de Mercado", "status": "online"},
-            {"id": "risk_manager", "name": "Gerenciador de Risco", "status": "online"},
-            {"id": "executor", "name": "Executor", "status": "online"},
-        ],
-        "system_latency": "12ms",
-    }
-
-
-@app.get("/api/market_tape")
-def get_tape():
-    return {
-        "tape": [
-            "PETR4 36.50 ▲ 1.2%",
-            "VALE3 61.20 ▼ 0.5%",
-            "ITUB4 34.10 ▲ 0.8%",
-            "BBDC4 12.45 ▼ 1.1%",
-            "BBAS3 28.90 ▲ 0.3%",
-        ]
-    }
 
 
 from pydantic import BaseModel
