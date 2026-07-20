@@ -4,6 +4,25 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
 ## Alta prioridade
 
+- **`get_risk_metrics()` (`backend/app/data/database.py`) tem um campo
+  fabricado e um mal rotulado — achado durante o honest-dashboard Bloco
+  3.** `"calmar": sharpe * 0.8` (comentário no próprio código: `#
+  Approximated`) não tem relação nenhuma com a fórmula real de Calmar
+  Ratio (retorno anualizado / max drawdown) — é um placeholder que imita
+  métrica real, exatamente o que a regra nova do CLAUDE.md proíbe.
+  `max_drawdown_pct` também é enganoso: hoje é só o pior trade individual
+  (`min(losses)`), não o drawdown pico-a-vale real da curva de
+  patrimônio — que agora dá pra calcular de verdade a partir de
+  `equity_snapshots` (`GET /api/equity_snapshots`, Bloco 3). `sharpe`/
+  `sortino`/`var_95_daily` são aproximações honestas mas não-padrão
+  (retornos por trade, não série temporal anualizada com taxa livre de
+  risco) — value real, só não é a métrica clássica que o nome sugere;
+  vale um aviso na UI ou renomear os campos. Decidir: implementar calmar/
+  drawdown de verdade a partir da equity curve, ou remover/renomear os
+  campos até existir cálculo real.
+  Arquivos: `backend/app/data/database.py` (`get_risk_metrics`),
+  `frontend/src/EliteCharts.jsx` (`RiskMetricsPanel`).
+
 - **Latência de stop-loss: PHASE 1 (saídas) só reavaliada a cada ciclo completo (10+ min).**
   Enquadramento: isto NÃO é performance — é latência de proteção de capital.
   O worker processa os tickers sequencialmente num único `for`; cada ticker em
