@@ -365,17 +365,75 @@ export default function App() {
   const termRef = useRef(null);
 
   // Log de decisões ao vivo — WebSocket real (/ws/logs). wsConnected
-  // reflete o estado de verdade da conexão, não um rótulo fixo.
+  // reflete o estado de verdade da conexão: reconexão com backoff quando
+  // cai, e um timeout de inatividade detecta socket morto mesmo sem
+  // onclose/onerror disparar (Track B, 3e). O backend (/ws/logs em
+  // main.py) não envia ping -- só fica em receive_text() esperando --
+  // então uma queda silenciosa (wifi caiu, laptop hibernou) nunca
+  // dispararia onclose sozinha; sem mensagem nenhuma por 20s, tratamos
+  // como morto e forçamos o fechamento pra cair no fluxo de reconexão.
+  const wsRef = useRef(null);
+  const wsReconnectTimerRef = useRef(null);
+  const wsInactivityTimerRef = useRef(null);
+  const wsReconnectAttemptRef = useRef(0);
+  const wsUnmountedRef = useRef(false);
+
   useEffect(() => {
-    const ws = new window.WebSocket('ws://localhost:8000/ws/logs');
-    ws.onopen = () => setWsConnected(true);
-    ws.onclose = () => setWsConnected(false);
-    ws.onerror = () => setWsConnected(false);
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
+    const WS_INACTIVITY_TIMEOUT_MS = 20000;
+    const WS_MAX_BACKOFF_MS = 30000;
+    // Reset explícito: em dev, o StrictMode monta -> desmonta -> monta de
+    // novo synchronamente; o cleanup do primeiro mount marca unmounted=true
+    // e, sem este reset, o segundo mount (o real) herdava essa flag presa
+    // pra sempre via useRef -- toda reconexão real era silenciosamente
+    // pulada (bug encontrado e corrigido durante a verificação visual).
+    wsUnmountedRef.current = false;
+
+    const clearInactivityTimer = () => {
+      if (wsInactivityTimerRef.current) clearTimeout(wsInactivityTimerRef.current);
     };
-    return () => ws.close();
+
+    const armInactivityTimer = () => {
+      clearInactivityTimer();
+      wsInactivityTimerRef.current = setTimeout(() => {
+        setWsConnected(false);
+        wsRef.current?.close();
+      }, WS_INACTIVITY_TIMEOUT_MS);
+    };
+
+    const connect = () => {
+      const ws = new window.WebSocket('ws://localhost:8000/ws/logs');
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        wsReconnectAttemptRef.current = 0;
+        setWsConnected(true);
+        armInactivityTimer();
+      };
+      ws.onclose = () => {
+        setWsConnected(false);
+        clearInactivityTimer();
+        if (wsUnmountedRef.current) return;
+        const attempt = wsReconnectAttemptRef.current;
+        const delay = Math.min(1000 * 2 ** attempt, WS_MAX_BACKOFF_MS);
+        wsReconnectAttemptRef.current = attempt + 1;
+        wsReconnectTimerRef.current = setTimeout(connect, delay);
+      };
+      ws.onerror = () => ws.close();
+      ws.onmessage = (event) => {
+        armInactivityTimer();
+        const data = JSON.parse(event.data);
+        setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
+      };
+    };
+
+    connect();
+
+    return () => {
+      wsUnmountedRef.current = true;
+      clearInactivityTimer();
+      if (wsReconnectTimerRef.current) clearTimeout(wsReconnectTimerRef.current);
+      wsRef.current?.close();
+    };
   }, []);
 
   useEffect(() => {
