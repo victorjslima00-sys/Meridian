@@ -111,19 +111,19 @@ class RiskManager:
                 "reason": "Risk Manager veto: Invalid price targets.",
             }
 
-        # Calculate Reward and Risk distances
+        # Calculate Reward and Risk distances. A checagem de direção
+        # inválida/alvos ilógicos que existia aqui (risk<=0 or reward<=0)
+        # foi removida (dashboard-depth Track A): AnalystDecision
+        # (backend/app/agents/schemas.py) já garante, via Pydantic, que
+        # stop_loss < preço < target_price em BUY (invertido em SELL)
+        # ANTES de qualquer sinal chegar aqui — reward e risk são
+        # matematicamente positivos por construção quando signal != HOLD.
         if analyst_signal["signal"] == "BUY":
             reward = target_price - current_price
             risk = current_price - stop_loss
         else:  # SELL
             reward = current_price - target_price
             risk = stop_loss - current_price
-
-        if risk <= 0 or reward <= 0:
-            return {
-                "approved": False,
-                "reason": "Risk Manager veto: Trade direction inverted or illogical targets.",
-            }
 
         win_loss_ratio = reward / risk
 

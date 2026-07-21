@@ -211,3 +211,42 @@ class TestCapitalNaRotaDePosicoesReflexteGanhoEPerda:
         # Preço caiu (54 < entrada 60) -> patrimônio menor que no preço de entrada.
         assert resp_ganho["capital"]["patrimonio_total"] > resp_neutro["capital"]["patrimonio_total"]
         assert resp_perda["capital"]["patrimonio_total"] < resp_neutro["capital"]["patrimonio_total"]
+
+
+class TestGetPortfolioRouteConsistenteComPositions:
+    """Track A item 2: GET /api/portfolio devolvia patrimonio_total bruto
+    (só o cofre), com significado diferente do capital.patrimonio_total
+    de /api/positions (cofre + equity ao vivo) — mesmo campo, dois
+    valores, achado numa revisão externa do PR #10. Ainda sem consumidor
+    no frontend hoje, mas é uma armadilha pra quem um dia conectar essa
+    rota. Corrigido pra usar a mesma fórmula."""
+
+    def _api_get_portfolio(self, temp_db_path):
+        from backend.app import main
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            return main.api_get_portfolio()
+        finally:
+            database_module.DB_PATH = original_path
+
+    def test_patrimonio_total_bate_com_positions_incluindo_mtm(self, temp_db_path):
+        _set_portfolio(
+            temp_db_path, patrimonio_total=30.0, saldo_disponivel=100.0, em_posicoes=40.0
+        )
+        _insert_trade(
+            temp_db_path, ticker="PETR4.SA", side="BUY", shares=10.0,
+            entry_price=30.0, pnl_pct=0.0, status="active",
+        )
+
+        with patch("backend.app.data.feed.get_current_price", return_value=33.0):
+            resp_portfolio = self._api_get_portfolio(temp_db_path)
+            resp_positions = _get_positions(temp_db_path)
+
+        assert resp_portfolio["patrimonio_total"] == pytest.approx(
+            resp_positions["capital"]["patrimonio_total"]
+        )
+        # Mesma conta de test_patrimonio_total_soma_cofre_com_equity_ao_vivo_do_bot:
+        # cofre(30) + [caixa_livre(60) + mtm(330)] = 420.
+        assert resp_portfolio["patrimonio_total"] == pytest.approx(420.0)

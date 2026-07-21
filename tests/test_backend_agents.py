@@ -32,9 +32,25 @@ def _make_downtrend_df(n=30) -> pd.DataFrame:
     return _make_price_df(n, start=130.0, end=100.0)
 
 
-def _mock_llm_response(signal: str, reason: str = "Test reason") -> MagicMock:
+def _mock_llm_response(
+    signal: str,
+    reason: str = "Test reason",
+    confidence: int = 70,
+    target_price: float = None,
+    stop_loss: float = None,
+) -> MagicMock:
+    """target_price/stop_loss omitidos por padrão (None) preserva o
+    comportamento antigo pra sinais/testes que não envolvem BUY/SELL
+    válido. Passe valores explícitos pra simular uma resposta completa —
+    obrigatório agora que AnalystDecision valida a invariante de preço
+    (dashboard-depth Track A)."""
+    payload = {"signal": signal, "reason": reason, "confidence": confidence}
+    if target_price is not None:
+        payload["target_price"] = target_price
+    if stop_loss is not None:
+        payload["stop_loss"] = stop_loss
     r = MagicMock()
-    r.content = json.dumps({"signal": signal, "reason": reason})
+    r.content = json.dumps(payload)
     return r
 
 
@@ -75,7 +91,12 @@ class TestMarketAnalyst:
     @pytest.mark.asyncio
     async def test_returns_buy_on_uptrend_with_gemini(self):
         from backend.app.agents.market_analyst import MarketAnalyst
-        mock_resp = _mock_llm_response("BUY", "SMA10 cruzou SMA20 para cima")
+        # _make_price_df() termina em 130.0 (uptrend) -- stop/alvo dentro
+        # dos limites de signals.stop_pct (4%) e derivado (8%).
+        mock_resp = _mock_llm_response(
+            "BUY", "SMA10 cruzou SMA20 para cima",
+            target_price=136.0, stop_loss=125.0,
+        )
         with patch("backend.app.agents.market_analyst.fetch_recent_data",
                    return_value=_make_price_df()), \
              patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
@@ -87,7 +108,12 @@ class TestMarketAnalyst:
     @pytest.mark.asyncio
     async def test_returns_sell_on_downtrend_with_gemini(self):
         from backend.app.agents.market_analyst import MarketAnalyst
-        mock_resp = _mock_llm_response("SELL", "Downtrend confirmado")
+        # _make_downtrend_df() termina em 100.0 -- stop/alvo dentro dos
+        # limites de signals.stop_pct (4%) e derivado (8%).
+        mock_resp = _mock_llm_response(
+            "SELL", "Downtrend confirmado",
+            target_price=95.0, stop_loss=103.0,
+        )
         with patch("backend.app.agents.market_analyst.fetch_recent_data",
                    return_value=_make_downtrend_df()), \
              patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
