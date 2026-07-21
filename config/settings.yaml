@@ -83,7 +83,7 @@ risk:
 # Modo de execução
 # ----------------------------------------------------------
 execution:
-  mode: "manual"                   # Padrão: manual | semi_auto | full_auto
+  mode: "full_auto"                # Padrão: manual | semi_auto | full_auto
   confirmation_timeout_minutes: 10 # Timeout = REJEIÇÃO automática (nunca auto-aprovar)
 
 # ----------------------------------------------------------

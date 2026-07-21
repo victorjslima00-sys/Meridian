@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from './api';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
-import ActiveTradeDetails from './ActiveTradeDetails';import {
+import ActiveTradeDetails from './ActiveTradeDetails';
+import PositionNarrative, { ClosedPositionsNarrative } from './PositionNarrative';
+import CapitalVault from './CapitalVault';
+import {
   Activity, ShieldAlert, Cpu,
   BarChart2, Terminal, Briefcase, X,
   WifiOff, TrendingUp, TrendingDown,
-  ChevronRight, Settings, RefreshCw,
+  Settings, RefreshCw,
   DollarSign, Percent, BookOpen,
   Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send,
   Wallet, Lock
@@ -154,75 +157,6 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
   </div>
 );
 
-// ─── Position Row com mini-sparkline ─────────────────────────────────────────
-const PositionRow = ({ pos, onClick, onClose }) => {
-  // current_price, alocado e pnl_monetario vêm prontos da API
-  // (honest-dashboard Bloco 2) — nada disso é recalculado aqui.
-  const current_price = pos.current_price;
-  const target = pos.target_price || 0;
-  const stop = pos.stop_loss || 0;
-
-  const priceDiff = pos.side === 'BUY' ? target - pos.entry_price : pos.entry_price - target;
-  const progress = priceDiff === 0 ? 0 : Math.max(0, Math.min(100,
-    pos.side === 'BUY'
-      ? ((current_price - pos.entry_price) / priceDiff) * 100
-      : ((pos.entry_price - current_price) / priceDiff) * 100
-  ));
-
-  const isGain = pos.pnl_pct >= 0;
-  const pnlMonetary = pos.pnl_monetario;
-  const alocado = pos.alocado;
-
-  return (
-    <tr className="pos-row" onClick={onClick} tabIndex={0} onKeyDown={e => e.key === 'Enter' && onClick()}>
-      <td>
-        <div className="ticker-badge">{pos.ticker}</div>
-        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: '4px', letterSpacing: '0.5px' }}>R$ {alocado.toFixed(2)}</div>
-      </td>
-      <td>
-        <span className={`side-chip ${pos.side === 'BUY' ? 'long' : 'short'}`}>
-          {pos.side === 'BUY' ? '↑ LONG' : '↓ SHORT'}
-        </span>
-      </td>
-      <td className="mono">R$ {pos.entry_price?.toFixed(2)}</td>
-      <td>
-        <div className="mtm-cell">
-          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
-            R$ {current_price?.toFixed(2)}
-          </span>
-          <div className="prog-track">
-            <div className="prog-fill" style={{ width: `${progress}%`, background: isGain ? '#10b981' : '#f43f5e' }} />
-          </div>
-        </div>
-      </td>
-      <td className="mono dim">R$ {target?.toFixed(2)}</td>
-      <td className="mono dim">R$ {stop?.toFixed(2)}</td>
-      <td>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
-          <span className={`pnl-chip ${isGain ? 'gain' : 'loss'}`}>
-            {isGain ? '+' : ''}{pos.pnl_pct?.toFixed(2)}%
-          </span>
-          <span className="mono" style={{ fontSize: '0.75rem', color: isGain ? '#10b981' : '#f43f5e', fontWeight: 800 }}>
-            {pnlMonetary >= 0 ? '+' : '-'}R$ {Math.abs(pnlMonetary).toFixed(2)}
-          </span>
-        </div>
-      </td>
-      <td>
-        <button 
-          className="close-trade-btn"
-          style={{ background: 'transparent', border: 'none', cursor: 'pointer', opacity: 0.8 }}
-          onClick={(e) => { e.stopPropagation(); if (onClose) onClose(pos.id); }}
-          title="Encerrar Manualmente"
-        >
-          <X size={16} color="#f43f5e" />
-        </button>
-      </td>
-      <td>
-        <ChevronRight size={14} color="#8b9bb4" />
-      </td>
-    </tr>
-  );
-};
 // ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
 const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
   // Dados para Gráfico de Pizza (Alocação)
@@ -261,14 +195,7 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', height: '100%', overflow: 'hidden' }}>
-      <div className="glass-panel" style={{ padding: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'radial-gradient(ellipse at 50% -20%, rgba(16,185,129,0.15) 0%, rgba(0,0,0,0) 70%)', border: '1px solid rgba(16,185,129,0.1)' }}>
-        <div style={{ textAlign: 'center' }}>
-          <h2 style={{ fontSize: '1.8rem', marginBottom: '0.5rem', color: '#fff', textShadow: '0 0 10px rgba(16,185,129,0.3)' }}>Visão Global da Carteira</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Métricas consolidadas de alocação e performance em tempo real.</p>
-        </div>
-      </div>
-      
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', overflow: 'hidden' }}>
       <div className="glass-panel" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.01)' }}>
         <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Curva de Patrimônio</h3>
         <SimplePortfolio />
@@ -477,6 +404,11 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
+  const refreshCapital = async () => {
+    const p = await api.get(`/positions`);
+    setPositions(p.data);
+  };
+
   const handleCloseTrade = async (tradeId) => {
     try {
       setApiError(null);
@@ -531,6 +463,7 @@ export default function App() {
 
   const cap = positions.capital || {};
   const patTotal = cap.patrimonio_total || 0;
+  const patReservado = cap.patrimonio_reservado || 0;
   const saldoLivre = cap.saldo_livre || 0;
   const saldoDisponivel = cap.saldo_disponivel || 0;
   const emPosicoes = cap.em_posicoes || 0;
@@ -559,7 +492,7 @@ export default function App() {
             { id: 'profile',    Icon: BookOpen,    label: 'Perfil' },
             { id: 'settings',   Icon: Settings,    label: 'Configurações' },
           ].map(({ id, Icon, label }) => (
-            <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
+            <button key={id} className={`nav-item ${tab === id ? 'active' : ''}`} onClick={() => { setSelectedTrade(null); setTab(id); }}>
               <Icon size={18} />
               <span>{label}</span>
             </button>
@@ -620,16 +553,17 @@ export default function App() {
             <div className="overview-layout">
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
-                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Capital consolidado" />
-                <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={`R$ ${saldoDisponivel.toFixed(2)}`} sub="Antes de descontar posições" />
-                <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={`R$ ${emPosicoes.toFixed(2)}`} sub="Capital preso em trades abertos" />
+                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Reservado + gerido pelo bot (ao vivo)" />
+                <KpiCard title="Reservado" icon={Lock} color="#8b9bb4" value={`R$ ${patReservado.toFixed(2)}`} sub="Fora do alcance do bot" />
+                <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={`R$ ${saldoDisponivel.toFixed(2)}`} sub="Entregue ao bot, antes de posições" />
+                <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={`R$ ${emPosicoes.toFixed(2)}`} sub="Alocado no preço de entrada" />
                 <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Margem livre p/ operar" />
                 <KpiCard
                   title="PnL Flutuante (MTM)"
-                  icon={Activity} 
-                  color={livePnlHistory.length > 0 && livePnlHistory[livePnlHistory.length - 1].pnl >= 0 ? '#10b981' : '#f43f5e'} 
-                  value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`} 
-                  sub={`${positions?.active_positions?.length || 0} Posições em aberto`} 
+                  icon={Activity}
+                  color={livePnlHistory.length > 0 && livePnlHistory[livePnlHistory.length - 1].pnl >= 0 ? '#10b981' : '#f43f5e'}
+                  value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`}
+                  sub={`Resultado não realizado de ${positions?.active_positions?.length || 0} posições`}
                 />
                 <KpiCard title="ROI Global" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="Retorno Histórico (Real)" trend={roiNum} />
               </div>
@@ -637,6 +571,13 @@ export default function App() {
               <div className="pro-trading-layout">
                 {/* COLUNA PRINCIPAL (ESQUERDA - 75%) */}
                 <div className="pro-main-col">
+                  {/* SUAS POSIÇÕES — primeira coisa vista: narrativa por
+                      posição em linguagem natural, mesmo dado real do
+                      resto do dashboard (alocado/current_price/pnl_monetario
+                      vêm prontos da API), só formatado como texto em vez
+                      de tabela. */}
+                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} />
+
                   {/* ÁREA GRÁFICA / VISÃO GLOBAL */}
                   {/* selectedTrade nunca chega aqui: quando setado, o
                       branch tab==='overview' já redireciona pra
@@ -648,40 +589,6 @@ export default function App() {
                     <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} />
                   </div>
 
-                  {/* POSITIONS TABLE (RODAPÉ DA COLUNA PRINCIPAL) */}
-                  <div className="glass-panel pro-bottom-area" style={{ display: 'flex', flexDirection: 'column' }}>
-                    <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <h3 style={{ marginBottom: '4px' }}>Posições em Aberto</h3>
-                        <span className="muted-tag">Clique numa linha para vincular o gráfico ao ativo</span>
-                      </div>
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button style={{ background: 'rgba(244,63,94,0.1)', color: '#f43f5e', border: '1px solid rgba(244,63,94,0.3)', padding: '0.3rem 0.6rem', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }} title="Zerar todas as posições a mercado">
-                          <X size={12} /> Liquidar Portfólio
-                        </button>
-                      </div>
-                    </div>
-                    <div className="table-wrap" style={{ flex: 1, overflowY: 'auto' }}>
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>Ativo</th><th>Lado</th><th>Entrada</th>
-                            <th>MTM / Progresso</th><th>Alvo</th><th>Stop</th>
-                            <th>PnL</th><th>Ação</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {!(positions.active_positions && positions.active_positions.length > 0) ? (
-                            <tr><td colSpan="8" className="empty-state">🛡️ Nenhuma posição aberta</td></tr>
-                          ) : (
-                            positions.active_positions.map((p) => (
-                              <PositionRow key={p.id || p.ticker} pos={p} onClick={() => { setSelectedTrade(p); }} onClose={handleCloseTrade} />
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
                 </div>
 
                 {/* COLUNA LATERAL (DIREITA - 25%) */}
@@ -698,6 +605,16 @@ export default function App() {
                     </div>
                     <div style={{ padding: '0.5rem 0.75rem' }}>
                       <SystemHealthPanel status={status} />
+                    </div>
+                  </div>
+
+                  {/* COFRE — depositar/retirar capital do alcance do bot */}
+                  <div className="glass-panel" style={{ flexShrink: 0 }}>
+                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
+                      <h3>Gestão de Capital</h3>
+                    </div>
+                    <div style={{ padding: '0.75rem' }}>
+                      <CapitalVault capital={cap} onChanged={refreshCapital} />
                     </div>
                   </div>
 
@@ -883,55 +800,12 @@ export default function App() {
                 </div>
               )}
 
-              <div className="glass-panel">
-                <div className="panel-header">
-                  <div>
-                    <h3 style={{ marginBottom: '4px' }}>Histórico de Operações Fechadas</h3>
-                    <span className="muted-tag">Clique numa linha pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
-                  </div>
+              <div className="glass-panel" style={{ padding: '1.25rem' }}>
+                <div style={{ marginBottom: '1rem' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
+                  <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
                 </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Ativo</th><th>Lado</th><th>Qtd</th><th>Entrada</th>
-                        <th>Alvo</th><th>Stop</th><th>Saída</th>
-                        <th>Data Entrada</th><th>Data Saída</th>
-                        <th>PnL %</th><th>PnL R$</th><th>Motivo</th><th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {!(positions?.closed_positions?.length > 0) ? (
-                        <tr><td colSpan="13" className="empty-state">Nenhuma operação fechada ainda</td></tr>
-                      ) : (
-                        positions.closed_positions.map((t, i) => (
-                          <tr
-                            key={t.id || t.exit_date || i}
-                            onClick={() => setSelectedTrade(t)}
-                            style={{ cursor: 'pointer' }}
-                            title="Ver dossiê completo do trade"
-                          >
-                            <td><span className="ticker-badge">{t.ticker}</span></td>
-                            <td><span className={`side-chip ${t.side === 'BUY' ? 'long' : 'short'}`}>{t.side}</span></td>
-                            <td className="mono">{t.shares?.toFixed(5)}</td>
-                            <td className="mono">R$ {t.entry_price?.toFixed(2)}</td>
-                            <td className="mono dim">R$ {t.target_price?.toFixed(2)}</td>
-                            <td className="mono dim">R$ {t.stop_loss?.toFixed(2)}</td>
-                            <td className="mono">R$ {t.exit_price?.toFixed(2)}</td>
-                            <td className="dim">{t.entry_date}</td>
-                            <td className="dim">{t.exit_date}</td>
-                            <td><span className={`pnl-chip ${t.pnl_pct >= 0 ? 'gain' : 'loss'}`}>{t.pnl_pct?.toFixed(2)}%</span></td>
-                            <td className="mono" style={{ color: (t.pnl_monetario || 0) >= 0 ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
-                              R$ {t.pnl_monetario?.toFixed(2)}
-                            </td>
-                            <td className="dim">{(t.exit_reason || '—').toUpperCase()}</td>
-                            <td><ChevronRight size={14} color="#8b9bb4" /></td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                <ClosedPositionsNarrative positions={positions} onSelectTrade={setSelectedTrade} />
               </div>
             </div>
           )}

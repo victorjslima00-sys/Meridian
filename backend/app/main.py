@@ -480,6 +480,15 @@ async def _avaliar_portao_de_entradas() -> tuple[bool, list[str]]:
     return (len(motivos) == 0, motivos)
 
 
+# Espaçamento entre chamadas de LLM consecutivas no laço de entradas —
+# o tier gratuito do Gemini limita RequestsPerMinutePerProjectPerModel
+# (visto ao vivo: quota_value=15 para gemini-3.1-flash-lite). 50 tickers
+# disparados em sequência sem pausa estouram esse limite em segundos
+# (429 a partir do 16º ticker). 4.5s entre chamadas mantém <= 13,3
+# req/min, com margem sob o teto de 15 — ver BACKLOG.md.
+LLM_CALL_SPACING_SECONDS = 4.5
+
+
 async def _run_one_scan_cycle():
     """
     Uma iteração completa do laço LENTO (entradas): snapshot diário de
@@ -586,6 +595,8 @@ async def _run_one_scan_cycle():
             f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}",
             "info",
         )
+        # Espaça a próxima chamada de LLM — ver LLM_CALL_SPACING_SECONDS.
+        await asyncio.sleep(LLM_CALL_SPACING_SECONDS)
 
         # 2. Risk Manager (com checagem de correlação)
         if analysis["signal"] != "HOLD":
@@ -843,14 +854,25 @@ def _enrich_trade_com_calculos(trade: dict) -> dict:
 def get_positions_route():
     pf = get_portfolio()
 
-    from .data.database import get_active_trades, get_closed_trades
+    from .data.database import get_active_trades, get_closed_trades, compute_current_equity
 
     active_positions = [_enrich_trade_com_calculos(t) for t in get_active_trades()]
     closed_positions = [_enrich_trade_com_calculos(t) for t in get_closed_trades()]
 
+    # "Patrimônio Total" precisa refletir ganho/perda das posições abertas
+    # em tempo real (bug real encontrado pelo usuário: antes era só um
+    # alias de saldo_disponivel, nunca se movia com o mercado). É a soma
+    # do cofre (patrimonio_total, fora do alcance do bot) com a equity ao
+    # vivo do que foi entregue ao bot (compute_current_equity: caixa livre
+    # + mark-to-market das posições ativas) — mesma fórmula usada nos
+    # snapshots diários de equity, para as duas visões nunca divergirem.
+    patrimonio_reservado = pf.get("patrimonio_total", 0.0)
+    patrimonio_total = round(patrimonio_reservado + compute_current_equity(), 4)
+
     return {
         "capital": {
-            "patrimonio_total": pf.get("patrimonio_total", 0.0),
+            "patrimonio_total": patrimonio_total,
+            "patrimonio_reservado": patrimonio_reservado,
             "saldo_disponivel": pf.get("saldo_disponivel", 100.0),
             "em_posicoes": pf.get("em_posicoes", 0.0),
             "saldo_livre": pf.get("saldo_livre", 100.0),
