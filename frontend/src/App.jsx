@@ -8,9 +8,9 @@ import {
   Activity, ShieldAlert, Cpu,
   BarChart2, Terminal, Briefcase, X,
   WifiOff, TrendingUp, TrendingDown,
-  Settings, RefreshCw,
-  DollarSign, Percent, BookOpen,
-  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send,
+  Settings,
+  DollarSign, BookOpen,
+  Key, ToggleLeft, ToggleRight, Users, Menu,
   Wallet, Lock
 } from 'lucide-react';
 import { RiskMetricsPanel, PositionSizingCalc, FastExecutionWidget } from './EliteCharts';
@@ -317,7 +317,6 @@ const LivePnlChart = React.memo(({ history }) => {
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [copilotOpen, setCopilotOpen] = useState(false);
   const [tab, setTab] = useState('overview');
   const [status, setStatus] = useState(null);
   const [positions, setPositions] = useState(null);
@@ -332,7 +331,6 @@ export default function App() {
 
   // Settings State
   const [brokerSettings, setBrokerSettings] = useState({ mode: 'paper', has_cedro_key: false });
-  const [testingBroker, setTestingBroker] = useState(false);
 
   const [selectedTrade, setSelectedTrade] = useState(null);
   const [showEmergency, setShowEmergency] = useState(false);
@@ -361,6 +359,15 @@ export default function App() {
   useEffect(() => {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
   }, [logs]);
+
+  // Status da chave da corretora — não muda em runtime (é var de ambiente),
+  // então só no mount, sem polling (Track B, Commit 1: substitui o
+  // has_cedro_key hardcoded em false que nunca era lido de lugar nenhum).
+  useEffect(() => {
+    api.get('/broker/status')
+      .then(res => setBrokerSettings(prev => ({ ...prev, has_cedro_key: !!res.data?.has_cedro_key })))
+      .catch(() => {});
+  }, []);
 
   // Main Data fetch — só rotas que existem de verdade no backend.
   useEffect(() => {
@@ -468,10 +475,6 @@ export default function App() {
   const saldoDisponivel = cap.saldo_disponivel || 0;
   const emPosicoes = cap.em_posicoes || 0;
 
-  const totalAbsoluto = patTotal;
-  const roi = (((totalAbsoluto - 100) / 100) * 100).toFixed(2);
-  const roiNum = parseFloat(roi);
-
   return (
     <div className="shell">
       {/* ── SIDEBAR OVERLAY ── */}
@@ -565,7 +568,6 @@ export default function App() {
                   value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`}
                   sub={`Resultado não realizado de ${positions?.active_positions?.length || 0} posições`}
                 />
-                <KpiCard title="ROI Global" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="Retorno Histórico (Real)" trend={roiNum} />
               </div>
 
               <div className="pro-trading-layout">
@@ -841,19 +843,6 @@ export default function App() {
                       )}
                     </div>
                   </div>
-
-                  <button 
-                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,243,255,0.1)', color: '#00f3ff', border: '1px solid rgba(0,243,255,0.3)', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
-                    onClick={() => {
-                      setTestingBroker(true);
-                      setTimeout(() => {
-                        setTestingBroker(false);
-                        alert('O ambiente atual executa somente Paper Trading local.');
-                      }, 1500);
-                    }}
-                  >
-                    {testingBroker ? <RefreshCw size={16} className="spin" /> : 'Validar Simulador Local'}
-                  </button>
                 </div>
 
                 <div className="glass-panel" style={{ padding: '1.5rem' }}>
@@ -915,35 +904,6 @@ export default function App() {
               <button className="btn-cancel" onClick={() => { setShowEmergency(false); setPassword(''); }}>Cancelar</button>
               <button className="btn-danger" onClick={doEmergencyStop}>🔴 Confirmar</button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── COPILOT WIDGET ── */}
-      <button 
-        className="copilot-fab"
-        onClick={() => setCopilotOpen(!copilotOpen)}
-      >
-        {copilotOpen ? <X size={24} color="#fff" /> : <Bot size={24} color="#fff" />}
-      </button>
-
-      {copilotOpen && (
-        <div className="copilot-window">
-          <div className="copilot-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Bot size={18} color="var(--primary)" />
-              <span style={{ fontWeight: 'bold' }}>Meridian Copilot</span>
-            </div>
-            <button onClick={() => setCopilotOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-              <X size={16} />
-            </button>
-          </div>
-          <div className="copilot-body">
-            <div className="copilot-msg ai">Olá! Sou o Assistente da Meridian. Posso ajudar a analisar seu portfólio, explicar métricas de risco ou consultar o comitê de agentes por você. Como posso ajudar?</div>
-          </div>
-          <div className="copilot-footer">
-            <input type="text" placeholder="Pergunte ao Copilot..." className="copilot-input" />
-            <button className="copilot-send"><Send size={16} color="#fff" /></button>
           </div>
         </div>
       )}
