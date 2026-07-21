@@ -616,7 +616,7 @@ export default function App() {
                       <h3>Gestão de Capital</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <CapitalVault capital={cap} onChanged={refreshCapital} />
+                      <CapitalVault onChanged={refreshCapital} />
                     </div>
                   </div>
 
