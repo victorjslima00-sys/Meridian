@@ -1152,8 +1152,18 @@ def get_equity_snapshots_route():
 
 @app.get("/api/portfolio")
 def api_get_portfolio():
-    from .data.database import get_portfolio
-    return get_portfolio()
+    from .data.database import get_portfolio, compute_current_equity
+
+    pf = get_portfolio()
+    # Mesma fórmula de /api/positions (Track A, achado em revisão externa
+    # do PR #10): patrimonio_total aqui tinha significado diferente do
+    # capital.patrimonio_total de /api/positions — mesmo campo, dois
+    # valores. Sem consumidor no frontend hoje, mas era uma armadilha pra
+    # quem um dia conectasse essa rota.
+    patrimonio_reservado = pf.get("patrimonio_total", 0.0)
+    pf["patrimonio_reservado"] = patrimonio_reservado
+    pf["patrimonio_total"] = round(patrimonio_reservado + compute_current_equity(), 4)
+    return pf
 
 @app.get("/api/trades/active")
 def api_get_active_trades():

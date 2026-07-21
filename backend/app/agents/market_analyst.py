@@ -2,7 +2,9 @@ import pandas as pd
 from typing import Dict, Any
 import json
 import logging
+from pydantic import ValidationError
 from ..data.feed import fetch_recent_data
+from .schemas import AnalystDecision
 from trading_bot.core.llm_client import ResilientLLMClient
 
 logger = logging.getLogger(__name__)
@@ -88,14 +90,25 @@ class MarketAnalyst:
                     .strip()
                 )
                 parsed = json.loads(content)
-                signal = str(parsed.get("signal", "HOLD")).upper()
-                if signal not in {"BUY", "SELL", "HOLD"}:
-                    signal = "HOLD"
-                confidence = max(0, min(100, int(parsed.get("confidence", 0))))
-                target_price = float(parsed.get("target_price", 0.0))
-                stop_loss = float(parsed.get("stop_loss", 0.0))
-                reason = str(parsed.get("reason", f"Gemini analyzed. Trend: {trend}"))
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                # AnalystDecision valida sinal/faixa de confidence/invariante de
+                # preço (stop < atual < alvo em BUY, invertido em SELL) e o
+                # limite de distância — CLAUDE.md: "toda resposta de LLM ...
+                # validada com Pydantic e invariantes semânticas". current_price
+                # não vem do LLM, é o preço real já conhecido (last_close).
+                decisao = AnalystDecision(
+                    signal=str(parsed.get("signal", "HOLD")).upper(),
+                    confidence=int(parsed.get("confidence", 0)),
+                    target_price=float(parsed.get("target_price", 0.0)),
+                    stop_loss=float(parsed.get("stop_loss", 0.0)),
+                    reason=str(parsed.get("reason", f"Gemini analyzed. Trend: {trend}")),
+                    current_price=float(last_close),
+                )
+                signal = decisao.signal
+                confidence = decisao.confidence
+                target_price = decisao.target_price
+                stop_loss = decisao.stop_loss
+                reason = decisao.reason
+            except (TypeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
                 logger.warning(
                     "Resposta LLM inválida para %s: %s. Entrada bloqueada.",
                     self.ticker,
@@ -105,7 +118,7 @@ class MarketAnalyst:
                 confidence = 0
                 target_price = 0.0
                 stop_loss = 0.0
-                reason = "Resposta da IA inválida — entrada bloqueada (fail-closed)."
+                reason = f"Resposta da IA inválida — entrada bloqueada (fail-closed): {exc}"
 
         return {
             "signal": signal,
