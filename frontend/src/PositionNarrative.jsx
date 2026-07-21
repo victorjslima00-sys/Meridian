@@ -136,14 +136,21 @@ const PositionNarrativeCard = ({ pos, onClick, onClose }) => {
   );
 };
 
-const PositionNarrative = ({ positions, onSelectTrade, onClosePosition }) => {
+const PositionNarrative = ({ positions, onSelectTrade, onClosePosition, lastUpdatedLabel }) => {
   const ativas = positions?.active_positions || [];
 
   return (
     <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <div>
-        <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Suas Posições</h3>
-        <span className="muted-tag">O que está aberto agora, explicado — clique numa posição pra ver o dossiê completo</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem' }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Suas Posições</h3>
+          <span className="muted-tag">O que está aberto agora, explicado — clique numa posição pra ver o dossiê completo</span>
+        </div>
+        {lastUpdatedLabel && (
+          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+            atualizado {lastUpdatedLabel}
+          </span>
+        )}
       </div>
 
       {ativas.length === 0 ? (

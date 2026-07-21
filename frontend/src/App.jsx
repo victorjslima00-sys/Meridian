@@ -102,6 +102,16 @@ const timeAgo = (isoString) => {
   return `há ${h}h${m % 60 ? ` ${m % 60}min` : ''}`;
 };
 
+// Track B, 3c: mesmo padrão do SystemHealthPanel, estendido para todo
+// bloco alimentado pelo polling de 5s -- sem isso, um poll que trava ou
+// falha silenciosamente (ex.: /elite/risk_metrics com .catch mudo) não
+// dava nenhum sinal visual de que o dado na tela podia estar velho.
+const FreshnessTag = ({ ts }) => (
+  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', fontWeight: 400, whiteSpace: 'nowrap' }}>
+    atualizado {timeAgo(ts)}
+  </span>
+);
+
 const HealthRow = ({ label, value, warn }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.78rem', gap: '1rem' }}>
     <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -158,7 +168,7 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
 );
 
 // ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
-const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
+const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
   // Dados para Gráfico de Pizza (Alocação)
   const allocData = [
     { name: 'Caixa Livre', value: saldoLivre, color: '#10b981' }
@@ -203,7 +213,10 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, paddingBottom: '1rem' }}>
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
+            <FreshnessTag ts={lastUpdated} />
+          </div>
           <div style={{ flex: 1, minHeight: '250px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -229,7 +242,10 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
         </div>
 
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
+            <FreshnessTag ts={lastUpdated} />
+          </div>
           <div style={{ flex: 1, minHeight: '250px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={pnlData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
@@ -329,6 +345,12 @@ export default function App() {
 
   const [livePnlHistory, setLivePnlHistory] = useState([]);
 
+  // Track B, 3c: frescor real do polling de 5s. lastRiskMetricsAt é
+  // separado de lastPolledAt porque /elite/risk_metrics tem um .catch
+  // próprio (silencioso) -- pode ficar velho independente do resto.
+  const [lastPolledAt, setLastPolledAt] = useState(null);
+  const [lastRiskMetricsAt, setLastRiskMetricsAt] = useState(null);
+
   // Settings State
   const [brokerSettings, setBrokerSettings] = useState({ mode: 'paper', has_cedro_key: false });
 
@@ -380,6 +402,7 @@ export default function App() {
         ]);
         setStatus(s.data);
         setPositions(p.data);
+        setLastPolledAt(new Date().toISOString());
         setSelectedTrade(prev => {
           if (!prev) return prev;
           // Sync with the latest fetched positions
@@ -399,7 +422,7 @@ export default function App() {
           });
         }
 
-        if (rm.data) setRiskMetrics(rm.data);
+        if (rm.data) { setRiskMetrics(rm.data); setLastRiskMetricsAt(new Date().toISOString()); }
 
         setConnected(true); setApiError(null);
       } catch (err) {
@@ -554,6 +577,9 @@ export default function App() {
           <>
           {tab === 'overview' && (
             <div className="overview-layout">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
+                <FreshnessTag ts={lastPolledAt} />
+              </div>
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
                 <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Reservado + gerido pelo bot (ao vivo)" />
@@ -578,7 +604,7 @@ export default function App() {
                       resto do dashboard (alocado/current_price/pnl_monetario
                       vêm prontos da API), só formatado como texto em vez
                       de tabela. */}
-                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} />
+                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} lastUpdatedLabel={timeAgo(lastPolledAt)} />
 
                   {/* ÁREA GRÁFICA / VISÃO GLOBAL */}
                   {/* selectedTrade nunca chega aqui: quando setado, o
@@ -588,7 +614,7 @@ export default function App() {
                       símbolo BINANCE: (Binance, cripto) pra um ticker B3,
                       inalcançável e errado, removido. */}
                   <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
-                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} />
+                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} lastUpdated={lastPolledAt} />
                   </div>
 
                 </div>
@@ -637,6 +663,7 @@ export default function App() {
                   <div className="glass-panel" style={{ flexShrink: 0 }}>
                     <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
                       <h3>Matriz de Risco</h3>
+                      <FreshnessTag ts={lastRiskMetricsAt} />
                     </div>
                     <div style={{ padding: '0.5rem' }}>
                       <RiskMetricsPanel metrics={riskMetrics} />
@@ -726,7 +753,7 @@ export default function App() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
                 <div className="glass-panel" style={{ gridColumn: 'span 2' }}>
-                  <div className="panel-header"><h3>Métricas de Risco</h3></div>
+                  <div className="panel-header"><h3>Métricas de Risco</h3><FreshnessTag ts={lastRiskMetricsAt} /></div>
                   <div style={{ padding: '1rem' }}>
                     <RiskMetricsPanel metrics={riskMetrics} />
                   </div>
@@ -803,9 +830,12 @@ export default function App() {
               )}
 
               <div className="glass-panel" style={{ padding: '1.25rem' }}>
-                <div style={{ marginBottom: '1rem' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
-                  <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1rem' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
+                    <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
+                  </div>
+                  <FreshnessTag ts={lastPolledAt} />
                 </div>
                 <ClosedPositionsNarrative positions={positions} onSelectTrade={setSelectedTrade} />
               </div>
