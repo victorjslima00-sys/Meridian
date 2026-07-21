@@ -251,7 +251,7 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
               <BarChart data={pnlData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis dataKey="ticker" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val}`} tickLine={false} axisLine={false} />
+                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val.toFixed(2)}`} tickLine={false} axisLine={false} />
                 <Tooltip cursor={{ fill: 'rgba(255,255,255,0.03)' }} content={<CustomTooltip />} />
                 <Bar dataKey="pnl" radius={[4, 4, 0, 0]} maxBarSize={60}>
                   {pnlData.map((entry, index) => (
