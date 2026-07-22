@@ -606,7 +606,12 @@ async def _run_one_scan_cycle():
                 "warning",
             )
             pf = get_portfolio()
-            saldo_livre = pf.get("saldo_livre", 0.0)
+            # usabilidade 2e: o sizing dimensiona sobre o capital OPERÁVEL
+            # (teto de exposição definido pelo usuário, quando houver), não
+            # sobre o livre bruto — ordem já nasce dentro da margem. O
+            # executor ainda re-checa o teto dentro da transação (defesa em
+            # profundidade contra corrida entre duas entradas).
+            saldo_operavel = pf.get("saldo_operavel", pf.get("saldo_livre", 0.0))
 
             # Buscar todos os tickers com posição ativa para checar correlação
             from .data.database import get_connection
@@ -621,7 +626,7 @@ async def _run_one_scan_cycle():
             finally:
                 _conn.close()
 
-            rm = RiskManager(saldo_livre=saldo_livre)
+            rm = RiskManager(saldo_livre=saldo_operavel)
             decision = rm.evaluate_trade(
                 analysis, ticker=ticker, open_tickers=open_tickers
             )
@@ -876,6 +881,10 @@ def get_positions_route():
             "saldo_disponivel": pf.get("saldo_disponivel", 100.0),
             "em_posicoes": pf.get("em_posicoes", 0.0),
             "saldo_livre": pf.get("saldo_livre", 100.0),
+            # usabilidade 2e: teto de exposição do bot (None = sem teto) e
+            # o operável derivado — calculados SÓ em get_portfolio().
+            "margem_operavel": pf.get("margem_operavel"),
+            "saldo_operavel": pf.get("saldo_operavel", pf.get("saldo_livre", 100.0)),
         },
         "active_positions": active_positions,
         "closed_positions": closed_positions,
@@ -949,10 +958,16 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
     # Validation logic (mocked logic through ExecutorAgent or direct)
     pf = get_portfolio()
     cost = current_price * req.quantity
-    if req.side == "BUY" and cost > pf.get("saldo_livre", 0):
+    # usabilidade 2e: ordem manual respeita o mesmo capital OPERÁVEL do
+    # laço automático (teto de margem incluído) — o executor re-checa o
+    # teto dentro da transação de qualquer forma.
+    if req.side == "BUY" and cost > pf.get("saldo_operavel", pf.get("saldo_livre", 0)):
         raise HTTPException(
             status_code=400,
-            detail=f"Saldo livre insuficiente. Necessário: R$ {cost:.2f}",
+            detail=(
+                f"Capital operável insuficiente. Necessário: R$ {cost:.2f}, "
+                f"operável: R$ {pf.get('saldo_operavel', 0):.2f}"
+            ),
         )
 
     # Simple execution via ExecutorAgent
@@ -1002,6 +1017,19 @@ def api_depositar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
 @app.post("/api/portfolio/retirar")
 def api_retirar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
     res = retirar_do_disponivel(req.valor)
+    if not res["ok"]:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/portfolio/margem_operavel")
+def api_set_margem_operavel(req: ValorRequest, api_key: str = Depends(verify_api_key)):
+    """usabilidade 2e: define o teto de exposição do bot. Validação
+    (não-negativa, ≤ saldo_disponivel) mora em set_margem_operavel —
+    fonte única, mesma usada pelos testes."""
+    from .data.database import set_margem_operavel
+
+    res = set_margem_operavel(req.valor)
     if not res["ok"]:
         raise HTTPException(status_code=400, detail=res["error"])
     return res

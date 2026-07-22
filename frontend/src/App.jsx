@@ -499,7 +499,11 @@ export default function App() {
                 <KpiCard title="Reservado" icon={Lock} color="#8b9bb4" value={`R$ ${patReservado.toFixed(2)}`} sub="Fora do alcance do bot" />
                 <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={`R$ ${saldoDisponivel.toFixed(2)}`} sub="Entregue ao bot, antes de posições" />
                 <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={`R$ ${emPosicoes.toFixed(2)}`} sub="Alocado no preço de entrada" />
-                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Margem livre p/ operar" />
+                {/* 2e: sub-rótulo corrigido — com margem operável definida,
+                    o que o bot pode usar é saldo_operavel (Gestão de
+                    Capital), não o livre bruto; "Margem livre p/ operar"
+                    viraria mentira. */}
+                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Não alocado em posições" />
                 <KpiCard
                   title="PnL Flutuante (MTM)"
                   icon={Activity}
@@ -548,7 +552,7 @@ export default function App() {
                       <h3>Gestão de Capital</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <CapitalVault onChanged={refreshCapital} />
+                      <CapitalVault capital={cap} onChanged={refreshCapital} />
                     </div>
                   </div>
 
