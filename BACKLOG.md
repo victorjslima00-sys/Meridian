@@ -2,6 +2,33 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## Multi-mercado (encaixe pronto na Fase 1, Commit 1)
+
+- **O que falta para plugar um MERCADO NOVO (ex.: cripto).** A camada
+  `backend/app/markets/` já define os protocolos `Market` e `Broker` e traz
+  `B3Market` + `PaperBroker`. Adicionar cripto = criar uma implementação de
+  `Market` e registrá-la em `markets/__init__.py::get_market`. O que essa
+  implementação precisa resolver, que a B3 resolve de um jeito e cripto de
+  outro:
+  1. **Feed próprio** — a B3 usa yfinance com sufixo `.SA`; cripto usa par
+     (BTC-USD) e provavelmente outra fonte (exchange/API), com outra
+     granularidade e outro rate limit.
+  2. **Calendário 24/7** — `is_open()` na B3 é dia útil + 10:00-17:30; em
+     cripto é sempre aberto, e o conceito de "dia de pregão" (usado no
+     snapshot diário de equity) precisa de uma convenção explícita (UTC?
+     fuso do usuário?).
+  3. **Corretora** — `PaperBroker` serve para simular qualquer mercado, mas
+     uma corretora real de cripto tem taxa, precisão decimal e mínimo de
+     ordem próprios; entra como outra implementação de `Broker`.
+  4. **Sem lote/fracionário** — cripto não tem lote padrão nem mercado
+     fracionário separado, o que remove a fragmentação de custo que a B3 tem
+     (ver item de custo de fracionário abaixo).
+  5. **Feriados** — `B3Market.is_open()` NÃO considera feriados da B3 (exigiria
+     calendário externo). Um mercado novo precisa decidir o equivalente.
+  - Nota: `is_open()` existe mas **não está ligado ao laço de trading** — ligá-la
+    mudaria comportamento (hoje o bot opera fora do pregão). É uma decisão
+    explícita pendente, não um esquecimento.
+
 ## Alta prioridade
 
 - **ROI Global removido do dashboard (Track B, 2026-07-21) — precisa de

@@ -107,7 +107,6 @@ from .data.database import (
     depositar_no_disponivel,
     retirar_do_disponivel,
     DB_PATH,
-    hoje_b3,
     has_snapshot_for,
     compute_current_equity,
     save_equity_snapshot,
@@ -284,11 +283,17 @@ async def _run_exit_scan() -> bool:
 
     all_trustworthy = True
 
-    for ticker in active_tickers:
-        from .data.feed import fetch_recent_data
+    # Fase 1 Commit 1: o dado de mercado do caminho MAIS quente (proteção de
+    # stop, a cada ~5s) passa a vir pela abstração de Mercado, não do
+    # yfinance direto. A B3Market delega para feed.fetch_recent_data com os
+    # mesmos argumentos — comportamento idêntico, inclusive o cache e o TTL.
+    from .markets import get_market
 
+    market = get_market()
+
+    for ticker in active_tickers:
         df_recent = await asyncio.to_thread(
-            fetch_recent_data, ticker, period="1d", interval="15m",
+            market.fetch_ohlcv, ticker, period="1d", interval="15m",
             ttl=worker_state.exit_price_cache_ttl_seconds(),
         )
         if df_recent is None or len(df_recent) == 0:
@@ -513,9 +518,14 @@ async def _run_one_scan_cycle():
     except Exception:
         tickers_to_watch = ["PETR4.SA", "VALE3.SA"]
 
-    # Snapshot diário de equity (data do pregão B3) — base do circuit breaker
+    # Snapshot diário de equity (data do pregão) — base do circuit breaker.
+    # Fase 1 Commit 1: a data vem do CALENDÁRIO DO MERCADO, não de um
+    # helper fixo da B3 — num mercado 24/7 (cripto) o conceito de "dia de
+    # pregão" é outro, e é a implementação de Market que decide.
     try:
-        hoje = hoje_b3()
+        from .markets import get_market
+
+        hoje = get_market().today()
         if not has_snapshot_for(hoje):
             equity = await asyncio.to_thread(compute_current_equity)
             save_equity_snapshot(hoje, equity)
