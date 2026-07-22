@@ -1150,6 +1150,15 @@ def get_equity_snapshots_route():
     return {"snapshots": get_equity_snapshots()}
 
 
+@app.get("/api/broker/status")
+def get_broker_status_route():
+    """Track B, Commit 1: só confirma presença de CEDRO_API_KEY no
+    ambiente -- nunca o valor. Substitui o has_cedro_key hardcoded em
+    false que existia só no frontend (App.jsx), sem nenhum consumidor
+    real no backend."""
+    return {"has_cedro_key": bool(os.environ.get("CEDRO_API_KEY"))}
+
+
 @app.get("/api/portfolio")
 def api_get_portfolio():
     from .data.database import get_portfolio, compute_current_equity

@@ -5,15 +5,15 @@ import api from './api';
 // no backend (POST /api/portfolio/depositar, /retirar) sem NENHUMA UI
 // que os chamasse. É exatamente o controle que faltava: quanto capital
 // fica exposto ao bot vs. reservado fora do alcance dele.
-const formatMoeda = (v) => `R$ ${(v ?? 0).toFixed(2)}`;
-
-const CapitalVault = ({ capital, onChanged }) => {
+//
+// Track B, 3a: os valores de "Reservado" e "Caixa Livre" já aparecem nos
+// KPIs do topo do dashboard (mesma fonte, capital.patrimonio_reservado/
+// saldo_livre) -- repeti-los aqui era a duplicação que o diagnóstico
+// apontou. Este painel passa a mostrar só a ação (depositar/retirar).
+const CapitalVault = ({ onChanged }) => {
   const [valor, setValor] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState(null);
-
-  const reservado = capital?.patrimonio_reservado ?? 0;
-  const livreNoBot = capital?.saldo_livre ?? 0;
 
   const executar = async (acao) => {
     const v = parseFloat(valor);
@@ -43,15 +43,6 @@ const CapitalVault = ({ capital, onChanged }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
-        <span style={{ color: 'var(--text-muted)' }}>Reservado (fora do bot)</span>
-        <strong className="mono">{formatMoeda(reservado)}</strong>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
-        <span style={{ color: 'var(--text-muted)' }}>Livre no bot</span>
-        <strong className="mono">{formatMoeda(livreNoBot)}</strong>
-      </div>
-
       <input
         type="number"
         value={valor}
