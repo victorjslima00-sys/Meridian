@@ -722,23 +722,17 @@ export default function App() {
                       <h3>Boleta Rápida (Scalper)</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <FastExecutionWidget 
-                        trade={selectedTrade} 
-                        saldoLivre={saldoLivre} 
-                        onExecute={handleExecuteTrade} 
+                      <FastExecutionWidget
+                        trade={selectedTrade}
+                        onExecute={handleExecuteTrade}
                       />
                     </div>
                   </div>
 
-                  <div className="glass-panel" style={{ flexShrink: 0 }}>
-                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
-                      <h3>Matriz de Risco</h3>
-                      <FreshnessTag ts={lastRiskMetricsAt} />
-                    </div>
-                    <div style={{ padding: '0.5rem' }}>
-                      <RiskMetricsPanel metrics={riskMetrics} />
-                    </div>
-                  </div>
+                  {/* usabilidade 2b: "Matriz de Risco" saiu daqui — era o
+                      painel de "Métricas de Risco" da aba Risk duplicado
+                      na íntegra (mesmo endpoint, mesmos 8 números). Um
+                      fato, um lugar: a aba Risk é o lugar. */}
                 </div>
               </div>
             </div>
