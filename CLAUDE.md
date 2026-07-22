@@ -16,3 +16,54 @@
   implementação.
 - No frontend, tudo que parece dado É dado vindo da API, ou não existe.
   Nenhum placeholder que imite métrica real.
+
+## Padrões de qualidade e revisão
+
+### Backend / risco
+
+- Uma fonte de verdade: toda função que outros pontos do sistema também
+  precisam (equity, validação de decisão) é escrita UMA vez e reusada, nunca
+  reimplementada em paralelo.
+- Fail-closed por padrão: dado não confiável, resposta malformada ou
+  inválida = não age, loga, alerta — nunca "ação segura" inventada.
+- TDD com RED provado: todo fix mostra o teste falhando ANTES da correção,
+  não só o GREEN depois. Verificação por mutação nos casos que guardam
+  invariante de segurança/autorização.
+- Testes de concorrência usam sincronização real (Barrier/Event) para forçar
+  sobreposição, nunca dependem de timing por acaso.
+- Nunca usar número/limite inventado quando já existe um equivalente
+  configurado no sistema — derivar dali, não duplicar.
+- Endpoints que expõem "está configurado?" (chaves, credenciais) retornam só
+  booleano — auditar todo branch de erro/exceção para garantir que o valor
+  em si nunca vaza, nem parcial, nem embutido em mensagem.
+
+### Frontend
+
+- "Tudo que parece dado É dado vindo da API, ou não existe." Nenhum
+  placeholder, mock ou número fixo que imite métrica real — vale tanto para
+  dado obviamente fake quanto para fórmula com bug que PARECE real (o caso
+  mais perigoso, porque passa despercebido).
+- Cada fato aparece em UM lugar só na tela.
+- Todo card com dado ao vivo tem polling real E indicador de frescor visível
+  (timestamp da última atualização) — nunca "atualizado" silenciosamente
+  mentiroso.
+- Reconciliação matemática entre campos relacionados é verificada com DADOS
+  REAIS do backend rodando, não com a leitura do código.
+- Conexões ao vivo (WebSocket etc.) precisam de teste AO VIVO — matar e
+  reiniciar o serviço de verdade, observar o indicador cair e reconectar
+  sozinho — não só revisão de código. Bug de reconexão do PR #13 só foi
+  achado assim.
+- Zero cálculo de risco ou lógica de negócio no navegador.
+
+### Processo
+
+- Inventário periódico do frontend/superfícies novas — uma limpeza de
+  honestidade anterior NÃO garante que uma aba/componente adicionado depois
+  segue as mesmas regras. Rodar o checklist acima a cada PR que toca UI.
+- Mudança de risco financeiro e mudança de UI nunca no mesmo PR/branch —
+  permite revisar e reverter cada um independentemente.
+- Antes de criar qualquer branch nova ou revisar/mergear qualquer PR,
+  confirme `git log origin/main -1` bate com o que você espera — não confie
+  no rótulo "MERGED" do GitHub sem checar CONTRA QUAL branch. Este projeto já
+  teve três incidentes desta classe (PR #4, #11, #12), sempre pelo mesmo
+  motivo.
