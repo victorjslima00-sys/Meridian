@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { RiskMetricsPanel, PositionSizingCalc, FastExecutionWidget } from './EliteCharts';
 import { PortfolioChart as SimplePortfolio } from './Charts';
+import { timeAgo, FreshnessTag } from './Freshness';
 import './index.css';
 
 class ErrorBoundary extends React.Component {
@@ -90,28 +91,6 @@ const EXECUTION_MODE_LABELS = {
   full_auto: 'Totalmente automático',
 };
 
-const timeAgo = (isoString) => {
-  if (!isoString) return 'nunca';
-  const diffMs = Date.now() - new Date(isoString).getTime();
-  if (diffMs < 0) return 'agora';
-  const s = Math.floor(diffMs / 1000);
-  if (s < 60) return `há ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `há ${m}min`;
-  const h = Math.floor(m / 60);
-  return `há ${h}h${m % 60 ? ` ${m % 60}min` : ''}`;
-};
-
-// Track B, 3c: mesmo padrão do SystemHealthPanel, estendido para todo
-// bloco alimentado pelo polling de 5s -- sem isso, um poll que trava ou
-// falha silenciosamente (ex.: /elite/risk_metrics com .catch mudo) não
-// dava nenhum sinal visual de que o dado na tela podia estar velho.
-const FreshnessTag = ({ ts }) => (
-  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', fontWeight: 400, whiteSpace: 'nowrap' }}>
-    atualizado {timeAgo(ts)}
-  </span>
-);
-
 const HealthRow = ({ label, value, warn }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.78rem', gap: '1rem' }}>
     <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -168,7 +147,7 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
 );
 
 // ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
-const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
+const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated, refreshing }) => {
   // Dados para Gráfico de Pizza (Alocação)
   const allocData = [
     { name: 'Caixa Livre', value: saldoLivre, color: '#10b981' }
@@ -215,7 +194,7 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
             <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
-            <FreshnessTag ts={lastUpdated} />
+            <FreshnessTag ts={lastUpdated} refreshing={refreshing} />
           </div>
           <div style={{ flex: 1, minHeight: '250px' }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -244,7 +223,7 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
             <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
-            <FreshnessTag ts={lastUpdated} />
+            <FreshnessTag ts={lastUpdated} refreshing={refreshing} />
           </div>
           <div style={{ flex: 1, minHeight: '250px' }}>
             <ResponsiveContainer width="100%" height="100%">
@@ -350,6 +329,8 @@ export default function App() {
   // próprio (silencioso) -- pode ficar velho independente do resto.
   const [lastPolledAt, setLastPolledAt] = useState(null);
   const [lastRiskMetricsAt, setLastRiskMetricsAt] = useState(null);
+  // 2a: true só durante o catch-up de retorno de aba oculta com dado velho.
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Settings State
   const [brokerSettings, setBrokerSettings] = useState({ mode: 'paper', has_cedro_key: false });
@@ -450,7 +431,19 @@ export default function App() {
   }, []);
 
   // Main Data fetch — só rotas que existem de verdade no backend.
+  //
+  // Usabilidade 2a (números congelados): o navegador estrangula
+  // setInterval em página oculta/ocluída para ~1 disparo/min — flagrado
+  // ao vivo no diagnóstico (tela "há 56s" com 2 posições enquanto a API
+  // respondia 4 no mesmo instante, e os polls represados chegando em
+  // rajada coalescida ao acordar). Nada disso é consertável do lado do
+  // timer; o conserto é reagir ao RETORNO: visibilitychange/focus
+  // disparam load() na hora, e se o dado estiver velho (>2 ciclos) o
+  // FreshnessTag mostra "atualizando..." até a resposta chegar, para o
+  // usuário VER que o sistema percebeu a volta.
   useEffect(() => {
+    let lastSuccessAtMs = 0;
+
     const load = async () => {
       try {
         const [s, p, rm] = await Promise.all([
@@ -460,6 +453,7 @@ export default function App() {
         ]);
         setStatus(s.data);
         setPositions(p.data);
+        lastSuccessAtMs = Date.now();
         setLastPolledAt(new Date().toISOString());
         setSelectedTrade(prev => {
           if (!prev) return prev;
@@ -485,11 +479,29 @@ export default function App() {
         setConnected(true); setApiError(null);
       } catch (err) {
         setApiError(err.message); setConnected(false);
+      } finally {
+        setIsRefreshing(false);
       }
     };
+
+    const onReturn = () => {
+      if (document.visibilityState !== 'visible') return;
+      // Dado velho = mais de 2 ciclos de poll sem sucesso. O rótulo
+      // "atualizando..." só aparece nesse caso — num foco corriqueiro com
+      // dado fresco, trocar o rótulo seria ruído.
+      if (Date.now() - lastSuccessAtMs > 10000) setIsRefreshing(true);
+      load();
+    };
+
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener('focus', onReturn);
     load();
     const iv = setInterval(load, 5000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onReturn);
+      window.removeEventListener('focus', onReturn);
+    };
   }, []);
 
   const refreshCapital = async () => {
@@ -636,7 +648,7 @@ export default function App() {
           {tab === 'overview' && (
             <div className="overview-layout">
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
-                <FreshnessTag ts={lastPolledAt} />
+                <FreshnessTag ts={lastPolledAt} refreshing={isRefreshing} />
               </div>
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
@@ -662,7 +674,7 @@ export default function App() {
                       resto do dashboard (alocado/current_price/pnl_monetario
                       vêm prontos da API), só formatado como texto em vez
                       de tabela. */}
-                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} lastUpdatedLabel={timeAgo(lastPolledAt)} />
+                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} lastUpdated={lastPolledAt} refreshing={isRefreshing} />
 
                   {/* ÁREA GRÁFICA / VISÃO GLOBAL */}
                   {/* selectedTrade nunca chega aqui: quando setado, o
@@ -672,7 +684,7 @@ export default function App() {
                       símbolo BINANCE: (Binance, cripto) pra um ticker B3,
                       inalcançável e errado, removido. */}
                   <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
-                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} lastUpdated={lastPolledAt} />
+                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} lastUpdated={lastPolledAt} refreshing={isRefreshing} />
                   </div>
 
                 </div>
@@ -893,7 +905,7 @@ export default function App() {
                     <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
                     <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
                   </div>
-                  <FreshnessTag ts={lastPolledAt} />
+                  <FreshnessTag ts={lastPolledAt} refreshing={isRefreshing} />
                 </div>
                 <ClosedPositionsNarrative positions={positions} onSelectTrade={setSelectedTrade} />
               </div>
