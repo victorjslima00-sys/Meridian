@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from './api';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 import ActiveTradeDetails from './ActiveTradeDetails';
 import PositionNarrative, { ClosedPositionsNarrative } from './PositionNarrative';
 import CapitalVault from './CapitalVault';
@@ -146,168 +145,21 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
   </div>
 );
 
-// ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
-const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated, refreshing }) => {
-  // Dados para Gráfico de Pizza (Alocação)
-  const allocData = [
-    { name: 'Caixa Livre', value: saldoLivre, color: '#10b981' }
-  ];
-  
-  if (positions?.active_positions) {
-    positions.active_positions.forEach(p => {
-      allocData.push({
-        name: p.ticker,
-        value: p.alocado, // vem pronto da API (honest-dashboard Bloco 2)
-        color: p.side === 'BUY' ? '#3b82f6' : '#f59e0b'
-      });
-    });
-  }
-
-  // Dados para Gráfico de Barras (PnL por Ativo) — pnl_monetario vem
-  // pronto da API, não recalculado aqui.
-  const pnlData = positions?.active_positions ? positions.active_positions.map(p => ({
-    ticker: p.ticker,
-    pnl: p.pnl_monetario,
-    color: p.pnl_pct >= 0 ? '#10b981' : '#f43f5e'
-  })) : [];
-
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: 'rgba(17,24,39,0.9)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.5rem 1rem', borderRadius: '8px', backdropFilter: 'blur(4px)' }}>
-          <p style={{ margin: 0, color: '#fff', fontWeight: 600 }}>{payload[0].name || payload[0].payload.ticker}</p>
-          <p style={{ margin: 0, color: payload[0].payload.color, fontWeight: 700 }}>R$ {payload[0].value.toFixed(2)}</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', overflow: 'hidden' }}>
-      <div className="glass-panel" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.01)' }}>
-        <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Curva de Patrimônio</h3>
-        <SimplePortfolio />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, paddingBottom: '1rem' }}>
-        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
-            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
-            <FreshnessTag ts={lastUpdated} refreshing={refreshing} />
-          </div>
-          <div style={{ flex: 1, minHeight: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={allocData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={80}
-                  outerRadius={105}
-                  paddingAngle={5}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  {allocData.map((entry, index) => (
-                    <Cell key={`cell-${entry.name || entry.ticker || index}`} fill={entry.color} style={{ filter: `drop-shadow(0px 0px 8px ${entry.color}40)` }} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-                <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '0.85rem' }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
-            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
-            <FreshnessTag ts={lastUpdated} refreshing={refreshing} />
-          </div>
-          <div style={{ flex: 1, minHeight: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={pnlData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="ticker" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val.toFixed(2)}`} tickLine={false} axisLine={false} />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.03)' }} content={<CustomTooltip />} />
-                <Bar dataKey="pnl" radius={[4, 4, 0, 0]} maxBarSize={60}>
-                  {pnlData.map((entry, index) => (
-                    <Cell key={`cell-${entry.name || entry.ticker || index}`} fill={entry.color} style={{ filter: `drop-shadow(0px -2px 6px ${entry.color}40)` }} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ─── Live PnL Chart ────────────────────────────────────────────────────────
-const LivePnlChart = React.memo(({ history }) => {
-  if (!history || history.length === 0) return (
-    <div className="glass-panel" style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-      Aguardando coleta de dados (Ao Vivo)...
-    </div>
-  );
-
-  const currentPnl = history[history.length - 1].pnl;
-  const isGain = currentPnl >= 0;
-
-  return (
-    <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>Evolução MTM (Intraday)</h3>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Soma do PnL Aberto em Tempo Real</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isGain ? '#10b981' : '#f43f5e', boxShadow: `0 0 8px ${isGain ? '#10b981' : '#f43f5e'}`, animation: 'pulsePill 1.5s infinite' }}></div>
-          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e', fontWeight: 800 }}>
-            {isGain ? '+' : '-'}R$ {Math.abs(currentPnl).toFixed(2)}
-          </span>
-        </div>
-      </div>
-      <div style={{ width: '100%', height: '220px' }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={history} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
-            <defs>
-              <linearGradient id="colorPnlGain" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-              </linearGradient>
-              <linearGradient id="colorPnlLoss" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-            <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={8} minTickGap={20} />
-            <YAxis stroke="#475569" fontSize={10} tickFormatter={(val) => `R$ ${val.toFixed(0)}`} domain={['auto', 'auto']} />
-            <Tooltip
-              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '4px', fontSize: '0.8rem' }}
-              itemStyle={{ color: '#fff', fontWeight: 600 }}
-              formatter={(value) => [`R$ ${value.toFixed(2)}`, 'PnL']}
-              labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
-            />
-            <Area 
-              type="monotone" 
-              dataKey="pnl" 
-              stroke={isGain ? '#10b981' : '#f43f5e'} 
-              strokeWidth={2}
-              fillOpacity={1} 
-              fill={isGain ? "url(#colorPnlGain)" : "url(#colorPnlLoss)"} 
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-});
+// ─── Curva de Patrimônio (Visão Global) ──────────────────────────────────
+// usabilidade 2c: dos 4 gráficos da tela inicial sobrou só este — o único
+// com valor real de decisão (histórico verdadeiro de equity, 1 snapshot/dia
+// de pregão, direto de /api/equity_snapshots). Removidos: "Alocação de
+// Capital" (pizza — repetia os cards e o KPI), "PnL MTM por Ativo" (barras
+// — cada card de posição já mostra o mesmo pnl_monetario) e "Evolução MTM
+// (Intraday)" (série acumulada client-side que zerava a cada reload,
+// janela de 5min, cheia de buracos com a aba oculta, e cujo header
+// duplicava o KPI "PnL Flutuante").
+const PortfolioOverviewDashboard = () => (
+  <div className="glass-panel" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.01)' }}>
+    <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Curva de Patrimônio</h3>
+    <SimplePortfolio />
+  </div>
+);
 
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
@@ -322,7 +174,6 @@ export default function App() {
   // (as demais nunca existiram no backend, ver honest-dashboard Bloco 4).
   const [riskMetrics, setRiskMetrics] = useState(null);
 
-  const [livePnlHistory, setLivePnlHistory] = useState([]);
 
   // Track B, 3c: frescor real do polling de 5s. lastRiskMetricsAt é
   // separado de lastPolledAt porque /elite/risk_metrics tem um .catch
@@ -462,18 +313,6 @@ export default function App() {
           return updated ? { ...prev, ...updated } : prev;
         });
 
-        // Update Live PnL History — pnl_monetario vem pronto por posição
-        // da API (honest-dashboard Bloco 2), só somamos aqui.
-        if (p.data?.active_positions) {
-          const totalPnl = p.data.active_positions.reduce((sum, pos) => sum + (pos.pnl_monetario || 0), 0);
-          setLivePnlHistory(prev => {
-            const now = new Date();
-            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-            const newHist = [...prev, { time: timeStr, pnl: totalPnl }];
-            return newHist.slice(-60); // Keep last 60 ticks (5 mins)
-          });
-        }
-
         if (rm.data) { setRiskMetrics(rm.data); setLastRiskMetricsAt(new Date().toISOString()); }
 
         setConnected(true); setApiError(null);
@@ -567,6 +406,10 @@ export default function App() {
   const saldoLivre = cap.saldo_livre || 0;
   const saldoDisponivel = cap.saldo_disponivel || 0;
   const emPosicoes = cap.em_posicoes || 0;
+  // Soma direta do pnl_monetario que a API entrega por posição (2c:
+  // substitui o array livePnlHistory acumulado client-side, que existia
+  // só para alimentar o gráfico "Evolução MTM" removido).
+  const pnlFlutuante = (positions.active_positions || []).reduce((s, p) => s + (p.pnl_monetario || 0), 0);
 
   return (
     <div className="shell">
@@ -660,8 +503,8 @@ export default function App() {
                 <KpiCard
                   title="PnL Flutuante (MTM)"
                   icon={Activity}
-                  color={livePnlHistory.length > 0 && livePnlHistory[livePnlHistory.length - 1].pnl >= 0 ? '#10b981' : '#f43f5e'}
-                  value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`}
+                  color={pnlFlutuante >= 0 ? '#10b981' : '#f43f5e'}
+                  value={`R$ ${pnlFlutuante.toFixed(2)}`}
                   sub={`Resultado não realizado de ${positions?.active_positions?.length || 0} posições`}
                 />
               </div>
@@ -683,19 +526,12 @@ export default function App() {
                       "modo detalhe" com iframe do TradingView pedindo
                       símbolo BINANCE: (Binance, cripto) pra um ticker B3,
                       inalcançável e errado, removido. */}
-                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
-                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} lastUpdated={lastPolledAt} refreshing={isRefreshing} />
-                  </div>
+                  <PortfolioOverviewDashboard />
 
                 </div>
 
                 {/* COLUNA LATERAL (DIREITA - 25%) */}
                 <div className="pro-side-col">
-                  {/* LIVE PNL CHART */}
-                  {(positions?.active_positions?.length > 0 || livePnlHistory.length > 0) && (
-                    <LivePnlChart history={livePnlHistory} />
-                  )}
-
   {/* SAÚDE DO SISTEMA — detalhe real de /api/status */}
                   <div className="glass-panel" style={{ flexShrink: 0 }}>
                     <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
