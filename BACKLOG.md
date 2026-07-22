@@ -4,6 +4,18 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
 ## Multi-mercado (encaixe pronto na Fase 1, Commit 1)
 
+- **Resolução de mercado para tickers SEM sufixo (cripto).** Hoje
+  `markets/resolve_market()` descobre o mercado pela FORMA do ticker
+  (sufixo `.SA` ou padrão B3 `AAAA9`) — pragmático porque só a B3 existe.
+  Quando cripto entrar, a forma CERTA de estender é **resolução explícita
+  por config** (um mapa ticker→mercado no `settings.yaml`, ou registro por
+  padrão/prefixo), **NÃO** um `if symbol in {"BTC-USD", ...}` hardcodado em
+  `resolve_market`. Hardcodar símbolo é o bug que só aparece quando o
+  segundo mercado chega. `resolve_market` já FALHA (ValueError) em ticker
+  não reconhecido em vez de assumir B3 — o tripwire está posto; o que falta
+  é a fonte de verdade em config para os símbolos de cripto.
+
+
 - **O que falta para plugar um MERCADO NOVO (ex.: cripto).** A camada
   `backend/app/markets/` já define os protocolos `Market` e `Broker` e traz
   `B3Market` + `PaperBroker`. Adicionar cripto = criar uma implementação de

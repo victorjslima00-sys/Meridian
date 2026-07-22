@@ -287,11 +287,25 @@ async def _run_exit_scan() -> bool:
     # stop, a cada ~5s) passa a vir pela abstração de Mercado, não do
     # yfinance direto. A B3Market delega para feed.fetch_recent_data com os
     # mesmos argumentos — comportamento idêntico, inclusive o cache e o TTL.
-    from .markets import get_market
-
-    market = get_market()
+    #
+    # Commit 1b: resolve_market POR TICKER (fail-closed) — um ticker que não
+    # casa nenhum mercado conhecido não vira B3 silenciosamente; é pulado e
+    # a passada é marcada não-efetiva (mesma categoria de "sem avaliação"
+    # que preço não confiável). Isola a falha ao ticker: um símbolo
+    # malformado não pode cegar a proteção de stop de TODAS as posições.
+    from .markets import resolve_market
 
     for ticker in active_tickers:
+        try:
+            market = resolve_market(ticker)
+        except ValueError:
+            logger.error(
+                "Exit scan: ticker %s sem mercado resolvido — pulado "
+                "(fail-closed).", ticker
+            )
+            all_trustworthy = False
+            continue
+
         df_recent = await asyncio.to_thread(
             market.fetch_ohlcv, ticker, period="1d", interval="15m",
             ttl=worker_state.exit_price_cache_ttl_seconds(),

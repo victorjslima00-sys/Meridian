@@ -17,6 +17,8 @@ CLAUDE.md existe para proibir.
 """
 from __future__ import annotations
 
+import re
+
 from .b3 import B3Market
 from .base import Broker, Market
 from .paper_broker import PaperBroker
@@ -40,6 +42,47 @@ def get_market(name: str = "b3") -> Market:
     return _MARKETS[chave]
 
 
+# Forma de ticker da B3: sufixo .SA (após normalização) OU o padrão cru
+# AAAA9/AAAA99 (PETR4, VALE3, SANB11, BBSE3). Cobre o universo B3; NÃO
+# casa cripto (BTC-USD tem hífen e "USD"), índices (^BVSP) nem ETFs
+# estrangeiros (SPY).
+_B3_TICKER = re.compile(r"[A-Z]{4}\d{1,2}$")
+
+
+def resolve_market(symbol: str) -> Market:
+    """Descobre a QUE mercado um ticker TRADEÁVEL pertence.
+
+    ⚠️ ESTRATÉGIA ATUAL — mapeamento por FORMA/sufixo do ticker. É
+    pragmática e deliberada: só a B3 existe hoje, então não vale construir
+    o registry de cripto antes de cripto existir. MAS esta função é o ponto
+    onde o "conserto rápido" errado vai tentar entrar no futuro.
+
+    QUANDO CRIPTO ENTRAR, a forma CERTA de estender é resolução EXPLÍCITA:
+    o mercado de cada ticker declarado em CONFIG (ex.: um mapa
+    ticker→mercado, ou por padrão/prefixo registrado), NUNCA um `if
+    symbol in {"BTC-USD", "ETH-USD"}` hardcoded aqui. Símbolo hardcoded é
+    exatamente o bug que só aparece quando o segundo mercado chega.
+
+    FAIL-CLOSED (condição travada pelo usuário): um ticker que não casa
+    nenhum mercado conhecido levanta ValueError — NUNCA cai em B3 por
+    default. Um ticker de cripto virando silenciosamente ação seria a
+    classe de bug que só se manifesta em produção com dinheiro (mesmo
+    espírito da proibição de defaults inseguros no CLAUDE.md).
+
+    Fora de escopo: símbolos de DADO, não de trade (^BVSP para o filtro
+    macro, câmbio) — não são instrumentos operáveis e não passam por aqui.
+    """
+    s = (symbol or "").strip().upper()
+    if s.endswith(".SA") or _B3_TICKER.fullmatch(s):
+        return get_market("b3")
+    raise ValueError(
+        f"Não foi possível resolver o mercado do ticker {symbol!r}. "
+        "Só a B3 está registrada (tickers .SA ou padrão AAAA9). Um ticker "
+        "sem sufixo (ex.: cripto BTC-USD) exige resolução EXPLÍCITA por "
+        "config — ver BACKLOG.md. NÃO assumir B3 por default."
+    )
+
+
 def get_broker(name: str = "paper") -> Broker:
     chave = (name or "").strip().lower()
     if chave not in ("paper",):
@@ -52,4 +95,12 @@ def get_broker(name: str = "paper") -> Broker:
     return _BROKERS[chave]
 
 
-__all__ = ["Market", "Broker", "get_market", "get_broker", "B3Market", "PaperBroker"]
+__all__ = [
+    "Market",
+    "Broker",
+    "get_market",
+    "get_broker",
+    "resolve_market",
+    "B3Market",
+    "PaperBroker",
+]

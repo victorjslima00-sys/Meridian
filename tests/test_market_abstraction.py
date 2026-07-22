@@ -25,7 +25,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from backend.app.markets import get_broker, get_market
+from backend.app.markets import get_broker, get_market, resolve_market
 from backend.app.markets.base import Broker, Market
 
 
@@ -41,6 +41,36 @@ class TestConformidadeDeProtocolo:
         # não algo para degradar silenciosamente para a B3.
         with pytest.raises(ValueError, match="cripto|desconhecido|unknown"):
             get_market("cripto")
+
+
+class TestResolveMarketFailClosed:
+    """resolve_market descobre o mercado de um ticker TRADEÁVEL pela forma
+    do símbolo (estratégia atual, só B3). O ponto crítico: um ticker que
+    não casa nenhum mercado conhecido FALHA — nunca cai em B3 por default.
+    Este é o tripwire contra o 'conserto rápido' de hardcodar símbolos de
+    cripto quando cripto entrar."""
+
+    @pytest.mark.parametrize(
+        "ticker",
+        ["PETR4.SA", "PETR4", "VALE3", "SANB11", "BBSE3", "sanb11", "  ITUB4.SA  "],
+    )
+    def test_ticker_b3_resolve_para_b3(self, ticker):
+        assert resolve_market(ticker) is get_market("b3")
+
+    @pytest.mark.parametrize(
+        "ticker",
+        ["BTC-USD", "ETH-USD", "SOL-USD", "AAPL", "SPY", "^BVSP", "GARBAGE", ""],
+    )
+    def test_ticker_sem_mercado_conhecido_falha_explicitamente(self, ticker):
+        # Fail-closed: nunca assume B3. A mensagem aponta para o caminho
+        # certo (config explícita), não para hardcodar símbolo.
+        with pytest.raises(ValueError, match="NÃO assumir B3|resolução EXPLÍCITA|config"):
+            resolve_market(ticker)
+
+    def test_cripto_nao_vira_acao_silenciosamente(self):
+        # O bug que só apareceria em produção: BTC-USD tratado como ação B3.
+        with pytest.raises(ValueError):
+            resolve_market("BTC-USD")
 
 
 class TestB3MarketNormalizacaoDeSimbolo:
