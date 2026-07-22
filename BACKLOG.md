@@ -4,6 +4,35 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
 ## Alta prioridade
 
+- **ROI Global removido do dashboard (Track B, 2026-07-21) — precisa de
+  fonte de verdade de capital inicial antes de voltar.** O card calculava
+  `((patrimonio_total - 100) / 100) * 100` no frontend (`App.jsx`), com
+  `100` fixo no código, sem nenhum registro real de capital inicial
+  (não existe `capital_inicial` em `settings.yaml` nem coluna equivalente
+  no banco). Rotulado "Retorno Histórico (Real)", o que passava confiança
+  indevida a um número sem base. Mais grave: a partir do momento em que o
+  CapitalVault (`POST /api/portfolio/depositar`/`retirar`) for usado, esse
+  cálculo passaria a misturar **movimentação de capital** com **resultado
+  de trading** — um depósito de R$500 apareceria como se fosse lucro de
+  500%. Achado durante o diagnóstico do Track B (dashboard-v2), tratado
+  como prioridade 1 pelo usuário: "número real com fórmula quebrada,
+  rotulado 'Real', que vira mentira ativa assim que o CapitalVault for
+  usado".
+  **Antes do ROI poder voltar à UI, é preciso um trabalho de backend com o
+  mesmo rigor de tudo que mexe em capital**: uma fonte de verdade dedicada
+  para capital inicial — coluna própria (ex.: `capital_inicial` em
+  `portfolio`, setada uma vez no primeiro depósito real) ou o primeiro
+  `equity_snapshot` gravado, **isolada** de depósitos/retiradas
+  subsequentes do cofre (senão o mesmo problema de hoje se repete: uma
+  movimentação de capital contaminando o cálculo de retorno). Com essa
+  fonte definida, o ROI passa a ser `(equity_atual - capital_inicial) /
+  capital_inicial`, sem tocar em `patrimonio_reservado` movimentado pelo
+  cofre.
+  Arquivos: `backend/app/data/database.py` (schema `portfolio`,
+  `compute_current_equity`), `backend/app/main.py` (`/api/portfolio`,
+  `/api/positions`), `frontend/src/App.jsx` (card removido, ver commit
+  do Track B).
+
 - **`get_risk_metrics()` (`backend/app/data/database.py`) tem um campo
   fabricado e um mal rotulado — achado durante o honest-dashboard Bloco
   3.** `"calmar": sharpe * 0.8` (comentário no próprio código: `#

@@ -26,7 +26,7 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
     calmar: v => v.toFixed(2),
     max_drawdown_pct: v => `${v.toFixed(2)}%`,
     var_95_daily: v => `R$ ${v.toFixed(2)}`,
-    win_rate: v => `${(v * 100).toFixed(1)}%`,
+    win_rate: v => `${(v * 100).toFixed(2)}%`,
     avg_win: v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`,
     avg_loss: v => `${v.toFixed(2)}%`
   };

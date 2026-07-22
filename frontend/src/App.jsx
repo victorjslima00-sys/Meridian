@@ -8,9 +8,9 @@ import {
   Activity, ShieldAlert, Cpu,
   BarChart2, Terminal, Briefcase, X,
   WifiOff, TrendingUp, TrendingDown,
-  Settings, RefreshCw,
-  DollarSign, Percent, BookOpen,
-  Key, ToggleLeft, ToggleRight, Users, Menu, Bot, Send,
+  Settings,
+  DollarSign, BookOpen,
+  Key, ToggleLeft, ToggleRight, Users, Menu,
   Wallet, Lock
 } from 'lucide-react';
 import { RiskMetricsPanel, PositionSizingCalc, FastExecutionWidget } from './EliteCharts';
@@ -102,6 +102,16 @@ const timeAgo = (isoString) => {
   return `há ${h}h${m % 60 ? ` ${m % 60}min` : ''}`;
 };
 
+// Track B, 3c: mesmo padrão do SystemHealthPanel, estendido para todo
+// bloco alimentado pelo polling de 5s -- sem isso, um poll que trava ou
+// falha silenciosamente (ex.: /elite/risk_metrics com .catch mudo) não
+// dava nenhum sinal visual de que o dado na tela podia estar velho.
+const FreshnessTag = ({ ts }) => (
+  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', fontWeight: 400, whiteSpace: 'nowrap' }}>
+    atualizado {timeAgo(ts)}
+  </span>
+);
+
 const HealthRow = ({ label, value, warn }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.78rem', gap: '1rem' }}>
     <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -158,7 +168,7 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
 );
 
 // ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
-const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
+const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
   // Dados para Gráfico de Pizza (Alocação)
   const allocData = [
     { name: 'Caixa Livre', value: saldoLivre, color: '#10b981' }
@@ -203,7 +213,10 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, paddingBottom: '1rem' }}>
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
+            <FreshnessTag ts={lastUpdated} />
+          </div>
           <div style={{ flex: 1, minHeight: '250px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -229,13 +242,16 @@ const PortfolioOverviewDashboard = ({ positions, saldoLivre }) => {
         </div>
 
         <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
+            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
+            <FreshnessTag ts={lastUpdated} />
+          </div>
           <div style={{ flex: 1, minHeight: '250px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={pnlData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis dataKey="ticker" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val}`} tickLine={false} axisLine={false} />
+                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val.toFixed(2)}`} tickLine={false} axisLine={false} />
                 <Tooltip cursor={{ fill: 'rgba(255,255,255,0.03)' }} content={<CustomTooltip />} />
                 <Bar dataKey="pnl" radius={[4, 4, 0, 0]} maxBarSize={60}>
                   {pnlData.map((entry, index) => (
@@ -317,7 +333,6 @@ const LivePnlChart = React.memo(({ history }) => {
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [copilotOpen, setCopilotOpen] = useState(false);
   const [tab, setTab] = useState('overview');
   const [status, setStatus] = useState(null);
   const [positions, setPositions] = useState(null);
@@ -330,9 +345,14 @@ export default function App() {
 
   const [livePnlHistory, setLivePnlHistory] = useState([]);
 
+  // Track B, 3c: frescor real do polling de 5s. lastRiskMetricsAt é
+  // separado de lastPolledAt porque /elite/risk_metrics tem um .catch
+  // próprio (silencioso) -- pode ficar velho independente do resto.
+  const [lastPolledAt, setLastPolledAt] = useState(null);
+  const [lastRiskMetricsAt, setLastRiskMetricsAt] = useState(null);
+
   // Settings State
   const [brokerSettings, setBrokerSettings] = useState({ mode: 'paper', has_cedro_key: false });
-  const [testingBroker, setTestingBroker] = useState(false);
 
   const [selectedTrade, setSelectedTrade] = useState(null);
   const [showEmergency, setShowEmergency] = useState(false);
@@ -345,22 +365,89 @@ export default function App() {
   const termRef = useRef(null);
 
   // Log de decisões ao vivo — WebSocket real (/ws/logs). wsConnected
-  // reflete o estado de verdade da conexão, não um rótulo fixo.
+  // reflete o estado de verdade da conexão: reconexão com backoff quando
+  // cai, e um timeout de inatividade detecta socket morto mesmo sem
+  // onclose/onerror disparar (Track B, 3e). O backend (/ws/logs em
+  // main.py) não envia ping -- só fica em receive_text() esperando --
+  // então uma queda silenciosa (wifi caiu, laptop hibernou) nunca
+  // dispararia onclose sozinha; sem mensagem nenhuma por 20s, tratamos
+  // como morto e forçamos o fechamento pra cair no fluxo de reconexão.
+  const wsRef = useRef(null);
+  const wsReconnectTimerRef = useRef(null);
+  const wsInactivityTimerRef = useRef(null);
+  const wsReconnectAttemptRef = useRef(0);
+  const wsUnmountedRef = useRef(false);
+
   useEffect(() => {
-    const ws = new window.WebSocket('ws://localhost:8000/ws/logs');
-    ws.onopen = () => setWsConnected(true);
-    ws.onclose = () => setWsConnected(false);
-    ws.onerror = () => setWsConnected(false);
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
+    const WS_INACTIVITY_TIMEOUT_MS = 20000;
+    const WS_MAX_BACKOFF_MS = 30000;
+    // Reset explícito: em dev, o StrictMode monta -> desmonta -> monta de
+    // novo synchronamente; o cleanup do primeiro mount marca unmounted=true
+    // e, sem este reset, o segundo mount (o real) herdava essa flag presa
+    // pra sempre via useRef -- toda reconexão real era silenciosamente
+    // pulada (bug encontrado e corrigido durante a verificação visual).
+    wsUnmountedRef.current = false;
+
+    const clearInactivityTimer = () => {
+      if (wsInactivityTimerRef.current) clearTimeout(wsInactivityTimerRef.current);
     };
-    return () => ws.close();
+
+    const armInactivityTimer = () => {
+      clearInactivityTimer();
+      wsInactivityTimerRef.current = setTimeout(() => {
+        setWsConnected(false);
+        wsRef.current?.close();
+      }, WS_INACTIVITY_TIMEOUT_MS);
+    };
+
+    const connect = () => {
+      const ws = new window.WebSocket('ws://localhost:8000/ws/logs');
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        wsReconnectAttemptRef.current = 0;
+        setWsConnected(true);
+        armInactivityTimer();
+      };
+      ws.onclose = () => {
+        setWsConnected(false);
+        clearInactivityTimer();
+        if (wsUnmountedRef.current) return;
+        const attempt = wsReconnectAttemptRef.current;
+        const delay = Math.min(1000 * 2 ** attempt, WS_MAX_BACKOFF_MS);
+        wsReconnectAttemptRef.current = attempt + 1;
+        wsReconnectTimerRef.current = setTimeout(connect, delay);
+      };
+      ws.onerror = () => ws.close();
+      ws.onmessage = (event) => {
+        armInactivityTimer();
+        const data = JSON.parse(event.data);
+        setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
+      };
+    };
+
+    connect();
+
+    return () => {
+      wsUnmountedRef.current = true;
+      clearInactivityTimer();
+      if (wsReconnectTimerRef.current) clearTimeout(wsReconnectTimerRef.current);
+      wsRef.current?.close();
+    };
   }, []);
 
   useEffect(() => {
     if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
   }, [logs]);
+
+  // Status da chave da corretora — não muda em runtime (é var de ambiente),
+  // então só no mount, sem polling (Track B, Commit 1: substitui o
+  // has_cedro_key hardcoded em false que nunca era lido de lugar nenhum).
+  useEffect(() => {
+    api.get('/broker/status')
+      .then(res => setBrokerSettings(prev => ({ ...prev, has_cedro_key: !!res.data?.has_cedro_key })))
+      .catch(() => {});
+  }, []);
 
   // Main Data fetch — só rotas que existem de verdade no backend.
   useEffect(() => {
@@ -373,6 +460,7 @@ export default function App() {
         ]);
         setStatus(s.data);
         setPositions(p.data);
+        setLastPolledAt(new Date().toISOString());
         setSelectedTrade(prev => {
           if (!prev) return prev;
           // Sync with the latest fetched positions
@@ -392,7 +480,7 @@ export default function App() {
           });
         }
 
-        if (rm.data) setRiskMetrics(rm.data);
+        if (rm.data) { setRiskMetrics(rm.data); setLastRiskMetricsAt(new Date().toISOString()); }
 
         setConnected(true); setApiError(null);
       } catch (err) {
@@ -467,10 +555,6 @@ export default function App() {
   const saldoLivre = cap.saldo_livre || 0;
   const saldoDisponivel = cap.saldo_disponivel || 0;
   const emPosicoes = cap.em_posicoes || 0;
-
-  const totalAbsoluto = patTotal;
-  const roi = (((totalAbsoluto - 100) / 100) * 100).toFixed(2);
-  const roiNum = parseFloat(roi);
 
   return (
     <div className="shell">
@@ -551,6 +635,9 @@ export default function App() {
           <>
           {tab === 'overview' && (
             <div className="overview-layout">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
+                <FreshnessTag ts={lastPolledAt} />
+              </div>
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
                 <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Reservado + gerido pelo bot (ao vivo)" />
@@ -565,7 +652,6 @@ export default function App() {
                   value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`}
                   sub={`Resultado não realizado de ${positions?.active_positions?.length || 0} posições`}
                 />
-                <KpiCard title="ROI Global" icon={Percent} color={roiNum >= 0 ? '#10b981' : '#f43f5e'} value={`${roiNum >= 0 ? '+' : ''}${roi}%`} sub="Retorno Histórico (Real)" trend={roiNum} />
               </div>
 
               <div className="pro-trading-layout">
@@ -576,7 +662,7 @@ export default function App() {
                       resto do dashboard (alocado/current_price/pnl_monetario
                       vêm prontos da API), só formatado como texto em vez
                       de tabela. */}
-                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} />
+                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} lastUpdatedLabel={timeAgo(lastPolledAt)} />
 
                   {/* ÁREA GRÁFICA / VISÃO GLOBAL */}
                   {/* selectedTrade nunca chega aqui: quando setado, o
@@ -586,7 +672,7 @@ export default function App() {
                       símbolo BINANCE: (Binance, cripto) pra um ticker B3,
                       inalcançável e errado, removido. */}
                   <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
-                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} />
+                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} lastUpdated={lastPolledAt} />
                   </div>
 
                 </div>
@@ -614,7 +700,7 @@ export default function App() {
                       <h3>Gestão de Capital</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <CapitalVault capital={cap} onChanged={refreshCapital} />
+                      <CapitalVault onChanged={refreshCapital} />
                     </div>
                   </div>
 
@@ -635,6 +721,7 @@ export default function App() {
                   <div className="glass-panel" style={{ flexShrink: 0 }}>
                     <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
                       <h3>Matriz de Risco</h3>
+                      <FreshnessTag ts={lastRiskMetricsAt} />
                     </div>
                     <div style={{ padding: '0.5rem' }}>
                       <RiskMetricsPanel metrics={riskMetrics} />
@@ -724,7 +811,7 @@ export default function App() {
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.25rem' }}>
                 <div className="glass-panel" style={{ gridColumn: 'span 2' }}>
-                  <div className="panel-header"><h3>Métricas de Risco</h3></div>
+                  <div className="panel-header"><h3>Métricas de Risco</h3><FreshnessTag ts={lastRiskMetricsAt} /></div>
                   <div style={{ padding: '1rem' }}>
                     <RiskMetricsPanel metrics={riskMetrics} />
                   </div>
@@ -801,9 +888,12 @@ export default function App() {
               )}
 
               <div className="glass-panel" style={{ padding: '1.25rem' }}>
-                <div style={{ marginBottom: '1rem' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
-                  <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '1rem' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
+                    <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
+                  </div>
+                  <FreshnessTag ts={lastPolledAt} />
                 </div>
                 <ClosedPositionsNarrative positions={positions} onSelectTrade={setSelectedTrade} />
               </div>
@@ -841,19 +931,6 @@ export default function App() {
                       )}
                     </div>
                   </div>
-
-                  <button 
-                    style={{ width: '100%', padding: '0.75rem', background: 'rgba(0,243,255,0.1)', color: '#00f3ff', border: '1px solid rgba(0,243,255,0.3)', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}
-                    onClick={() => {
-                      setTestingBroker(true);
-                      setTimeout(() => {
-                        setTestingBroker(false);
-                        alert('O ambiente atual executa somente Paper Trading local.');
-                      }, 1500);
-                    }}
-                  >
-                    {testingBroker ? <RefreshCw size={16} className="spin" /> : 'Validar Simulador Local'}
-                  </button>
                 </div>
 
                 <div className="glass-panel" style={{ padding: '1.5rem' }}>
@@ -915,35 +992,6 @@ export default function App() {
               <button className="btn-cancel" onClick={() => { setShowEmergency(false); setPassword(''); }}>Cancelar</button>
               <button className="btn-danger" onClick={doEmergencyStop}>🔴 Confirmar</button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── COPILOT WIDGET ── */}
-      <button 
-        className="copilot-fab"
-        onClick={() => setCopilotOpen(!copilotOpen)}
-      >
-        {copilotOpen ? <X size={24} color="#fff" /> : <Bot size={24} color="#fff" />}
-      </button>
-
-      {copilotOpen && (
-        <div className="copilot-window">
-          <div className="copilot-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Bot size={18} color="var(--primary)" />
-              <span style={{ fontWeight: 'bold' }}>Meridian Copilot</span>
-            </div>
-            <button onClick={() => setCopilotOpen(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
-              <X size={16} />
-            </button>
-          </div>
-          <div className="copilot-body">
-            <div className="copilot-msg ai">Olá! Sou o Assistente da Meridian. Posso ajudar a analisar seu portfólio, explicar métricas de risco ou consultar o comitê de agentes por você. Como posso ajudar?</div>
-          </div>
-          <div className="copilot-footer">
-            <input type="text" placeholder="Pergunte ao Copilot..." className="copilot-input" />
-            <button className="copilot-send"><Send size={16} color="#fff" /></button>
           </div>
         </div>
       )}
