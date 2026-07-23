@@ -2,6 +2,89 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🔴 ACHADO CENTRAL — A ESTRATÉGIA PERDE PARA O CDI (medido 2026-07-23)
+
+**Sharpe contra risk-free real: −0,33.** Não é "edge pequeno": é retorno
+abaixo do ativo livre de risco, com risco de ações.
+
+Carteira do backtest (`max_positions=3`, R$300, 2006-2025, custo 0,10%
+round-trip, warm-up já corrigido) contra o CDI diário do Banco Central
+(API SGS, série 12), 4.958 pregões alinhados:
+
+```
+                       capital final   retorno acum.      a.a.
+  ESTRATEGIA                  852.77          184.3%     5.36%
+  CDI (SGS serie 12)         2044.77          581.6%    10.08%
+  DIFERENCA                 -1191.99          -58.3%
+
+  Sharpe com risk-free ZERO (como optimizer.py:13 calcula) : +0.524
+  Sharpe com risk-free REAL (CDI diario)                   : -0.334
+  excesso medio: -0,01508%/dia  ->  -3,73% a.a. SOBRE o CDI
+  anos em que a estrategia bate o CDI: 7/20
+```
+
+**Consequências que mudam a leitura de tudo que veio antes:**
+
+1. **O `+0,52` de Sharpe que aparecia como resultado positivo é artefato de
+   `risk_free_rate=0.0`** (`trading_bot/backtest/optimizer.py:13`). Num país
+   com CDI de dois dígitos, comparar contra zero infla qualquer estratégia.
+   Todo Sharpe já reportado neste repo tem esse viés embutido.
+2. **O edge estatístico é real e continua irrelevante.** t=+2,78 na
+   expectância por trade — a estratégia realmente ganha dinheiro em termos
+   absolutos (+184%). Só que ganha MENOS que deixar parado no CDI, e com
+   drawdown de −17,9%. **Significância estatística não é vantagem
+   econômica.**
+3. **Não existe capital que resolva.** O melhor caso possível (taxa fixa
+   zero, custo só percentual) já é o 5,36% a.a. acima. Aumentar capital
+   dilui a corretagem fixa mas não muda o retorno percentual — o teto da
+   estratégia como está fica abaixo do CDI em qualquer capital.
+
+**O que isso NÃO significa:** que o motor esteja errado. O backtest, o
+sizing, o executor e a reconexão determinística estão corretos e testados —
+o que está errado é a expectativa de que ESTE conjunto de parâmetros de
+Donchian, neste universo, supere a renda fixa brasileira.
+
+**Próximo passo honesto:** qualquer pesquisa de estratégia daqui em diante
+tem de ser avaliada contra CDI, não contra zero. O portão de aprovação
+(`backtest.min_sharpe_aggregate`) mede contra zero e por isso é fraco demais
+para este mercado.
+
+### Capital mínimo operável: NÃO EXISTE (para esta estratégia)
+
+`fixed_fee_per_order` (corretagem fixa em R$ por ordem) agora é modelado —
+antes o custo era 100% percentual, o que escondia o efeito abaixo:
+
+```
+  capital  taxa fixa  trades    cap.final    CDI daria     CAGR  Sharpe vs CDI  veredito
+      300 R$    0.00     848      852.77     2044.77    5.36%         -0.334  perde do CDI
+      300 R$    2.50      60        5.24     2044.77  -18.32%         -1.558  conta destruida
+      300 R$    5.00      30        8.46     2044.77  -16.35%         -1.326  conta destruida
+    10000 R$    2.50     848    20887.64    68158.85    3.75%         -0.470  perde do CDI
+    10000 R$    5.00     848    13349.53    68158.85    1.46%         -0.665  perde do CDI
+    50000 R$    0.00     848   142128.75   340794.25    5.36%         -0.334  perde do CDI
+    50000 R$    2.50     848   134590.64   340794.25    5.08%         -0.359  perde do CDI
+    50000 R$    5.00     848   127052.53   340794.25    4.78%         -0.384  perde do CDI
+```
+
+- **R$300 com QUALQUER corretagem fixa = conta destruída.** Com R$2,50/ordem
+  o capital acaba após 60 trades (de 848 possíveis). A posição típica é
+  ~R$75; R$5 de round-trip fixo são 6,7% por trade contra uma expectância de
+  +0,56%. Não é margem apertada — é ruína matemática.
+- **O custo fixo deixa de ser fatal por volta de R$10k e vira irrelevante em
+  R$50k** (come 1,61 p.p. do CAGR em R$10k, 0,28 p.p. em R$50k).
+- **Mas o teto não depende do capital.** Controle de invariância de escala:
+  com taxa fixa zero, R$300 e R$50.000 dão CAGR **idêntico** (5,3646%,
+  diferença 0,000000 p.p.) — o retorno percentual não escala com capital.
+  Logo o melhor caso possível é 5,36% a.a. contra CDI de 10,08%.
+  **Nenhum capital torna esta estratégia operável.**
+
+**O que o modelo de custo ainda NÃO cobre** (relevante antes de configurar
+custo real): IR de 15% sobre ganho líquido em swing trade (com isenção de
+R$20 mil/mês em vendas — irrelevante em R$300, material em R$50k);
+emolumentos/liquidação da B3 (~0,03%, hoje teriam de ser embutidos no
+`brokerage_pct`); custo assimétrico entrada vs saída; e impacto de mercado
+proporcional à liquidez.
+
 ## 🛑 PRIORIDADE MÁXIMA — A BASELINE ANTERIOR ERA INVÁLIDA (bug de warm-up, corrigido)
 
 **Correção de registro (2026-07-23).** A entrada anterior deste backlog

@@ -106,6 +106,7 @@ def run_regime_backtest(
     ibov_filter: bool = True,          # Filtro macro: só opera quando IBOV > SMA-50
     brokerage_pct: float = 0.0003,
     spread_pct: float = 0.0002,
+    fixed_fee_per_order: float = 0.0,  # R$ por ORDEM (não escala com a posição)
     warmup_bars: int = 300,            # História ANTES de `start` só p/ indicadores
 ) -> BacktestResult:
     """
@@ -121,6 +122,20 @@ def run_regime_backtest(
     signal_params = signal_params or {}
     initial_capital = capital
     round_trip = (brokerage_pct + spread_pct) * 2
+
+    def custo_do_trade(capital_posicao: float) -> float:
+        """Custo de ida-e-volta como fração do capital DA POSIÇÃO.
+
+        `round_trip` é percentual e escala com o tamanho — correto para
+        spread e emolumentos. Corretagem FIXA não escala: R$2,50 numa
+        posição de R$75 é 3,3% por ordem e 6,7% no round-trip; na mesma
+        posição com R$50.000 de capital é 0,04%. Por isso a taxa fixa entra
+        dividida pelo capital alocado, e multiplicada por 2 (um trade são
+        duas ordens: entrada e saída).
+        """
+        if fixed_fee_per_order <= 0 or capital_posicao <= 0:
+            return round_trip
+        return round_trip + (fixed_fee_per_order * 2) / capital_posicao
 
     # Carregar IBOV para filtro macro (se ativo)
     ibov_df = None
@@ -226,7 +241,7 @@ def run_regime_backtest(
 
         for ticker, exit_price, exit_reason in to_close:
             pos = open_positions.pop(ticker)
-            pnl_pct = (exit_price / pos.entry_price - 1) - round_trip
+            pnl_pct = (exit_price / pos.entry_price - 1) - custo_do_trade(pos.capital)
             pnl_abs = pos.capital * pnl_pct
             capital_cash += pos.capital + pnl_abs   # ← devolve capital (bug v1 corrigido)
 
@@ -328,7 +343,7 @@ def run_regime_backtest(
                     
                 if exit_price is not None:
                     # Trade fechado no mesmo dia
-                    pnl_pct = (exit_price / entry_price_real - 1) - round_trip
+                    pnl_pct = (exit_price / entry_price_real - 1) - custo_do_trade(pos_size)
                     pnl_abs = pos_size * pnl_pct
                     capital_cash += pos_size + pnl_abs
                     
@@ -381,7 +396,7 @@ def run_regime_backtest(
         df_t = regime_data.get(ticker)
         if df_t is not None and not df_t.empty:
             last = df_t.iloc[-1]
-            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - round_trip
+            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - custo_do_trade(pos.capital)
             pnl_abs = pos.capital * pnl_pct
             capital_cash += pos.capital + pnl_abs   # ← devolve capital
 
