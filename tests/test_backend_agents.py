@@ -67,6 +67,7 @@ def _init_in_memory_db() -> sqlite3.Connection:
             patrimonio_total REAL DEFAULT 0.0,
             saldo_disponivel REAL DEFAULT 100.0,
             em_posicoes REAL DEFAULT 0.0,
+            margem_operavel REAL,
             updated_at TIMESTAMP
         )
     """)
@@ -406,6 +407,7 @@ class TestExecutorAgent:
                     patrimonio_total REAL DEFAULT 0.0,
                     saldo_disponivel REAL DEFAULT 100.0,
                     em_posicoes REAL DEFAULT 0.0,
+                    margem_operavel REAL,
                     updated_at TIMESTAMP
                 )
             """)

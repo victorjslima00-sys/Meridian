@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import api from './api';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell, BarChart, Bar, Legend } from 'recharts';
 import ActiveTradeDetails from './ActiveTradeDetails';
 import PositionNarrative, { ClosedPositionsNarrative } from './PositionNarrative';
 import CapitalVault from './CapitalVault';
+import DecisionLog from './DecisionLog';
 import {
   Activity, ShieldAlert, Cpu,
-  BarChart2, Terminal, Briefcase, X,
+  BarChart2, Briefcase, X,
   WifiOff, TrendingUp, TrendingDown,
   Settings,
   DollarSign, BookOpen,
@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { RiskMetricsPanel, PositionSizingCalc, FastExecutionWidget } from './EliteCharts';
 import { PortfolioChart as SimplePortfolio } from './Charts';
+import { timeAgo, FreshnessTag } from './Freshness';
 import './index.css';
 
 class ErrorBoundary extends React.Component {
@@ -90,28 +91,6 @@ const EXECUTION_MODE_LABELS = {
   full_auto: 'Totalmente automático',
 };
 
-const timeAgo = (isoString) => {
-  if (!isoString) return 'nunca';
-  const diffMs = Date.now() - new Date(isoString).getTime();
-  if (diffMs < 0) return 'agora';
-  const s = Math.floor(diffMs / 1000);
-  if (s < 60) return `há ${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `há ${m}min`;
-  const h = Math.floor(m / 60);
-  return `há ${h}h${m % 60 ? ` ${m % 60}min` : ''}`;
-};
-
-// Track B, 3c: mesmo padrão do SystemHealthPanel, estendido para todo
-// bloco alimentado pelo polling de 5s -- sem isso, um poll que trava ou
-// falha silenciosamente (ex.: /elite/risk_metrics com .catch mudo) não
-// dava nenhum sinal visual de que o dado na tela podia estar velho.
-const FreshnessTag = ({ ts }) => (
-  <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', fontWeight: 400, whiteSpace: 'nowrap' }}>
-    atualizado {timeAgo(ts)}
-  </span>
-);
-
 const HealthRow = ({ label, value, warn }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid rgba(255,255,255,0.05)', fontSize: '0.78rem', gap: '1rem' }}>
     <span style={{ color: 'var(--text-muted)' }}>{label}</span>
@@ -167,168 +146,21 @@ const KpiCard = ({ title, value, sub, icon: Icon, color, trend }) => (
   </div>
 );
 
-// ─── Portfolio Overview Dashboard (Visão Global) ────────────────────────
-const PortfolioOverviewDashboard = ({ positions, saldoLivre, lastUpdated }) => {
-  // Dados para Gráfico de Pizza (Alocação)
-  const allocData = [
-    { name: 'Caixa Livre', value: saldoLivre, color: '#10b981' }
-  ];
-  
-  if (positions?.active_positions) {
-    positions.active_positions.forEach(p => {
-      allocData.push({
-        name: p.ticker,
-        value: p.alocado, // vem pronto da API (honest-dashboard Bloco 2)
-        color: p.side === 'BUY' ? '#3b82f6' : '#f59e0b'
-      });
-    });
-  }
-
-  // Dados para Gráfico de Barras (PnL por Ativo) — pnl_monetario vem
-  // pronto da API, não recalculado aqui.
-  const pnlData = positions?.active_positions ? positions.active_positions.map(p => ({
-    ticker: p.ticker,
-    pnl: p.pnl_monetario,
-    color: p.pnl_pct >= 0 ? '#10b981' : '#f43f5e'
-  })) : [];
-
-  const CustomTooltip = ({ active, payload }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: 'rgba(17,24,39,0.9)', border: '1px solid rgba(255,255,255,0.1)', padding: '0.5rem 1rem', borderRadius: '8px', backdropFilter: 'blur(4px)' }}>
-          <p style={{ margin: 0, color: '#fff', fontWeight: 600 }}>{payload[0].name || payload[0].payload.ticker}</p>
-          <p style={{ margin: 0, color: payload[0].payload.color, fontWeight: 700 }}>R$ {payload[0].value.toFixed(2)}</p>
-        </div>
-      );
-    }
-    return null;
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', height: '100%', overflow: 'hidden' }}>
-      <div className="glass-panel" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.01)' }}>
-        <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Curva de Patrimônio</h3>
-        <SimplePortfolio />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, paddingBottom: '1rem' }}>
-        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
-            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>Alocação de Capital (Risco)</h3>
-            <FreshnessTag ts={lastUpdated} />
-          </div>
-          <div style={{ flex: 1, minHeight: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={allocData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={80}
-                  outerRadius={105}
-                  paddingAngle={5}
-                  dataKey="value"
-                  stroke="none"
-                >
-                  {allocData.map((entry, index) => (
-                    <Cell key={`cell-${entry.name || entry.ticker || index}`} fill={entry.color} style={{ filter: `drop-shadow(0px 0px 8px ${entry.color}40)` }} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-                <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '0.85rem' }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="glass-panel" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.01)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1rem' }}>
-            <h3 style={{ margin: 0, color: '#fff', fontSize: '1.1rem' }}>PnL MTM por Ativo (R$)</h3>
-            <FreshnessTag ts={lastUpdated} />
-          </div>
-          <div style={{ flex: 1, minHeight: '250px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={pnlData} margin={{ top: 20, right: 20, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis dataKey="ticker" stroke="var(--text-muted)" fontSize={11} tickLine={false} axisLine={false} />
-                <YAxis stroke="var(--text-muted)" fontSize={11} tickFormatter={(val) => `R$${val.toFixed(2)}`} tickLine={false} axisLine={false} />
-                <Tooltip cursor={{ fill: 'rgba(255,255,255,0.03)' }} content={<CustomTooltip />} />
-                <Bar dataKey="pnl" radius={[4, 4, 0, 0]} maxBarSize={60}>
-                  {pnlData.map((entry, index) => (
-                    <Cell key={`cell-${entry.name || entry.ticker || index}`} fill={entry.color} style={{ filter: `drop-shadow(0px -2px 6px ${entry.color}40)` }} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ─── Live PnL Chart ────────────────────────────────────────────────────────
-const LivePnlChart = React.memo(({ history }) => {
-  if (!history || history.length === 0) return (
-    <div className="glass-panel" style={{ height: '200px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-      Aguardando coleta de dados (Ao Vivo)...
-    </div>
-  );
-
-  const currentPnl = history[history.length - 1].pnl;
-  const isGain = currentPnl >= 0;
-
-  return (
-    <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <div>
-          <h3 style={{ margin: 0, fontSize: '1rem', color: '#fff' }}>Evolução MTM (Intraday)</h3>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Soma do PnL Aberto em Tempo Real</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: isGain ? '#10b981' : '#f43f5e', boxShadow: `0 0 8px ${isGain ? '#10b981' : '#f43f5e'}`, animation: 'pulsePill 1.5s infinite' }}></div>
-          <span className="mono" style={{ color: isGain ? '#10b981' : '#f43f5e', fontWeight: 800 }}>
-            {isGain ? '+' : '-'}R$ {Math.abs(currentPnl).toFixed(2)}
-          </span>
-        </div>
-      </div>
-      <div style={{ width: '100%', height: '220px' }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={history} margin={{ top: 5, right: 0, left: -20, bottom: 0 }}>
-            <defs>
-              <linearGradient id="colorPnlGain" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-              </linearGradient>
-              <linearGradient id="colorPnlLoss" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#f43f5e" stopOpacity={0}/>
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-            <XAxis dataKey="time" stroke="#475569" fontSize={10} tickMargin={8} minTickGap={20} />
-            <YAxis stroke="#475569" fontSize={10} tickFormatter={(val) => `R$ ${val.toFixed(0)}`} domain={['auto', 'auto']} />
-            <Tooltip
-              contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '4px', fontSize: '0.8rem' }}
-              itemStyle={{ color: '#fff', fontWeight: 600 }}
-              formatter={(value) => [`R$ ${value.toFixed(2)}`, 'PnL']}
-              labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
-            />
-            <Area 
-              type="monotone" 
-              dataKey="pnl" 
-              stroke={isGain ? '#10b981' : '#f43f5e'} 
-              strokeWidth={2}
-              fillOpacity={1} 
-              fill={isGain ? "url(#colorPnlGain)" : "url(#colorPnlLoss)"} 
-              isAnimationActive={false}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-});
+// ─── Curva de Patrimônio (Visão Global) ──────────────────────────────────
+// usabilidade 2c: dos 4 gráficos da tela inicial sobrou só este — o único
+// com valor real de decisão (histórico verdadeiro de equity, 1 snapshot/dia
+// de pregão, direto de /api/equity_snapshots). Removidos: "Alocação de
+// Capital" (pizza — repetia os cards e o KPI), "PnL MTM por Ativo" (barras
+// — cada card de posição já mostra o mesmo pnl_monetario) e "Evolução MTM
+// (Intraday)" (série acumulada client-side que zerava a cada reload,
+// janela de 5min, cheia de buracos com a aba oculta, e cujo header
+// duplicava o KPI "PnL Flutuante").
+const PortfolioOverviewDashboard = () => (
+  <div className="glass-panel" style={{ padding: '1.5rem', background: 'rgba(255,255,255,0.01)' }}>
+    <h3 style={{ marginBottom: '1rem', color: '#fff', fontSize: '1.1rem' }}>Curva de Patrimônio</h3>
+    <SimplePortfolio />
+  </div>
+);
 
 // ─── APP PRINCIPAL ────────────────────────────────────────────────────────────
 export default function App() {
@@ -343,13 +175,14 @@ export default function App() {
   // (as demais nunca existiram no backend, ver honest-dashboard Bloco 4).
   const [riskMetrics, setRiskMetrics] = useState(null);
 
-  const [livePnlHistory, setLivePnlHistory] = useState([]);
 
   // Track B, 3c: frescor real do polling de 5s. lastRiskMetricsAt é
   // separado de lastPolledAt porque /elite/risk_metrics tem um .catch
   // próprio (silencioso) -- pode ficar velho independente do resto.
   const [lastPolledAt, setLastPolledAt] = useState(null);
   const [lastRiskMetricsAt, setLastRiskMetricsAt] = useState(null);
+  // 2a: true só durante o catch-up de retorno de aba oculta com dado velho.
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Settings State
   const [brokerSettings, setBrokerSettings] = useState({ mode: 'paper', has_cedro_key: false });
@@ -358,87 +191,12 @@ export default function App() {
   const [showEmergency, setShowEmergency] = useState(false);
   const [password, setPassword] = useState('');
 
-  const [logs, setLogs] = useState([
-    { t: new Date().toLocaleTimeString(), sender: 'SISTEMA', msg: 'Conexão segura estabelecida.' }
-  ]);
-  const [wsConnected, setWsConnected] = useState(false);
-  const termRef = useRef(null);
-
-  // Log de decisões ao vivo — WebSocket real (/ws/logs). wsConnected
-  // reflete o estado de verdade da conexão: reconexão com backoff quando
-  // cai, e um timeout de inatividade detecta socket morto mesmo sem
-  // onclose/onerror disparar (Track B, 3e). O backend (/ws/logs em
-  // main.py) não envia ping -- só fica em receive_text() esperando --
-  // então uma queda silenciosa (wifi caiu, laptop hibernou) nunca
-  // dispararia onclose sozinha; sem mensagem nenhuma por 20s, tratamos
-  // como morto e forçamos o fechamento pra cair no fluxo de reconexão.
-  const wsRef = useRef(null);
-  const wsReconnectTimerRef = useRef(null);
-  const wsInactivityTimerRef = useRef(null);
-  const wsReconnectAttemptRef = useRef(0);
-  const wsUnmountedRef = useRef(false);
-
-  useEffect(() => {
-    const WS_INACTIVITY_TIMEOUT_MS = 20000;
-    const WS_MAX_BACKOFF_MS = 30000;
-    // Reset explícito: em dev, o StrictMode monta -> desmonta -> monta de
-    // novo synchronamente; o cleanup do primeiro mount marca unmounted=true
-    // e, sem este reset, o segundo mount (o real) herdava essa flag presa
-    // pra sempre via useRef -- toda reconexão real era silenciosamente
-    // pulada (bug encontrado e corrigido durante a verificação visual).
-    wsUnmountedRef.current = false;
-
-    const clearInactivityTimer = () => {
-      if (wsInactivityTimerRef.current) clearTimeout(wsInactivityTimerRef.current);
-    };
-
-    const armInactivityTimer = () => {
-      clearInactivityTimer();
-      wsInactivityTimerRef.current = setTimeout(() => {
-        setWsConnected(false);
-        wsRef.current?.close();
-      }, WS_INACTIVITY_TIMEOUT_MS);
-    };
-
-    const connect = () => {
-      const ws = new window.WebSocket('ws://localhost:8000/ws/logs');
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        wsReconnectAttemptRef.current = 0;
-        setWsConnected(true);
-        armInactivityTimer();
-      };
-      ws.onclose = () => {
-        setWsConnected(false);
-        clearInactivityTimer();
-        if (wsUnmountedRef.current) return;
-        const attempt = wsReconnectAttemptRef.current;
-        const delay = Math.min(1000 * 2 ** attempt, WS_MAX_BACKOFF_MS);
-        wsReconnectAttemptRef.current = attempt + 1;
-        wsReconnectTimerRef.current = setTimeout(connect, delay);
-      };
-      ws.onerror = () => ws.close();
-      ws.onmessage = (event) => {
-        armInactivityTimer();
-        const data = JSON.parse(event.data);
-        setLogs(prev => [...prev.slice(-49), { t: new Date().toLocaleTimeString(), sender: data.agent.toUpperCase(), msg: data.msg }]);
-      };
-    };
-
-    connect();
-
-    return () => {
-      wsUnmountedRef.current = true;
-      clearInactivityTimer();
-      if (wsReconnectTimerRef.current) clearTimeout(wsReconnectTimerRef.current);
-      wsRef.current?.close();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
-  }, [logs]);
+  // usabilidade 2f: o log ao vivo (WebSocket, buffer de mensagens,
+  // indicador CONECTADO, reconexão) foi extraído para <DecisionLog />.
+  // Ficava aqui e cada mensagem re-renderizava o dashboard INTEIRO — com
+  // o bot varrendo ~50 tickers, uma mensagem a cada 1-2s — causando a
+  // lentidão e os timeouts de captura sofridos no diagnóstico. Agora a
+  // mensagem de log só re-renderiza o próprio painel.
 
   // Status da chave da corretora — não muda em runtime (é var de ambiente),
   // então só no mount, sem polling (Track B, Commit 1: substitui o
@@ -450,7 +208,19 @@ export default function App() {
   }, []);
 
   // Main Data fetch — só rotas que existem de verdade no backend.
+  //
+  // Usabilidade 2a (números congelados): o navegador estrangula
+  // setInterval em página oculta/ocluída para ~1 disparo/min — flagrado
+  // ao vivo no diagnóstico (tela "há 56s" com 2 posições enquanto a API
+  // respondia 4 no mesmo instante, e os polls represados chegando em
+  // rajada coalescida ao acordar). Nada disso é consertável do lado do
+  // timer; o conserto é reagir ao RETORNO: visibilitychange/focus
+  // disparam load() na hora, e se o dado estiver velho (>2 ciclos) o
+  // FreshnessTag mostra "atualizando..." até a resposta chegar, para o
+  // usuário VER que o sistema percebeu a volta.
   useEffect(() => {
+    let lastSuccessAtMs = 0;
+
     const load = async () => {
       try {
         const [s, p, rm] = await Promise.all([
@@ -460,6 +230,7 @@ export default function App() {
         ]);
         setStatus(s.data);
         setPositions(p.data);
+        lastSuccessAtMs = Date.now();
         setLastPolledAt(new Date().toISOString());
         setSelectedTrade(prev => {
           if (!prev) return prev;
@@ -468,28 +239,34 @@ export default function App() {
           return updated ? { ...prev, ...updated } : prev;
         });
 
-        // Update Live PnL History — pnl_monetario vem pronto por posição
-        // da API (honest-dashboard Bloco 2), só somamos aqui.
-        if (p.data?.active_positions) {
-          const totalPnl = p.data.active_positions.reduce((sum, pos) => sum + (pos.pnl_monetario || 0), 0);
-          setLivePnlHistory(prev => {
-            const now = new Date();
-            const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
-            const newHist = [...prev, { time: timeStr, pnl: totalPnl }];
-            return newHist.slice(-60); // Keep last 60 ticks (5 mins)
-          });
-        }
-
         if (rm.data) { setRiskMetrics(rm.data); setLastRiskMetricsAt(new Date().toISOString()); }
 
         setConnected(true); setApiError(null);
       } catch (err) {
         setApiError(err.message); setConnected(false);
+      } finally {
+        setIsRefreshing(false);
       }
     };
+
+    const onReturn = () => {
+      if (document.visibilityState !== 'visible') return;
+      // Dado velho = mais de 2 ciclos de poll sem sucesso. O rótulo
+      // "atualizando..." só aparece nesse caso — num foco corriqueiro com
+      // dado fresco, trocar o rótulo seria ruído.
+      if (Date.now() - lastSuccessAtMs > 10000) setIsRefreshing(true);
+      load();
+    };
+
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener('focus', onReturn);
     load();
     const iv = setInterval(load, 5000);
-    return () => clearInterval(iv);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onReturn);
+      window.removeEventListener('focus', onReturn);
+    };
   }, []);
 
   const refreshCapital = async () => {
@@ -555,6 +332,10 @@ export default function App() {
   const saldoLivre = cap.saldo_livre || 0;
   const saldoDisponivel = cap.saldo_disponivel || 0;
   const emPosicoes = cap.em_posicoes || 0;
+  // Soma direta do pnl_monetario que a API entrega por posição (2c:
+  // substitui o array livePnlHistory acumulado client-side, que existia
+  // só para alimentar o gráfico "Evolução MTM" removido).
+  const pnlFlutuante = (positions.active_positions || []).reduce((s, p) => s + (p.pnl_monetario || 0), 0);
 
   return (
     <div className="shell">
@@ -636,7 +417,7 @@ export default function App() {
           {tab === 'overview' && (
             <div className="overview-layout">
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '0.35rem' }}>
-                <FreshnessTag ts={lastPolledAt} />
+                <FreshnessTag ts={lastPolledAt} refreshing={isRefreshing} />
               </div>
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
@@ -644,12 +425,16 @@ export default function App() {
                 <KpiCard title="Reservado" icon={Lock} color="#8b9bb4" value={`R$ ${patReservado.toFixed(2)}`} sub="Fora do alcance do bot" />
                 <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={`R$ ${saldoDisponivel.toFixed(2)}`} sub="Entregue ao bot, antes de posições" />
                 <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={`R$ ${emPosicoes.toFixed(2)}`} sub="Alocado no preço de entrada" />
-                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Margem livre p/ operar" />
+                {/* 2e: sub-rótulo corrigido — com margem operável definida,
+                    o que o bot pode usar é saldo_operavel (Gestão de
+                    Capital), não o livre bruto; "Margem livre p/ operar"
+                    viraria mentira. */}
+                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Não alocado em posições" />
                 <KpiCard
                   title="PnL Flutuante (MTM)"
                   icon={Activity}
-                  color={livePnlHistory.length > 0 && livePnlHistory[livePnlHistory.length - 1].pnl >= 0 ? '#10b981' : '#f43f5e'}
-                  value={`R$ ${livePnlHistory.length > 0 ? livePnlHistory[livePnlHistory.length - 1].pnl.toFixed(2) : '0.00'}`}
+                  color={pnlFlutuante >= 0 ? '#10b981' : '#f43f5e'}
+                  value={`R$ ${pnlFlutuante.toFixed(2)}`}
                   sub={`Resultado não realizado de ${positions?.active_positions?.length || 0} posições`}
                 />
               </div>
@@ -662,7 +447,7 @@ export default function App() {
                       resto do dashboard (alocado/current_price/pnl_monetario
                       vêm prontos da API), só formatado como texto em vez
                       de tabela. */}
-                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} lastUpdatedLabel={timeAgo(lastPolledAt)} />
+                  <PositionNarrative positions={positions} onSelectTrade={setSelectedTrade} onClosePosition={handleCloseTrade} lastUpdated={lastPolledAt} refreshing={isRefreshing} />
 
                   {/* ÁREA GRÁFICA / VISÃO GLOBAL */}
                   {/* selectedTrade nunca chega aqui: quando setado, o
@@ -671,19 +456,12 @@ export default function App() {
                       "modo detalhe" com iframe do TradingView pedindo
                       símbolo BINANCE: (Binance, cripto) pra um ticker B3,
                       inalcançável e errado, removido. */}
-                  <div className="glass-panel" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: '500px' }}>
-                    <PortfolioOverviewDashboard positions={positions} saldoLivre={saldoLivre} lastUpdated={lastPolledAt} />
-                  </div>
+                  <PortfolioOverviewDashboard />
 
                 </div>
 
                 {/* COLUNA LATERAL (DIREITA - 25%) */}
                 <div className="pro-side-col">
-                  {/* LIVE PNL CHART */}
-                  {(positions?.active_positions?.length > 0 || livePnlHistory.length > 0) && (
-                    <LivePnlChart history={livePnlHistory} />
-                  )}
-
   {/* SAÚDE DO SISTEMA — detalhe real de /api/status */}
                   <div className="glass-panel" style={{ flexShrink: 0 }}>
                     <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
@@ -700,7 +478,7 @@ export default function App() {
                       <h3>Gestão de Capital</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <CapitalVault onChanged={refreshCapital} />
+                      <CapitalVault capital={cap} onChanged={refreshCapital} />
                     </div>
                   </div>
 
@@ -710,94 +488,26 @@ export default function App() {
                       <h3>Boleta Rápida (Scalper)</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <FastExecutionWidget 
-                        trade={selectedTrade} 
-                        saldoLivre={saldoLivre} 
-                        onExecute={handleExecuteTrade} 
+                      <FastExecutionWidget
+                        trade={selectedTrade}
+                        onExecute={handleExecuteTrade}
                       />
                     </div>
                   </div>
 
-                  <div className="glass-panel" style={{ flexShrink: 0 }}>
-                    <div className="panel-header" style={{ padding: '0.5rem 0.75rem', background: 'rgba(255,255,255,0.02)' }}>
-                      <h3>Matriz de Risco</h3>
-                      <FreshnessTag ts={lastRiskMetricsAt} />
-                    </div>
-                    <div style={{ padding: '0.5rem' }}>
-                      <RiskMetricsPanel metrics={riskMetrics} />
-                    </div>
-                  </div>
+                  {/* usabilidade 2b: "Matriz de Risco" saiu daqui — era o
+                      painel de "Métricas de Risco" da aba Risk duplicado
+                      na íntegra (mesmo endpoint, mesmos 8 números). Um
+                      fato, um lugar: a aba Risk é o lugar. */}
                 </div>
               </div>
             </div>
             )}
 
-          {/* AI COMMITTEE */}
-          {tab === 'ai' && (
-            <div className="page-section">
-              <div className="page-title">
-                <Cpu size={22} />
-                <div>
-                  <h2>Comitê de IA Operacional</h2>
-                  <p>Orquestração e inferência de modelos quantitativos</p>
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                {/* LOG DE DECISÕES (WebSocket real /ws/logs) */}
-                <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid rgba(0, 243, 255, 0.2)', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}>
-                  <div className="panel-header" style={{ padding: '0.75rem 1.25rem', borderBottom: '1px solid rgba(0, 243, 255, 0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(0, 10, 20, 0.4)' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <Terminal size={16} color="#00f3ff" />
-                      <h3 style={{ margin: 0, fontSize: '0.85rem', color: '#fff', letterSpacing: '1px', textTransform: 'uppercase' }}>Log de Decisões (Live)</h3>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.7rem', color: wsConnected ? '#10b981' : '#f43f5e', fontWeight: 800 }}>
-                      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: wsConnected ? '#10b981' : '#f43f5e', boxShadow: wsConnected ? '0 0 8px #10b981' : 'none', animation: wsConnected ? 'pulsePill 1.5s infinite' : 'none' }}></div>
-                      {wsConnected ? 'CONECTADO' : 'DESCONECTADO'}
-                    </div>
-                  </div>
-
-                  <div ref={termRef} style={{ background: '#020617', padding: '1.25rem', height: '350px', overflowY: 'auto', fontFamily: 'JetBrains Mono, monospace', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {logs.length === 0 ? (
-                      <div style={{ color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center', marginTop: '2rem' }}>Aguardando inicialização do motor neural...</div>
-                    ) : logs.map((log, i) => {
-                      let badgeColor = '#64748b';
-                      let bgBadge = 'transparent';
-                      let icon = '>';
-                      
-                      if (log.sender === 'SYSTEM') { badgeColor = '#94a3b8'; icon = '⚙️'; }
-                      else if (log.sender === 'MARKETANALYST') { badgeColor = '#3b82f6'; bgBadge = 'rgba(59, 130, 246, 0.1)'; icon = '📊'; }
-                      else if (log.sender === 'RISKMANAGER') { badgeColor = '#f59e0b'; bgBadge = 'rgba(245, 158, 11, 0.1)'; icon = '🛡️'; }
-                      else if (log.sender === 'EXECUTORAGENT') { badgeColor = '#10b981'; bgBadge = 'rgba(16, 185, 129, 0.1)'; icon = '⚡'; }
-                      else if (log.sender === 'USER') { badgeColor = '#ec4899'; bgBadge = 'rgba(236, 72, 153, 0.1)'; icon = '👤'; }
-
-                      // Syntax highlighting without dangerouslySetInnerHTML (Fixes XSS CodeQL Alert)
-                      const parts = (log.msg || '').split(/\b(BUY|SELL|HOLD|PETR4\.SA|VALE3\.SA|ITUB4\.SA)\b/g);
-                      const formattedMsg = parts.map((part, index) => {
-                        if (part === 'BUY') return <span key={`part-${index}`} style={{color:'#10b981', fontWeight:'bold'}}>BUY</span>;
-                        if (part === 'SELL') return <span key={`part-${index}`} style={{color:'#f43f5e', fontWeight:'bold'}}>SELL</span>;
-                        if (part === 'HOLD') return <span key={`part-${index}`} style={{color:'#f59e0b', fontWeight:'bold'}}>HOLD</span>;
-                        if (['PETR4.SA', 'VALE3.SA', 'ITUB4.SA'].includes(part)) return <span key={`part-${index}`} style={{color:'#00f3ff', textDecoration:'underline'}}>{part}</span>;
-                        return part;
-                      });
-
-                      return (
-                        <div key={log.id || log.timestamp || i} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start', lineHeight: 1.5, animation: 'fadeIn 0.3s ease-out' }}>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', whiteSpace: 'nowrap', paddingTop: '0.1rem' }}>[{log.t}]</span>
-                          <span style={{ 
-                            color: badgeColor, background: bgBadge, padding: '0.1rem 0.5rem', borderRadius: '4px', border: `1px solid ${badgeColor}30`, 
-                            fontWeight: 800, fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' 
-                          }}>
-                            {icon} {log.sender}
-                          </span>
-                          <span style={{ color: log.sender === 'USER' ? '#fdf2f8' : '#e2e8f0', flex: 1 }}>{formattedMsg}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* AI COMMITTEE — sempre montado (visible controla exibição) para
+              o WebSocket e o histórico sobreviverem à troca de aba. 2f:
+              extraído para <DecisionLog />, isolando seu re-render. */}
+          <DecisionLog visible={tab === 'ai'} />
 
           {/* RISK & METRICS */}
           {tab === 'risk' && (
@@ -893,7 +603,7 @@ export default function App() {
                     <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Histórico de Operações Fechadas</h3>
                     <span className="muted-tag">Clique numa posição pra ver o dossiê completo (justificativa da IA, alvo/stop no gráfico)</span>
                   </div>
-                  <FreshnessTag ts={lastPolledAt} />
+                  <FreshnessTag ts={lastPolledAt} refreshing={isRefreshing} />
                 </div>
                 <ClosedPositionsNarrative positions={positions} onSelectTrade={setSelectedTrade} />
               </div>

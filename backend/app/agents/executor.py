@@ -91,18 +91,37 @@ class ExecutorAgent:
 
             # Deduct from portfolio
             cursor.execute(
-                "SELECT id, saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1"
+                "SELECT id, saldo_disponivel, em_posicoes, margem_operavel "
+                "FROM portfolio ORDER BY id DESC LIMIT 1"
             )
             row = cursor.fetchone()
             if row:
-                pid, disponivel, em_pos = row
+                pid, disponivel, em_pos, margem_operavel = row
                 livre = disponivel - em_pos
                 if allocated > livre:
                     # Caso extremo onde a alocação excede o livre no momento exato da execução
                     # Na prática o risk_manager deveria ter barrado, mas barramos aqui por segurança
+                    conn.rollback()
                     return {
                         "status": "rejected",
                         "reason": f"Capital livre insuficiente (Livre: {livre:.2f}, Req: {allocated:.2f})",
+                    }
+
+                # usabilidade 2e — portão de capital de TODA entrada (laço
+                # automático e manual afunilam aqui): com margem_operavel
+                # definida, a exposição total (em_posicoes + alocação) nunca
+                # passa do teto. Checado dentro da MESMA transação IMMEDIATE
+                # que lê em_posicoes — sem TOCTOU com outra entrada
+                # concorrente. Tolerância de 1e-9 só para ruído de float;
+                # o teto é inclusivo (exatamente na margem é aceito).
+                if margem_operavel is not None and em_pos + allocated > margem_operavel + 1e-9:
+                    conn.rollback()
+                    return {
+                        "status": "rejected",
+                        "reason": (
+                            f"Margem operável excedida (teto: {margem_operavel:.2f}, "
+                            f"exposição atual: {em_pos:.2f}, ordem: {allocated:.2f})"
+                        ),
                     }
 
                 new_em_pos = em_pos + allocated

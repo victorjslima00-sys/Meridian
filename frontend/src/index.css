@@ -356,20 +356,28 @@ body {
   display: grid;
   grid-template-columns: 2.5fr 1fr;
   gap: 0.75rem;
-  align-items: stretch;
-  height: calc(100vh - 180px);
+  align-items: start;
 }
 .pro-main-col {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  overflow-y: auto; /* conteúdo empilhado (narrativa + gráficos) rola em vez de cortar quando não cabe */
 }
 .pro-side-col {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  overflow-y: auto; /* Side panel can scroll if DOM/Scalper is long */
+}
+/* usabilidade 2d: com a altura fixa (calc(100vh - 180px)) e flex-shrink
+   default, o painel "Suas Posições" era ESPREMIDO abaixo da altura do
+   conteúdo quando havia 3-4 posições abertas — o texto vazava do box e o
+   painel seguinte pintava por cima (flagrado por hit-test em 1366x768 e
+   1920x1080: box de 388px para 657px de conteúdo). A altura fixa caiu —
+   a página inteira rola (.page-content já tem overflow-y: auto) — e
+   nenhum filho encolhe abaixo do próprio conteúdo. */
+.pro-main-col > *,
+.pro-side-col > * {
+  flex-shrink: 0;
 }
 
 /* ═══════════════════════════════════════════════════════
