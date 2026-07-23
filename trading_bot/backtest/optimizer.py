@@ -6,28 +6,49 @@ import pandas as pd
 import numpy as np
 
 from trading_bot.backtest.engine import run_regime_backtest, BacktestResult
+from trading_bot.backtest.metrics import RISK_FREE_RATE_ANNUAL, TRADING_DAYS_PER_YEAR
 from trading_bot.data.ingestion import fetch_universe_yfinance
 
 logger = logging.getLogger(__name__)
 
-def calculate_sharpe_ratio(equity_curve: List[float], risk_free_rate: float = 0.0) -> float:
-    """Calcula o Índice Sharpe Anualizado simplificado."""
+def calculate_sharpe_ratio(
+    equity_curve: List[float],
+    risk_free_annual: float = RISK_FREE_RATE_ANNUAL,
+) -> float:
+    """Índice Sharpe anualizado da curva de patrimônio, contra risk-free REAL.
+
+    `risk_free_annual` é taxa ANUAL (0.10 = 10% a.a.), convertida aqui para
+    diária. Antes o parâmetro se chamava `risk_free_rate`, tinha default 0.0
+    e era subtraído direto de `mean_return` — que é um retorno DIÁRIO. Dois
+    defeitos nisso:
+
+    1. Default ZERO. Esta função é a que ORDENA os resultados de uma
+       varredura (`run_grid_search` abaixo). Ranquear contra zero seleciona
+       parâmetros que batem zero, não o CDI — num país de juros de dois
+       dígitos isso é um filtro que não filtra, com aparência de rigor.
+    2. Unidade ambígua. O nome e a docstring diziam "anualizado" mas o valor
+       era usado como taxa diária: quem passasse 0.10 pensando "10% a.a."
+       subtrairia 10% POR DIA.
+
+    O default vem de `metrics.RISK_FREE_RATE_ANNUAL` — a MESMA fonte que o
+    portão de aprovação usa. Varredura e aprovação medem pela mesma régua.
+    """
     if len(equity_curve) < 2:
         return 0.0
-    
+
     # Converte curva de capital em retornos diários
     returns = pd.Series(equity_curve).pct_change().dropna()
     if returns.empty:
         return 0.0
-        
+
     mean_return = returns.mean()
     std_return = returns.std()
-    
+
     if std_return == 0:
         return 0.0
-        
-    # Anualiza (assumindo ~252 dias úteis)
-    sharpe = (mean_return - risk_free_rate) / std_return * np.sqrt(252)
+
+    rf_daily = (1 + risk_free_annual) ** (1 / TRADING_DAYS_PER_YEAR) - 1
+    sharpe = (mean_return - rf_daily) / std_return * np.sqrt(TRADING_DAYS_PER_YEAR)
     return float(sharpe)
 
 def run_grid_search(
