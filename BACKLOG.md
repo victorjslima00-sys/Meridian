@@ -85,6 +85,62 @@ emolumentos/liquidação da B3 (~0,03%, hoje teriam de ser embutidos no
 `brokerage_pct`); custo assimétrico entrada vs saída; e impacto de mercado
 proporcional à liquidez.
 
+### Hipótese do whipsaw: REJEITADA no in-sample
+
+A anatomia de 848 trades sugeria que perdedores param de subir quase
+imediatamente. A versão **para a frente** dessa hipótese — "no fechamento do
+dia N, sai se não avançou X%", decidida só com preço até N, sem look-ahead —
+foi implementada (`early_exit_day` / `early_exit_min_gain`) e testada.
+
+Critérios declarados ANTES de rodar: excesso sobre o CDI ≥ 0; amostra ≥
+metade do baseline; ganho tem de aparecer como platô, não como ponto único.
+IS = 2006-2015, OOS = 2016-2025 reservado.
+
+```
+IN-SAMPLE 2006-2015 | CDI 10,91% a.a. | BASELINE sem regra: excesso -6,44% a.a., Sharpe -0,668, n=353
+
+              X=0%                      X=1%                      X=2%
+  N=1    -8.11%aa Sh-0.95 n=504    -8.73%aa Sh-1.14 n=566    -7.70%aa Sh-1.03 n=613
+  N=2    -7.61%aa Sh-0.87 n=468    -7.48%aa Sh-0.92 n=508    -7.37%aa Sh-0.93 n=546
+  N=3    -7.82%aa Sh-0.87 n=439    -9.47%aa Sh-1.13 n=467    -9.32%aa Sh-1.13 n=493
+  N=5    -8.19%aa Sh-0.89 n=400    -8.59%aa Sh-0.95 n=424    -8.46%aa Sh-0.97 n=434
+```
+
+**As 12 células são PIORES que o baseline.** Não há platô, não há ponto
+único bom, não há o que escolher. A hipótese morre no in-sample e o **OOS
+2016-2025 permanece intocado** — preservado para um teste futuro que
+mereça gastá-lo.
+
+**Por que falha** (medido, baseline vs N=2/X=1% no mesmo IS):
+
+```
+                          BASELINE      COM A REGRA
+  n                            353              508
+  win rate                   43.3%            38.0%
+  ganho medio do vencedor    +6.20%           +4.06%   (-34%)
+  perda media do perdedor    -3.98%           -2.15%   (-46%)
+  expectancia por trade     +0.431%          +0.213%   (METADE)
+  saidas                  stop 164,        early_exit 288,
+                          timeout 69       timeout 7
+```
+
+**A hipótese acertou o diagnóstico e errou o remédio.** A regra REALMENTE
+corta as perdas — a perda média cai 46%, mais do que os 34% que ela corta do
+ganho médio. Mesmo assim a expectância cai pela metade, porque o **win rate
+despenca de 43,3% para 38,0%**: a regra mata no dia 2 trades que ainda não
+tinham andado mas que teriam virado vencedores. Ganhadores fazem o topo por
+volta do dia 11; exigir avanço no dia 2 é exigir cedo demais.
+
+Reduzir a perda média não basta quando o custo é converter vencedores em
+perdedores. Vale como aviso para toda a família: **não insistir em variações
+de "cortar cedo" para esta estratégia** — o problema não é o tamanho das
+perdas, é que o sinal precisa de tempo para se manifestar.
+
+Lição de método: o padrão "perdedores topam no dia 0" era descrição
+verdadeira e preditor inútil — a informação só existe depois do fato. A
+distinção entre descrever a perda e prevê-la é o que separou uma hipótese
+promissora de um resultado nulo.
+
 ## 🛑 PRIORIDADE MÁXIMA — A BASELINE ANTERIOR ERA INVÁLIDA (bug de warm-up, corrigido)
 
 **Correção de registro (2026-07-23).** A entrada anterior deste backlog

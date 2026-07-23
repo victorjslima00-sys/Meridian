@@ -108,6 +108,8 @@ def run_regime_backtest(
     spread_pct: float = 0.0002,
     fixed_fee_per_order: float = 0.0,  # R$ por ORDEM (não escala com a posição)
     warmup_bars: int = 300,            # História ANTES de `start` só p/ indicadores
+    early_exit_day: int = 0,           # 0 = desligado. Ver saída antecipada abaixo.
+    early_exit_min_gain: float = 0.0,  # fração (0.01 = 1%)
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -235,6 +237,18 @@ def run_regime_backtest(
             elif pos.days_open >= pos.max_hold_days:
                 exit_price = close
                 exit_reason = "timeout"
+            # Saída antecipada: "no fechamento do dia N, sai se não avançou X%".
+            # Vem DEPOIS de stop/alvo de propósito — aqueles são eventos
+            # intradiários já consumados; esta é decisão de fechamento. Usa só
+            # o fechamento do próprio dia, mesma base de informação do timeout,
+            # portanto sem look-ahead.
+            elif (
+                early_exit_day > 0
+                and pos.days_open >= early_exit_day
+                and (close / pos.entry_price - 1) < early_exit_min_gain
+            ):
+                exit_price = close
+                exit_reason = "early_exit"
 
             if exit_price is not None:
                 to_close.append((ticker, exit_price, exit_reason))
