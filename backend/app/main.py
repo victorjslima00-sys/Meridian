@@ -107,7 +107,6 @@ from .data.database import (
     depositar_no_disponivel,
     retirar_do_disponivel,
     DB_PATH,
-    hoje_b3,
     has_snapshot_for,
     compute_current_equity,
     save_equity_snapshot,
@@ -284,11 +283,31 @@ async def _run_exit_scan() -> bool:
 
     all_trustworthy = True
 
+    # Fase 1 Commit 1: o dado de mercado do caminho MAIS quente (proteção de
+    # stop, a cada ~5s) passa a vir pela abstração de Mercado, não do
+    # yfinance direto. A B3Market delega para feed.fetch_recent_data com os
+    # mesmos argumentos — comportamento idêntico, inclusive o cache e o TTL.
+    #
+    # Commit 1b: resolve_market POR TICKER (fail-closed) — um ticker que não
+    # casa nenhum mercado conhecido não vira B3 silenciosamente; é pulado e
+    # a passada é marcada não-efetiva (mesma categoria de "sem avaliação"
+    # que preço não confiável). Isola a falha ao ticker: um símbolo
+    # malformado não pode cegar a proteção de stop de TODAS as posições.
+    from .markets import resolve_market
+
     for ticker in active_tickers:
-        from .data.feed import fetch_recent_data
+        try:
+            market = resolve_market(ticker)
+        except ValueError:
+            logger.error(
+                "Exit scan: ticker %s sem mercado resolvido — pulado "
+                "(fail-closed).", ticker
+            )
+            all_trustworthy = False
+            continue
 
         df_recent = await asyncio.to_thread(
-            fetch_recent_data, ticker, period="1d", interval="15m",
+            market.fetch_ohlcv, ticker, period="1d", interval="15m",
             ttl=worker_state.exit_price_cache_ttl_seconds(),
         )
         if df_recent is None or len(df_recent) == 0:
@@ -480,13 +499,11 @@ async def _avaliar_portao_de_entradas() -> tuple[bool, list[str]]:
     return (len(motivos) == 0, motivos)
 
 
-# Espaçamento entre chamadas de LLM consecutivas no laço de entradas —
-# o tier gratuito do Gemini limita RequestsPerMinutePerProjectPerModel
-# (visto ao vivo: quota_value=15 para gemini-3.1-flash-lite). 50 tickers
-# disparados em sequência sem pausa estouram esse limite em segundos
-# (429 a partir do 16º ticker). 4.5s entre chamadas mantém <= 13,3
-# req/min, com margem sob o teto de 15 — ver BACKLOG.md.
-LLM_CALL_SPACING_SECONDS = 4.5
+# (Fase 1 Commit 2) LLM_CALL_SPACING_SECONDS foi REMOVIDO: espaçava as
+# chamadas Gemini do laço de entradas para não estourar o tier gratuito.
+# Com o sinal agora DETERMINÍSTICO (Donchian, cálculo local sobre dados
+# diários cacheados), não há mais chamada de LLM no laço — nem rate limit a
+# espaçar. O que sobrou disso é o ciclo muito mais rápido.
 
 
 async def _run_one_scan_cycle():
@@ -513,9 +530,14 @@ async def _run_one_scan_cycle():
     except Exception:
         tickers_to_watch = ["PETR4.SA", "VALE3.SA"]
 
-    # Snapshot diário de equity (data do pregão B3) — base do circuit breaker
+    # Snapshot diário de equity (data do pregão) — base do circuit breaker.
+    # Fase 1 Commit 1: a data vem do CALENDÁRIO DO MERCADO, não de um
+    # helper fixo da B3 — num mercado 24/7 (cripto) o conceito de "dia de
+    # pregão" é outro, e é a implementação de Market que decide.
     try:
-        hoje = hoje_b3()
+        from .markets import get_market
+
+        hoje = get_market().today()
         if not has_snapshot_for(hoje):
             equity = await asyncio.to_thread(compute_current_equity)
             save_equity_snapshot(hoje, equity)
@@ -587,7 +609,11 @@ async def _run_one_scan_cycle():
             continue
         await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
 
-        # 1. Analyst (now uses Gemini async)
+        # 1. Analyst — sinal DETERMINÍSTICO Donchian (Fase 1 Commit 2), sem
+        # LLM. O antigo asyncio.sleep(LLM_CALL_SPACING_SECONDS) SAIU junto com
+        # as chamadas Gemini: não há mais rate limit a espaçar (o sinal é
+        # cálculo local sobre dados diários cacheados). Removê-lo também
+        # encurta drasticamente o ciclo.
         analyst = MarketAnalyst(ticker)
         analysis = await analyst.analyze()
         await broadcast_log(
@@ -595,8 +621,6 @@ async def _run_one_scan_cycle():
             f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}",
             "info",
         )
-        # Espaça a próxima chamada de LLM — ver LLM_CALL_SPACING_SECONDS.
-        await asyncio.sleep(LLM_CALL_SPACING_SECONDS)
 
         # 2. Risk Manager (com checagem de correlação)
         if analysis["signal"] != "HOLD":
@@ -612,6 +636,7 @@ async def _run_one_scan_cycle():
             # executor ainda re-checa o teto dentro da transação (defesa em
             # profundidade contra corrida entre duas entradas).
             saldo_operavel = pf.get("saldo_operavel", pf.get("saldo_livre", 0.0))
+            em_posicoes = pf.get("em_posicoes", 0.0)
 
             # Buscar todos os tickers com posição ativa para checar correlação
             from .data.database import get_connection
@@ -626,7 +651,12 @@ async def _run_one_scan_cycle():
             finally:
                 _conn.close()
 
-            rm = RiskManager(saldo_livre=saldo_operavel)
+            # Sizing alinhado ao backtest (Fase 1 Commit 2) DENTRO da margem
+            # operável (usabilidade 2e): o capital em posições entra para
+            # formar o total_equity que o Kelly fixo do backtest usa, mas a
+            # base de caixa é o operável — a posição nasce limitada pelo teto
+            # que o usuário definiu, não pelo livre bruto.
+            rm = RiskManager(saldo_livre=saldo_operavel, em_posicoes=em_posicoes)
             decision = rm.evaluate_trade(
                 analysis, ticker=ticker, open_tickers=open_tickers
             )

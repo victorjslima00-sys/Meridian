@@ -69,3 +69,6 @@ reports/
 patch_*.py
 test_libs*.py
 *.patch
+
+# Config local do Claude Code (launch.json de preview) — nao e do projeto
+.claude/

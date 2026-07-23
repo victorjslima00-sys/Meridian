@@ -2,6 +2,312 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🔴 ACHADO CENTRAL — A ESTRATÉGIA PERDE PARA O CDI (medido 2026-07-23)
+
+**Sharpe contra risk-free real: −0,33.** Não é "edge pequeno": é retorno
+abaixo do ativo livre de risco, com risco de ações.
+
+Carteira do backtest (`max_positions=3`, R$300, 2006-2025, custo 0,10%
+round-trip, warm-up já corrigido) contra o CDI diário do Banco Central
+(API SGS, série 12), 4.958 pregões alinhados:
+
+```
+                       capital final   retorno acum.      a.a.
+  ESTRATEGIA                  852.77          184.3%     5.36%
+  CDI (SGS serie 12)         2044.77          581.6%    10.08%
+  DIFERENCA                 -1191.99          -58.3%
+
+  Sharpe com risk-free ZERO (como optimizer.py:13 calcula) : +0.524
+  Sharpe com risk-free REAL (CDI diario)                   : -0.334
+  excesso medio: -0,01508%/dia  ->  -3,73% a.a. SOBRE o CDI
+  anos em que a estrategia bate o CDI: 7/20
+```
+
+**Consequências que mudam a leitura de tudo que veio antes:**
+
+1. **O `+0,52` de Sharpe que aparecia como resultado positivo é artefato de
+   `risk_free_rate=0.0`** (`trading_bot/backtest/optimizer.py:13`). Num país
+   com CDI de dois dígitos, comparar contra zero infla qualquer estratégia.
+   Todo Sharpe já reportado neste repo tem esse viés embutido.
+2. **O edge estatístico é real e continua irrelevante.** t=+2,78 na
+   expectância por trade — a estratégia realmente ganha dinheiro em termos
+   absolutos (+184%). Só que ganha MENOS que deixar parado no CDI, e com
+   drawdown de −17,9%. **Significância estatística não é vantagem
+   econômica.**
+3. **Não existe capital que resolva.** O melhor caso possível (taxa fixa
+   zero, custo só percentual) já é o 5,36% a.a. acima. Aumentar capital
+   dilui a corretagem fixa mas não muda o retorno percentual — o teto da
+   estratégia como está fica abaixo do CDI em qualquer capital.
+
+**O que isso NÃO significa:** que o motor esteja errado. O backtest, o
+sizing, o executor e a reconexão determinística estão corretos e testados —
+o que está errado é a expectativa de que ESTE conjunto de parâmetros de
+Donchian, neste universo, supere a renda fixa brasileira.
+
+**Próximo passo honesto:** qualquer pesquisa de estratégia daqui em diante
+tem de ser avaliada contra CDI, não contra zero. O portão de aprovação
+(`backtest.min_sharpe_aggregate`) mede contra zero e por isso é fraco demais
+para este mercado.
+
+### Capital mínimo operável: NÃO EXISTE (para esta estratégia)
+
+`fixed_fee_per_order` (corretagem fixa em R$ por ordem) agora é modelado —
+antes o custo era 100% percentual, o que escondia o efeito abaixo:
+
+```
+  capital  taxa fixa  trades    cap.final    CDI daria     CAGR  Sharpe vs CDI  veredito
+      300 R$    0.00     848      852.77     2044.77    5.36%         -0.334  perde do CDI
+      300 R$    2.50      60        5.24     2044.77  -18.32%         -1.558  conta destruida
+      300 R$    5.00      30        8.46     2044.77  -16.35%         -1.326  conta destruida
+    10000 R$    2.50     848    20887.64    68158.85    3.75%         -0.470  perde do CDI
+    10000 R$    5.00     848    13349.53    68158.85    1.46%         -0.665  perde do CDI
+    50000 R$    0.00     848   142128.75   340794.25    5.36%         -0.334  perde do CDI
+    50000 R$    2.50     848   134590.64   340794.25    5.08%         -0.359  perde do CDI
+    50000 R$    5.00     848   127052.53   340794.25    4.78%         -0.384  perde do CDI
+```
+
+- **R$300 com QUALQUER corretagem fixa = conta destruída.** Com R$2,50/ordem
+  o capital acaba após 60 trades (de 848 possíveis). A posição típica é
+  ~R$75; R$5 de round-trip fixo são 6,7% por trade contra uma expectância de
+  +0,56%. Não é margem apertada — é ruína matemática.
+- **O custo fixo deixa de ser fatal por volta de R$10k e vira irrelevante em
+  R$50k** (come 1,61 p.p. do CAGR em R$10k, 0,28 p.p. em R$50k).
+- **Mas o teto não depende do capital.** Controle de invariância de escala:
+  com taxa fixa zero, R$300 e R$50.000 dão CAGR **idêntico** (5,3646%,
+  diferença 0,000000 p.p.) — o retorno percentual não escala com capital.
+  Logo o melhor caso possível é 5,36% a.a. contra CDI de 10,08%.
+  **Nenhum capital torna esta estratégia operável.**
+
+**O que o modelo de custo ainda NÃO cobre** (relevante antes de configurar
+custo real): IR de 15% sobre ganho líquido em swing trade (com isenção de
+R$20 mil/mês em vendas — irrelevante em R$300, material em R$50k);
+emolumentos/liquidação da B3 (~0,03%, hoje teriam de ser embutidos no
+`brokerage_pct`); custo assimétrico entrada vs saída; e impacto de mercado
+proporcional à liquidez.
+
+### Hipótese do whipsaw: REJEITADA no in-sample
+
+A anatomia de 848 trades sugeria que perdedores param de subir quase
+imediatamente. A versão **para a frente** dessa hipótese — "no fechamento do
+dia N, sai se não avançou X%", decidida só com preço até N, sem look-ahead —
+foi implementada (`early_exit_day` / `early_exit_min_gain`) e testada.
+
+Critérios declarados ANTES de rodar: excesso sobre o CDI ≥ 0; amostra ≥
+metade do baseline; ganho tem de aparecer como platô, não como ponto único.
+IS = 2006-2015, OOS = 2016-2025 reservado.
+
+```
+IN-SAMPLE 2006-2015 | CDI 10,91% a.a. | BASELINE sem regra: excesso -6,44% a.a., Sharpe -0,668, n=353
+
+              X=0%                      X=1%                      X=2%
+  N=1    -8.11%aa Sh-0.95 n=504    -8.73%aa Sh-1.14 n=566    -7.70%aa Sh-1.03 n=613
+  N=2    -7.61%aa Sh-0.87 n=468    -7.48%aa Sh-0.92 n=508    -7.37%aa Sh-0.93 n=546
+  N=3    -7.82%aa Sh-0.87 n=439    -9.47%aa Sh-1.13 n=467    -9.32%aa Sh-1.13 n=493
+  N=5    -8.19%aa Sh-0.89 n=400    -8.59%aa Sh-0.95 n=424    -8.46%aa Sh-0.97 n=434
+```
+
+**As 12 células são PIORES que o baseline.** Não há platô, não há ponto
+único bom, não há o que escolher. A hipótese morre no in-sample e o **OOS
+2016-2025 permanece intocado** — preservado para um teste futuro que
+mereça gastá-lo.
+
+**Por que falha** (medido, baseline vs N=2/X=1% no mesmo IS):
+
+```
+                          BASELINE      COM A REGRA
+  n                            353              508
+  win rate                   43.3%            38.0%
+  ganho medio do vencedor    +6.20%           +4.06%   (-34%)
+  perda media do perdedor    -3.98%           -2.15%   (-46%)
+  expectancia por trade     +0.431%          +0.213%   (METADE)
+  saidas                  stop 164,        early_exit 288,
+                          timeout 69       timeout 7
+```
+
+**A hipótese acertou o diagnóstico e errou o remédio.** A regra REALMENTE
+corta as perdas — a perda média cai 46%, mais do que os 34% que ela corta do
+ganho médio. Mesmo assim a expectância cai pela metade, porque o **win rate
+despenca de 43,3% para 38,0%**: a regra mata no dia 2 trades que ainda não
+tinham andado mas que teriam virado vencedores. Ganhadores fazem o topo por
+volta do dia 11; exigir avanço no dia 2 é exigir cedo demais.
+
+Reduzir a perda média não basta quando o custo é converter vencedores em
+perdedores. Vale como aviso para toda a família: **não insistir em variações
+de "cortar cedo" para esta estratégia** — o problema não é o tamanho das
+perdas, é que o sinal precisa de tempo para se manifestar.
+
+Lição de método: o padrão "perdedores topam no dia 0" era descrição
+verdadeira e preditor inútil — a informação só existe depois do fato. A
+distinção entre descrever a perda e prevê-la é o que separou uma hipótese
+promissora de um resultado nulo.
+
+## 🛑 PRIORIDADE MÁXIMA — A BASELINE ANTERIOR ERA INVÁLIDA (bug de warm-up, corrigido)
+
+**Correção de registro (2026-07-23).** A entrada anterior deste backlog
+afirmava duas coisas como fato. Ambas eram falsas, e ambas vinham do MESMO
+defeito de medição:
+
+1. ~~"O projeto não possui estratégia com edge demonstrado" (Sharpe -1,22)~~
+2. ~~"O filtro de tendência FUNCIONA em bear real (`crise_volatilidade`:
+   n=0 trades)"~~
+
+**O bug.** `run_regime_backtest` cortava o DataFrame PARA a janela do regime
+**antes** de calcular indicadores (`engine.py:132`) e depois exigia
+`len(df_hist) >= 200` para a SMA-200 (`engine.py:241`). Os primeiros 200
+pregões de CADA janela ficavam estruturalmente incapazes de gerar sinal:
+
+```
+crise_volatilidade   148 pregões ->   0 testáveis (0%)
+alta_juros           396 pregões -> 196 testáveis (49%)  — só a partir de 2022-03-22
+recuperacao_lateral  372 pregões -> 172 testáveis (46%)  — só a partir de 2023-10-19
+```
+
+- **O `n=0` do `crise_volatilidade` NÃO era prova de nada.** A janela tem 148
+  pregões e o backtest precisava de 200: era impossível abrir posição ali,
+  independentemente do que o mercado fizesse. Foi artefato de medição
+  registrado como fato. Com o bug corrigido, a mesma janela produz **29
+  trades** — o filtro de tendência **não** bloqueou o crash da COVID.
+- **A baseline `-1,22` é inválida.** Vinha de 50 trades colhidos em ~metade
+  de duas janelas e em nada da terceira.
+
+**Correção:** `warmup_bars=300` — barras anteriores ao `start` entram só como
+história de indicador; `all_dates` continua restrito a `[start, end]`, então
+nenhuma entrada ocorre fora do regime medido. Regressão em
+`tests/test_backtest_warmup.py` (RED provado antes do fix).
+
+**Baseline NOVA** (2026-07-23, `scripts/fase1_backtest.py`, parâmetros de
+produção 1.5/3.0, custo 0,10% round-trip), stdout cru:
+
+```
+Trades totais: 138
+Sharpe Agregado: -0.18 ([REPROVA])
+  crise_volatilidade: n=29  wr=34%  aw=+7.9%  al=-4.1%  Sh=-0.17
+  alta_juros        : n=55  wr=31%  aw=+6.9%  al=-3.9%  Sh=-0.95
+  recuperacao_latera: n=54  wr=44%  aw=+6.3%  al=-3.6%  Sh=0.58
+```
+
+- A amostra quase triplicou (50 → 138) e o agregado subiu de -1,22 para
+  **-0,18**. `recuperacao_lateral` passou de -0,09 para **+0,58** — agora
+  acima do portão de 0,5 por regime.
+- **O achado do whipsaw sobrevive, atenuado:** `alta_juros` segue o pior
+  regime (**-0,95**, wr 31%), mas longe do -2,49 anterior.
+- **O `~0.33` do comentário em `settings.yaml` continua irreproduzível** com
+  os dados atuais. Causa provável: tickers deslistados (ELET3/ELET6/NTCO3 dão
+  404 no yfinance hoje), janela/fonte diferente (settings menciona brapi.dev),
+  ou versão anterior da estratégia. Não usar como referência.
+
+**Sobre "existe edge?" — a pergunta segue ABERTA, e a razão é tamanho de
+amostra.** Com desvio de ~5% por trade, provar um edge de +0,5%/trade a 95%
+com 80% de poder exige **~730 trades**; os 3 regimes dão 138. As medições de
+amostra longa (20 anos, universo atual) estão registradas na seção
+"Pesquisa de estratégia" abaixo. **Não afirmar ausência de edge com base nos
+3 regimes** — eles cobrem 18% do tempo disponível e são o pedaço pior dele.
+
+Os Commits 3 (pandas-ta) e 4 (filtro fundamental) da Fase 1 seguem
+**cancelados**: enriquecer indicadores antes de ter uma medição confiável é
+otimizar no escuro. A ordem correta é medir, depois decidir.
+
+
+## Pesquisa de estratégia — medições de amostra longa (2026-07-23)
+
+Universo atual (47 dos 50 tickers retornam dados), 2006-2025, parâmetros de
+produção, com o warm-up já corrigido.
+
+**Carteira real — `max_positions=3`, capital R$300** (é este o número que
+responde "o bot ganha dinheiro", não a expectância por trade):
+
+```
+round-trip     n   cap.final   ret total     CAGR  Sharpe curva    MaxDD  media/trade       t
+     0.0%   848    1051.49      250.5%    6.47%          0.62   -17.5%       0.656%   +3.28
+     0.1%   848     852.77      184.3%    5.36%          0.52   -17.9%       0.556%   +2.78   <- custo modelado hoje
+     0.3%   848     560.60       86.9%    3.18%          0.34   -21.6%       0.356%   +1.78
+     0.5%   848     368.26       22.8%    1.03%          0.15   -30.6%       0.156%   +0.78
+```
+
+Sem cap efetivo (`max_positions=50`, custo 0,1%): n=1148, média +0,524%/trade,
+t=+3,06. **O cap de 3 captura 74% do fluxo de sinal** — não é o gargalo.
+
+### O que estes números dizem, e o que NÃO dizem
+
+- **Custo é a variável que decide.** `engine.py:123` modela
+  `(brokerage 0,03% + spread 0,02%) × 2 = 0,10%` de round-trip. A **0,3% o
+  edge deixa de ser estatisticamente significativo** (t=1,78 < 1,96); a 0,5%
+  o CAGR cai para 1,03%. Para posições de algumas dezenas de reais,
+  corretagem **fixa** (ex.: R$2,50) equivale a 5-10% de round-trip — nesse
+  regime não sobra nada. **Confirmar se a corretora cobra percentual ou fixo
+  é pré-requisito para qualquer decisão de operar.**
+- **Sharpe aqui é contra risk-free ZERO** (`optimizer.py:13`,
+  `risk_free_rate=0.0`). No Brasil de 2006-2025 a taxa livre de risco rodou
+  em dois dígitos na maior parte do período. Um CAGR de 5,36% com drawdown
+  de -17,9% provavelmente perde para renda fixa com folga. **Significância
+  estatística não é o mesmo que valer a pena** — a comparação contra CDI
+  **não foi medida** e é o próximo teste honesto.
+- **Viés de sobrevivência não corrigido:** o universo foi escolhido hoje.
+  Trades pré-2010 rendem +0,98%/trade contra +0,55% pós-2016 — o viés infla,
+  e infla mais no começo da série.
+
+### Anatomia das perdas — re-medida sobre 848 trades
+
+```
+                 dias ate o topo (mediana)   topo no dia 0    MFE mediana
+PERDEDORES (488)            0                52%              +1.93%
+GANHADORES (360)           11                 2%              +8.40%
+```
+
+Saídas: `stop` 420, `stop_gap` 47, `target` 206, `target_gap` 19,
+`timeout` 154. Win rate 42%.
+
+**O padrão é real e forte:** metade dos perdedores nunca faz uma máxima nova
+depois do dia da entrada; 0% dos ganhadores tem MFE ≤ 1%.
+
+⚠️ **MAS o corte "topo até o dia 2 → win rate 8% / topo depois → 69%" é em
+boa parte TAUTOLÓGICO** e não deve ser lido como filtro achado. "Dia do
+topo" só é conhecido na saída: um trade cujo topo é o dia da entrada é, quase
+por definição, um trade que só caiu. A versão acionável tem de ser uma regra
+**para a frente** — "no fim do dia N, com informação só até N, sai se não
+avançou X%" — e essa **não foi testada**. Não confundir a descrição da perda
+com um preditor.
+
+
+## Multi-mercado (encaixe pronto na Fase 1, Commit 1)
+
+- **Resolução de mercado para tickers SEM sufixo (cripto).** Hoje
+  `markets/resolve_market()` descobre o mercado pela FORMA do ticker
+  (sufixo `.SA` ou padrão B3 `AAAA9`) — pragmático porque só a B3 existe.
+  Quando cripto entrar, a forma CERTA de estender é **resolução explícita
+  por config** (um mapa ticker→mercado no `settings.yaml`, ou registro por
+  padrão/prefixo), **NÃO** um `if symbol in {"BTC-USD", ...}` hardcodado em
+  `resolve_market`. Hardcodar símbolo é o bug que só aparece quando o
+  segundo mercado chega. `resolve_market` já FALHA (ValueError) em ticker
+  não reconhecido em vez de assumir B3 — o tripwire está posto; o que falta
+  é a fonte de verdade em config para os símbolos de cripto.
+
+
+- **O que falta para plugar um MERCADO NOVO (ex.: cripto).** A camada
+  `backend/app/markets/` já define os protocolos `Market` e `Broker` e traz
+  `B3Market` + `PaperBroker`. Adicionar cripto = criar uma implementação de
+  `Market` e registrá-la em `markets/__init__.py::get_market`. O que essa
+  implementação precisa resolver, que a B3 resolve de um jeito e cripto de
+  outro:
+  1. **Feed próprio** — a B3 usa yfinance com sufixo `.SA`; cripto usa par
+     (BTC-USD) e provavelmente outra fonte (exchange/API), com outra
+     granularidade e outro rate limit.
+  2. **Calendário 24/7** — `is_open()` na B3 é dia útil + 10:00-17:30; em
+     cripto é sempre aberto, e o conceito de "dia de pregão" (usado no
+     snapshot diário de equity) precisa de uma convenção explícita (UTC?
+     fuso do usuário?).
+  3. **Corretora** — `PaperBroker` serve para simular qualquer mercado, mas
+     uma corretora real de cripto tem taxa, precisão decimal e mínimo de
+     ordem próprios; entra como outra implementação de `Broker`.
+  4. **Sem lote/fracionário** — cripto não tem lote padrão nem mercado
+     fracionário separado, o que remove a fragmentação de custo que a B3 tem
+     (ver item de custo de fracionário abaixo).
+  5. **Feriados** — `B3Market.is_open()` NÃO considera feriados da B3 (exigiria
+     calendário externo). Um mercado novo precisa decidir o equivalente.
+  - Nota: `is_open()` existe mas **não está ligado ao laço de trading** — ligá-la
+    mudaria comportamento (hoje o bot opera fora do pregão). É uma decisão
+    explícita pendente, não um esquecimento.
+
 ## Alta prioridade
 
 - **ROI Global removido do dashboard (Track B, 2026-07-21) — precisa de

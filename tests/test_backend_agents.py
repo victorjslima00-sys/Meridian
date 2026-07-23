@@ -4,54 +4,50 @@ Tests for the Backend AI Committee Agents
 Covers: MarketAnalyst (Gemini LLM), RiskManager (Kelly + Correlation), ExecutorAgent (open/close).
 Uses AsyncMock to avoid real HTTP calls and in-memory SQLite for DB operations.
 """
-import json
+import ast
+import inspect
 import sqlite3
 import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_price_df(n=30, start=100.0, end=130.0) -> pd.DataFrame:
-    prices = np.linspace(start, end, n)
-    df = pd.DataFrame({
-        "close": prices, "open": prices * 0.99,
-        "high": prices * 1.01, "low": prices * 0.98,
-        "volume": [1_000_000] * n,
-        "date": pd.date_range("2024-01-01", periods=n, freq="15min"),
-    })
-    return df
+def _daily_breakout_df(n=260, breakout=1.02) -> pd.DataFrame:
+    """DataFrame DIÁRIO (schema do feed: date/open/high/low/close/volume)
+    com >=201 barras e um breakout Donchian VÁLIDO na última barra:
+    tendência de alta (preço > SMA-200), rompe a máxima de 20 dias, volume
+    2,5x, RSI ~68 (dentro do teto 75). breakout=1.0 -> a última barra NÃO
+    rompe (caso negativo, deve dar HOLD).
 
-
-def _make_downtrend_df(n=30) -> pd.DataFrame:
-    return _make_price_df(n, start=130.0, end=100.0)
-
-
-def _mock_llm_response(
-    signal: str,
-    reason: str = "Test reason",
-    confidence: int = 70,
-    target_price: float = None,
-    stop_loss: float = None,
-) -> MagicMock:
-    """target_price/stop_loss omitidos por padrão (None) preserva o
-    comportamento antigo pra sinais/testes que não envolvem BUY/SELL
-    válido. Passe valores explícitos pra simular uma resposta completa —
-    obrigatório agora que AnalystDecision valida a invariante de preço
-    (dashboard-depth Track A)."""
-    payload = {"signal": signal, "reason": reason, "confidence": confidence}
-    if target_price is not None:
-        payload["target_price"] = target_price
-    if stop_loss is not None:
-        payload["stop_loss"] = stop_loss
-    r = MagicMock()
-    r.content = json.dumps(payload)
-    return r
+    A série usa default_rng(0) (PCG64, determinístico e estável entre
+    versões do numpy) — o fixture foi verificado contra o compute_signal
+    REAL: gera Candidate com breakout=1.02, None com breakout=1.0.
+    """
+    rng = np.random.default_rng(0)
+    price = 85.0
+    closes = []
+    for _ in range(n - 1):
+        price += 0.015 + rng.normal(0, 0.35)
+        closes.append(price)
+    recent_high = max(closes[-20:])
+    closes.append(recent_high * breakout)
+    highs = [c * 1.006 if i < n - 1 else c * 1.001 for i, c in enumerate(closes)]
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2023-01-02", periods=n, freq="D"),
+            "close": closes,
+            "open": [c * 0.999 for c in closes],
+            "high": highs,
+            "low": [c * 0.994 for c in closes],
+            "volume": [1000] * (n - 1) + [2500],
+        }
+    )
 
 
 def _init_in_memory_db() -> sqlite3.Connection:
@@ -88,93 +84,149 @@ def _init_in_memory_db() -> sqlite3.Connection:
 # ============================================================================
 
 class TestMarketAnalyst:
+    """Fase 1 Commit 2: sinal DETERMINÍSTICO Donchian, sem LLM. Ticker B3
+    (PETR4.SA) porque resolve_market só reconhece B3. IBOV mockado para não
+    bloquear (get_ibov_data -> None => ibov_in_uptrend => True), isolando o
+    teste do sinal do filtro macro."""
 
     @pytest.mark.asyncio
-    async def test_returns_buy_on_uptrend_with_gemini(self):
+    async def test_buy_no_rompimento_donchian(self):
         from backend.app.agents.market_analyst import MarketAnalyst
-        # _make_price_df() termina em 130.0 (uptrend) -- stop/alvo dentro
-        # dos limites de signals.stop_pct (4%) e derivado (8%).
-        mock_resp = _mock_llm_response(
-            "BUY", "SMA10 cruzou SMA20 para cima",
-            target_price=136.0, stop_loss=125.0,
-        )
-        with patch("backend.app.agents.market_analyst.fetch_recent_data",
-                   return_value=_make_price_df()), \
-             patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
-            MockLLM.return_value.generate_text_async = AsyncMock(return_value=mock_resp)
-            result = await MarketAnalyst("BTC-USD").analyze()
+        with patch("backend.app.data.feed.fetch_recent_data",
+                   return_value=_daily_breakout_df(breakout=1.02)), \
+             patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+            result = await MarketAnalyst("PETR4.SA").analyze()
         assert result["signal"] == "BUY"
         assert result["last_price"] > 0
+        # Invariante do breakout de compra: stop < preço < alvo.
+        assert result["stop_loss"] < result["last_price"] < result["target_price"]
 
     @pytest.mark.asyncio
-    async def test_returns_sell_on_downtrend_with_gemini(self):
+    async def test_hold_sem_rompimento(self):
         from backend.app.agents.market_analyst import MarketAnalyst
-        # _make_downtrend_df() termina em 100.0 -- stop/alvo dentro dos
-        # limites de signals.stop_pct (4%) e derivado (8%).
-        mock_resp = _mock_llm_response(
-            "SELL", "Downtrend confirmado",
-            target_price=95.0, stop_loss=103.0,
+        with patch("backend.app.data.feed.fetch_recent_data",
+                   return_value=_daily_breakout_df(breakout=1.0)), \
+             patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+            result = await MarketAnalyst("PETR4.SA").analyze()
+        assert result["signal"] == "HOLD"
+
+    @pytest.mark.asyncio
+    async def test_hold_quando_ibov_abaixo_da_sma50(self):
+        from backend.app.agents.market_analyst import MarketAnalyst
+        with patch("backend.app.data.feed.fetch_recent_data",
+                   return_value=_daily_breakout_df(breakout=1.02)), \
+             patch("backend.app.agents.market_analyst.ibov_in_uptrend", return_value=False):
+            result = await MarketAnalyst("PETR4.SA").analyze()
+        assert result["signal"] == "HOLD"
+        assert "IBOV" in result["reason"]
+
+    @pytest.mark.asyncio
+    async def test_hold_com_poucas_barras_diarias(self):
+        from backend.app.agents.market_analyst import MarketAnalyst
+        with patch("backend.app.data.feed.fetch_recent_data",
+                   return_value=_daily_breakout_df(n=150)):
+            result = await MarketAnalyst("PETR4.SA").analyze()
+        assert result["signal"] == "HOLD"
+        assert "insuficientes" in result["reason"].lower()
+
+    @pytest.mark.asyncio
+    async def test_hold_sem_dado(self):
+        from backend.app.agents.market_analyst import MarketAnalyst
+        with patch("backend.app.data.feed.fetch_recent_data", return_value=None):
+            result = await MarketAnalyst("PETR4.SA").analyze()
+        assert result["signal"] == "HOLD"
+
+    @pytest.mark.asyncio
+    async def test_nunca_gera_sell_long_only(self):
+        # compute_signal é um breakout de COMPRA — o sinal é BUY ou HOLD,
+        # jamais SELL (o backtest é long-only).
+        from backend.app.agents.market_analyst import MarketAnalyst
+        with patch("backend.app.data.feed.fetch_recent_data",
+                   return_value=_daily_breakout_df(breakout=1.02)), \
+             patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+            result = await MarketAnalyst("PETR4.SA").analyze()
+        assert result["signal"] in ("BUY", "HOLD")
+
+    def test_llm_saiu_do_caminho_de_decisao(self):
+        """Prova estrutural (AST): o módulo de decisão de entrada não importa
+        ResilientLLMClient nem chama generate_text. É o núcleo do Commit 2 —
+        o LLM não é mais gatilho de trade."""
+        import backend.app.agents.market_analyst as ma
+
+        tree = ast.parse(inspect.getsource(ma))
+        importados, nomes = set(), set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    importados.add(alias.name)
+            if isinstance(node, ast.Attribute):
+                nomes.add(node.attr)
+            if isinstance(node, ast.Name):
+                nomes.add(node.id)
+        assert "ResilientLLMClient" not in importados
+        assert "ResilientLLMClient" not in nomes
+        assert "generate_text" not in nomes
+        assert "generate_text_async" not in nomes
+
+
+# ============================================================================
+# SIZING — EQUIVALÊNCIA COM O BACKTEST (Fase 1 Commit 2)
+# ============================================================================
+
+class TestSizingAlinhadoComBacktest:
+    """Prova que o dimensionamento do fluxo AO VIVO (RiskManager) é
+    IDÊNTICO ao do backtest: a mesma função
+    trading_bot.risk.position_sizing.calculate_position_size, com os mesmos
+    inputs de capital. Rodar ao vivo exatamente o que foi validado, sizing
+    incluído."""
+
+    @pytest.fixture(autouse=True)
+    def _breaker_liberado(self):
+        with patch(
+            "trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade",
+            return_value=True,
+        ):
+            yield
+
+    def test_alocacao_ao_vivo_bate_com_calculate_position_size(self):
+        from backend.app.agents.risk_manager import RiskManager
+        from backend.app.runtime_config import RuntimeConfig
+        from trading_bot.risk.position_sizing import calculate_position_size
+
+        cfg = RuntimeConfig.load()
+        capital_cash, em_posicoes = 300.0, 100.0
+        open_tickers = ["MGLU3.SA"]  # 1 aberta, não-correlacionada com PETR4
+
+        signal = {
+            "signal": "BUY",
+            "last_price": 10.0,
+            "target_price": 12.0,
+            "stop_loss": 9.0,
+            "confidence": 80,  # ignorado pelo sizing novo — de propósito
+        }
+        rm = RiskManager(saldo_livre=capital_cash, em_posicoes=em_posicoes)
+        decision = rm.evaluate_trade(signal, ticker="PETR4.SA", open_tickers=open_tickers)
+
+        esperado = calculate_position_size(
+            capital_cash=capital_cash,
+            open_positions_capital=em_posicoes,
+            kelly_fraction=cfg.kelly_fraction,
+            max_positions=cfg.max_positions,
+            current_open_count=len(open_tickers),
         )
-        with patch("backend.app.agents.market_analyst.fetch_recent_data",
-                   return_value=_make_downtrend_df()), \
-             patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
-            MockLLM.return_value.generate_text_async = AsyncMock(return_value=mock_resp)
-            result = await MarketAnalyst("ETH-USD").analyze()
-        assert result["signal"] == "SELL"
+        assert decision["approved"] is True
+        assert decision["allocated_capital"] == pytest.approx(esperado)
 
-    @pytest.mark.asyncio
-    async def test_llm_offline_fails_closed_with_hold(self):
-        from backend.app.agents.market_analyst import MarketAnalyst
-        with patch("backend.app.agents.market_analyst.fetch_recent_data",
-                   return_value=_make_price_df()), \
-             patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
-            MockLLM.return_value.generate_text_async = AsyncMock(return_value=None)
-            result = await MarketAnalyst("BTC-USD").analyze()
-        assert result["signal"] == "HOLD"
-        assert "indisponível" in result["reason"].lower()
+    def test_sizing_ignora_confianca(self):
+        """Confiança diferente NÃO muda a alocação (Kelly agora é fixo, não
+        derivado de confiança como antes)."""
+        from backend.app.agents.risk_manager import RiskManager
 
-    @pytest.mark.asyncio
-    async def test_invalid_llm_json_fails_closed_with_hold(self):
-        from backend.app.agents.market_analyst import MarketAnalyst
-        bad_resp = MagicMock()
-        bad_resp.content = "isso nao e json"
-        with patch("backend.app.agents.market_analyst.fetch_recent_data",
-                   return_value=_make_price_df()), \
-             patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
-            MockLLM.return_value.generate_text_async = AsyncMock(return_value=bad_resp)
-            result = await MarketAnalyst("BTC-USD").analyze()
-        assert result["signal"] == "HOLD"
-        assert "inválida" in result["reason"].lower()
-
-    @pytest.mark.asyncio
-    async def test_returns_hold_on_insufficient_data(self):
-        from backend.app.agents.market_analyst import MarketAnalyst
-        with patch("backend.app.agents.market_analyst.fetch_recent_data",
-                   return_value=_make_price_df(n=5)), \
-             patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
-            MockLLM.return_value.generate_text_async = AsyncMock()
-            result = await MarketAnalyst("SOL-USD").analyze()
-        assert result["signal"] == "HOLD"
-        MockLLM.return_value.generate_text_async.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_returns_hold_on_no_data(self):
-        from backend.app.agents.market_analyst import MarketAnalyst
-        with patch("backend.app.agents.market_analyst.fetch_recent_data", return_value=None):
-            result = await MarketAnalyst("BTC-USD").analyze()
-        assert result["signal"] == "HOLD"
-
-    @pytest.mark.asyncio
-    async def test_sanitizes_invalid_signal_from_llm(self):
-        from backend.app.agents.market_analyst import MarketAnalyst
-        bad_signal = MagicMock()
-        bad_signal.content = '{"signal": "LONG", "reason": "Resposta inesperada"}'
-        with patch("backend.app.agents.market_analyst.fetch_recent_data",
-                   return_value=_make_price_df()), \
-             patch("backend.app.agents.market_analyst.ResilientLLMClient") as MockLLM:
-            MockLLM.return_value.generate_text_async = AsyncMock(return_value=bad_signal)
-            result = await MarketAnalyst("BTC-USD").analyze()
-        assert result["signal"] == "HOLD"
+        base = {"signal": "BUY", "last_price": 10.0, "target_price": 12.0, "stop_loss": 9.0}
+        rm = RiskManager(saldo_livre=300.0, em_posicoes=0.0)
+        a = rm.evaluate_trade({**base, "confidence": 20}, ticker="PETR4.SA", open_tickers=[])
+        b = rm.evaluate_trade({**base, "confidence": 95}, ticker="PETR4.SA", open_tickers=[])
+        assert a["allocated_capital"] == pytest.approx(b["allocated_capital"])
 
 
 # ============================================================================

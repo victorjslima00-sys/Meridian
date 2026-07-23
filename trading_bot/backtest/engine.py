@@ -106,6 +106,10 @@ def run_regime_backtest(
     ibov_filter: bool = True,          # Filtro macro: só opera quando IBOV > SMA-50
     brokerage_pct: float = 0.0003,
     spread_pct: float = 0.0002,
+    fixed_fee_per_order: float = 0.0,  # R$ por ORDEM (não escala com a posição)
+    warmup_bars: int = 300,            # História ANTES de `start` só p/ indicadores
+    early_exit_day: int = 0,           # 0 = desligado. Ver saída antecipada abaixo.
+    early_exit_min_gain: float = 0.0,  # fração (0.01 = 1%)
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -121,17 +125,48 @@ def run_regime_backtest(
     initial_capital = capital
     round_trip = (brokerage_pct + spread_pct) * 2
 
+    def custo_do_trade(capital_posicao: float) -> float:
+        """Custo de ida-e-volta como fração do capital DA POSIÇÃO.
+
+        `round_trip` é percentual e escala com o tamanho — correto para
+        spread e emolumentos. Corretagem FIXA não escala: R$2,50 numa
+        posição de R$75 é 3,3% por ordem e 6,7% no round-trip; na mesma
+        posição com R$50.000 de capital é 0,04%. Por isso a taxa fixa entra
+        dividida pelo capital alocado, e multiplicada por 2 (um trade são
+        duas ordens: entrada e saída).
+        """
+        if fixed_fee_per_order <= 0 or capital_posicao <= 0:
+            return round_trip
+        return round_trip + (fixed_fee_per_order * 2) / capital_posicao
+
     # Carregar IBOV para filtro macro (se ativo)
     ibov_df = None
     if ibov_filter:
         ibov_df = get_ibov_data(date(start.year - 1, 1, 1))  # 1 ano antes p/ SMA-50
 
-    # Filtrar dados para o período
+    # Filtrar dados para o período — COM buffer de aquecimento.
+    #
+    # Antes, o corte era `df[(ts >= start) & (ts <= end)]` direto, ANTES de
+    # qualquer indicador ser calculado. Como a abertura de posição exige
+    # `len(df_hist) >= 200` (SMA-200), os primeiros 200 pregões de CADA janela
+    # ficavam estruturalmente incapazes de gerar sinal. Medido nos regimes
+    # reais: crise_volatilidade (148 pregões) tinha 0% da janela testável — o
+    # `n=0 trades` dali era ARTEFATO DE MEDIÇÃO, não resultado; alta_juros
+    # rodava 49% da janela e recuperacao_lateral 46%.
+    #
+    # O buffer traz barras ANTERIORES a `start` só como história de indicador.
+    # Ele NÃO estende o período operado: `all_dates` abaixo continua restrito a
+    # [start, end], então nenhuma entrada acontece fora do regime medido.
     regime_data: dict[str, pd.DataFrame] = {}
     for ticker, df in data.items():
-        df_r = df[(df["ts"] >= start) & (df["ts"] <= end)].copy()
-        if len(df_r) >= 30:
-            regime_data[ticker] = df_r.sort_values("ts").reset_index(drop=True)
+        df_s = df.sort_values("ts")
+        df_janela = df_s[(df_s["ts"] >= start) & (df_s["ts"] <= end)]
+        # O mínimo de 30 barras vale para o que negociou DENTRO da janela: o
+        # buffer não pode ressuscitar um ticker ausente no período.
+        if len(df_janela) < 30:
+            continue
+        df_warm = df_s[df_s["ts"] < start].tail(warmup_bars)
+        regime_data[ticker] = pd.concat([df_warm, df_janela]).reset_index(drop=True)
 
     if not regime_data:
         logger.warning("[%s] Sem dados para o regime", regime_name)
@@ -140,9 +175,11 @@ def run_regime_backtest(
             initial_capital=initial_capital, final_capital=initial_capital
         )
 
-    # Todos os dias de pregão do período
+    # Dias simulados = só os pregões DA JANELA (o buffer é história, não período)
     all_dates = sorted(set(
-        ts for df in regime_data.values() for ts in df["ts"].tolist()
+        ts for df in regime_data.values()
+        for ts in df["ts"].tolist()
+        if start <= ts <= end
     ))
 
     logger.info("[%s] %s → %s | %d ativos | %d dias",
@@ -200,13 +237,25 @@ def run_regime_backtest(
             elif pos.days_open >= pos.max_hold_days:
                 exit_price = close
                 exit_reason = "timeout"
+            # Saída antecipada: "no fechamento do dia N, sai se não avançou X%".
+            # Vem DEPOIS de stop/alvo de propósito — aqueles são eventos
+            # intradiários já consumados; esta é decisão de fechamento. Usa só
+            # o fechamento do próprio dia, mesma base de informação do timeout,
+            # portanto sem look-ahead.
+            elif (
+                early_exit_day > 0
+                and pos.days_open >= early_exit_day
+                and (close / pos.entry_price - 1) < early_exit_min_gain
+            ):
+                exit_price = close
+                exit_reason = "early_exit"
 
             if exit_price is not None:
                 to_close.append((ticker, exit_price, exit_reason))
 
         for ticker, exit_price, exit_reason in to_close:
             pos = open_positions.pop(ticker)
-            pnl_pct = (exit_price / pos.entry_price - 1) - round_trip
+            pnl_pct = (exit_price / pos.entry_price - 1) - custo_do_trade(pos.capital)
             pnl_abs = pos.capital * pnl_pct
             capital_cash += pos.capital + pnl_abs   # ← devolve capital (bug v1 corrigido)
 
@@ -308,7 +357,7 @@ def run_regime_backtest(
                     
                 if exit_price is not None:
                     # Trade fechado no mesmo dia
-                    pnl_pct = (exit_price / entry_price_real - 1) - round_trip
+                    pnl_pct = (exit_price / entry_price_real - 1) - custo_do_trade(pos_size)
                     pnl_abs = pos_size * pnl_pct
                     capital_cash += pos_size + pnl_abs
                     
@@ -361,7 +410,7 @@ def run_regime_backtest(
         df_t = regime_data.get(ticker)
         if df_t is not None and not df_t.empty:
             last = df_t.iloc[-1]
-            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - round_trip
+            pnl_pct = (float(last["c"]) / pos.entry_price - 1) - custo_do_trade(pos.capital)
             pnl_abs = pos.capital * pnl_pct
             capital_cash += pos.capital + pnl_abs   # ← devolve capital
 
@@ -408,6 +457,7 @@ def run_full_backtest(
     ibov_filter: bool = True,
     brokerage_pct: float = 0.0003,
     spread_pct: float = 0.0002,
+    warmup_bars: int = 300,
 ) -> list[BacktestResult]:
     """Roda backtest nos 3 regimes obrigatórios do plano v4."""
     regimes = regimes or REGIMES
@@ -425,6 +475,7 @@ def run_full_backtest(
             ibov_filter=ibov_filter,
             brokerage_pct=brokerage_pct,
             spread_pct=spread_pct,
+            warmup_bars=warmup_bars,
         )
         for r in regimes
     ]
