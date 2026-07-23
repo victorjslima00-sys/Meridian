@@ -499,13 +499,11 @@ async def _avaliar_portao_de_entradas() -> tuple[bool, list[str]]:
     return (len(motivos) == 0, motivos)
 
 
-# Espaçamento entre chamadas de LLM consecutivas no laço de entradas —
-# o tier gratuito do Gemini limita RequestsPerMinutePerProjectPerModel
-# (visto ao vivo: quota_value=15 para gemini-3.1-flash-lite). 50 tickers
-# disparados em sequência sem pausa estouram esse limite em segundos
-# (429 a partir do 16º ticker). 4.5s entre chamadas mantém <= 13,3
-# req/min, com margem sob o teto de 15 — ver BACKLOG.md.
-LLM_CALL_SPACING_SECONDS = 4.5
+# (Fase 1 Commit 2) LLM_CALL_SPACING_SECONDS foi REMOVIDO: espaçava as
+# chamadas Gemini do laço de entradas para não estourar o tier gratuito.
+# Com o sinal agora DETERMINÍSTICO (Donchian, cálculo local sobre dados
+# diários cacheados), não há mais chamada de LLM no laço — nem rate limit a
+# espaçar. O que sobrou disso é o ciclo muito mais rápido.
 
 
 async def _run_one_scan_cycle():
@@ -611,7 +609,11 @@ async def _run_one_scan_cycle():
             continue
         await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
 
-        # 1. Analyst (now uses Gemini async)
+        # 1. Analyst — sinal DETERMINÍSTICO Donchian (Fase 1 Commit 2), sem
+        # LLM. O antigo asyncio.sleep(LLM_CALL_SPACING_SECONDS) SAIU junto com
+        # as chamadas Gemini: não há mais rate limit a espaçar (o sinal é
+        # cálculo local sobre dados diários cacheados). Removê-lo também
+        # encurta drasticamente o ciclo.
         analyst = MarketAnalyst(ticker)
         analysis = await analyst.analyze()
         await broadcast_log(
@@ -619,8 +621,6 @@ async def _run_one_scan_cycle():
             f"{ticker} Analysis: {analysis['signal']} - {analysis['reason']}",
             "info",
         )
-        # Espaça a próxima chamada de LLM — ver LLM_CALL_SPACING_SECONDS.
-        await asyncio.sleep(LLM_CALL_SPACING_SECONDS)
 
         # 2. Risk Manager (com checagem de correlação)
         if analysis["signal"] != "HOLD":
@@ -631,6 +631,7 @@ async def _run_one_scan_cycle():
             )
             pf = get_portfolio()
             saldo_livre = pf.get("saldo_livre", 0.0)
+            em_posicoes = pf.get("em_posicoes", 0.0)
 
             # Buscar todos os tickers com posição ativa para checar correlação
             from .data.database import get_connection
@@ -645,7 +646,10 @@ async def _run_one_scan_cycle():
             finally:
                 _conn.close()
 
-            rm = RiskManager(saldo_livre=saldo_livre)
+            # Sizing alinhado ao backtest (Fase 1 Commit 2): passa cash livre
+            # E capital em posições — juntos formam o total_equity que o Kelly
+            # fixo do backtest usa.
+            rm = RiskManager(saldo_livre=saldo_livre, em_posicoes=em_posicoes)
             decision = rm.evaluate_trade(
                 analysis, ticker=ticker, open_tickers=open_tickers
             )

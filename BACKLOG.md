@@ -2,6 +2,53 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🛑 PRIORIDADE MÁXIMA — O PROJETO NÃO POSSUI ESTRATÉGIA COM EDGE DEMONSTRADO
+
+**O projeto não possui estratégia com edge demonstrado.** Donchian mede
+Sharpe **-1,22** (parâmetros de produção) / **-0,85** (defaults antigos
+2.0/4.0) nos dados atuais; o **0.33 citado é irreproduzível**. Perda
+concentrada em `alta_juros` (**-2,49**, win rate **17%**) = regime de
+**whipsaw**. O filtro de tendência **FUNCIONA em bear real**
+(`crise_volatilidade`: **n=0 trades**). **O próximo passo é PESQUISA DE
+ESTRATÉGIA, não mais engenharia.**
+
+Enriquecer uma estratégia sem edge (indicadores novos, filtros
+fundamentais) é otimizar o lugar errado — por isso os Commits 3 (pandas-ta)
+e 4 (filtro fundamental) da Fase 1 foram **cancelados** deliberadamente.
+
+Medido em 2026-07-22, backtest (`scripts/fase1_backtest.py`) com os
+parâmetros de PRODUÇÃO (`settings.yaml`: stop_atr_mult 1.5, target_atr_mult
+3.0), stdout cru:
+
+```
+Sharpe Agregado: -1.22
+  crise_volatilidade: n=0   wr=0%   Sh=0.00
+  alta_juros        : n=29  wr=17%  aw=+7.1%  al=-3.8%  Sh=-2.49
+  recuperacao_latera: n=21  wr=43%  aw=+6.1%  al=-3.5%  Sh=-0.09
+```
+
+- **O "~0.33 (alta_juros)" do comentário em `settings.yaml` é IRREPRODUZÍVEL
+  com os dados atuais.** Nem 1.5/3.0 (Sh alta_juros -2.49) nem os defaults
+  antigos 2.0/4.0 (Sh alta_juros -2.52; agregado -0.85) chegam perto. Causa
+  provável: tickers DESLISTADOS (ELET3/ELET6/NTCO3 dão HTTP 404 no yfinance
+  hoje), janela/fonte de dados diferente (settings menciona brapi.dev), ou
+  versão anterior da estratégia. **Não usar 0.33 como referência** — a
+  referência da fase é o número medido acima.
+- **A perda NÃO é em bear market — é em WHIPSAW.** No crash real
+  (`crise_volatilidade`, COVID 2020) o bot fez **ZERO trades**: o filtro de
+  tendência (SMA-200 no `compute_signal` + macro IBOV>SMA-50) bloqueou todas
+  as entradas — funcionou. A perda vem de `alta_juros`, regime lateral/choppy
+  (juros subindo, mercado de repiques): o filtro deixa entrar nos rallies
+  (preço acima da SMA-200), mas os breakouts falham (wr 17%, falsos
+  rompimentos estopados). **É "perde em chop", não "perde em bear".**
+- É a natureza do breakout de tendência sofrer em lateralização. Ao vivo, se
+  a B3 entrar em whipsaw, o bot sangra até haver: (a) detecção de regime
+  (Fase 3) que reduza/desligue entradas em chop; (b) endurecimento do filtro
+  (choppiness/ADX, ou exigir o rompimento se manter N dias); ou (c)
+  multi-mercado que diversifique. **NÃO interpretar perda em chop como bug** —
+  mas TAMBÉM não confundir com perda em bear (o filtro de bear funciona).
+
+
 ## Multi-mercado (encaixe pronto na Fase 1, Commit 1)
 
 - **Resolução de mercado para tickers SEM sufixo (cripto).** Hoje

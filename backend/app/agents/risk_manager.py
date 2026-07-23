@@ -8,9 +8,17 @@ CORRELATED_GROUPS: List[List[str]] = [
 
 
 class RiskManager:
-    def __init__(self, saldo_livre: float, config=None):
+    def __init__(self, saldo_livre: float, config=None, em_posicoes: float = 0.0):
+        """
+        saldo_livre  = capital_cash (dinheiro fora de posições) — o teto de
+                       alocação, o bot nunca aloca mais que o cash livre.
+        em_posicoes  = open_positions_capital (capital já em posições). Junto
+                       com saldo_livre forma o total_equity que o Kelly do
+                       backtest usa. Default 0.0 preserva chamadas antigas.
+        """
         from ..runtime_config import RuntimeConfig
         self.saldo_livre = saldo_livre
+        self.em_posicoes = em_posicoes
         self.config = config or RuntimeConfig.load()
 
     def _is_correlated_with_open(self, ticker: str, open_tickers: List[str]) -> bool:
@@ -22,29 +30,11 @@ class RiskManager:
                         return True
         return False
 
-    def calculate_position_size(
-        self, confidence: float, win_loss_ratio: float
-    ) -> float:
-        """
-        Uses dynamic Kelly Criterion based on AI confidence and trade asymmetry.
-        Maximum allocation limit bumped to 10% for extremely high conviction trades.
-        """
-        win_rate = max(0.01, min(0.99, confidence / 100.0))
-
-        if win_loss_ratio <= 0:
-            win_loss_ratio = 1.0
-
-        kelly_pct = win_rate - ((1.0 - win_rate) / win_loss_ratio)
-
-        # Max risk allowed is 10% for exceptional opportunities
-        safe_kelly = min(
-            kelly_pct * self.config.kelly_fraction,
-            self.config.max_position_fraction,
-        )
-
-        if safe_kelly < 0:
-            return 0.0
-        return self.saldo_livre * safe_kelly
+    # (Fase 1 Commit 2) O antigo calculate_position_size — Kelly derivado da
+    # CONFIANÇA do LLM, com teto max_position_fraction — foi REMOVIDO: não era
+    # o dimensionamento backtestado. evaluate_trade agora chama a função
+    # compartilhada trading_bot.risk.position_sizing.calculate_position_size,
+    # a MESMA do backtest (Kelly fixo do equity, teto no cash).
 
     def evaluate_trade(
         self,
@@ -127,11 +117,30 @@ class RiskManager:
 
         win_loss_ratio = reward / risk
 
-        pos_size = self.calculate_position_size(confidence, win_loss_ratio)
+        # Fase 1 Commit 2: DIMENSIONAMENTO alinhado ao backtest. Antes usava
+        # um Kelly derivado da CONFIANÇA (self.calculate_position_size), que
+        # NÃO é o que foi backtestado. Agora chama a MESMA função que o
+        # backtest usa (trading_bot.risk.position_sizing.calculate_position_size):
+        # Kelly FIXO (kelly_fraction), sobre o total_equity (cash + posições),
+        # com teto no cash e no número de posições. Rodar ao vivo exatamente o
+        # que foi validado, sizing incluído. win_loss_ratio segue só no texto
+        # de log (não dimensiona mais).
+        from trading_bot.risk.position_sizing import calculate_position_size
+
+        pos_size = calculate_position_size(
+            capital_cash=self.saldo_livre,
+            open_positions_capital=self.em_posicoes,
+            kelly_fraction=self.config.kelly_fraction,
+            max_positions=self.config.max_positions,
+            current_open_count=len(open_tickers),
+        )
         if pos_size <= 0:
             return {
                 "approved": False,
-                "reason": f"Kelly criterion veto (Conf: {confidence}%, R:R {win_loss_ratio:.2f}).",
+                "reason": (
+                    f"Sizing veto: alocação zero (cash R$ {self.saldo_livre:.2f}, "
+                    f"posições {len(open_tickers)}/{self.config.max_positions})."
+                ),
             }
 
         return {
@@ -139,5 +148,9 @@ class RiskManager:
             "allocated_capital": pos_size,
             "target_price": target_price,
             "stop_loss": stop_loss,
-            "reason": f"Aprovado. Risco:Retorno {win_loss_ratio:.2f} | Confiança {confidence}%. Alocando R$ {pos_size:.2f} (limite configurado).",
+            "reason": (
+                f"Aprovado (Donchian). Risco:Retorno {win_loss_ratio:.2f} | "
+                f"Kelly {self.config.kelly_fraction} do equity. "
+                f"Alocando R$ {pos_size:.2f}."
+            ),
         }

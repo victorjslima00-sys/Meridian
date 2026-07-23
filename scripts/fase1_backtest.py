@@ -37,14 +37,22 @@ def main():
     print(f"\nRodando Backtest - Estratégia: {sig_cfg.get('strategy', 'default')}")
     print(f"Capital: R${risk_cfg.get('capital_initial', 300.0):.2f}")
     
-    # Monta os parâmetros do sinal lidos do settings.yaml
+    # Monta os parâmetros do sinal lidos do settings.yaml.
+    # Fase 1 Commit 2: CORREÇÃO — antes passava `target_pct` (que
+    # compute_signal ignora via **kwargs) e NÃO passava os multiplicadores
+    # de ATR, então o backtest rodava com os DEFAULTS do código
+    # (stop_atr_mult=2.0, target_atr_mult=4.0), não com os de PRODUÇÃO
+    # (settings.yaml: 1.5 / 3.0). Agora passa exatamente os de produção, para
+    # que a baseline seja o Sharpe do que roda ao vivo — não de parâmetros
+    # soltos. compute_signal usa stop_atr_mult/target_atr_mult, não *_pct.
     signal_params = {
         "breakout_period": sig_cfg.get("breakout_period", 20),
-        "volume_mult": sig_cfg.get("volume_multiplier", 2.0),
+        "volume_mult": sig_cfg.get("volume_multiplier", 1.5),
         "sma_trend_period": sig_cfg.get("sma_trend_period", 200),
         "rsi_max": sig_cfg.get("rsi_max", 75.0),
+        "stop_atr_mult": sig_cfg.get("stop_atr_mult", 1.5),
         "stop_pct": sig_cfg.get("stop_pct", 0.04),
-        "target_pct": sig_cfg.get("target_pct", 0.10)
+        "target_atr_mult": sig_cfg.get("target_atr_mult", 3.0),
     }
 
     results = run_full_backtest(
@@ -70,7 +78,9 @@ def main():
     print("RESULTADO AGREGADO")
     print("="*50)
     print(f"Trades totais: {sum(r.n_trades for r in results)}")
-    gate_status = "✅ PASSA" if agg.overall_pass else "❌ REPROVA"
+    # ASCII (não emoji): o console cp1252 do Windows não codifica ✅/❌ e o
+    # print quebrava com UnicodeEncodeError DEPOIS do cálculo já pronto.
+    gate_status = "[PASSA]" if agg.overall_pass else "[REPROVA]"
     print(f"Sharpe Agregado: {agg.sharpe_aggregate:.2f} ({gate_status})")
     print("\nDetalhes por Regime:")
     for i, m in enumerate(agg.regimes):
