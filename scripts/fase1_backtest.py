@@ -30,8 +30,11 @@ def main():
     bt_cfg = cfg.get("backtest", default={})
 
     print(f"Buscando dados para {len(tickers)} ativos...")
-    # Fetch from 1 year before the first regime to ensure SMA-200 and IBOV filter have data
-    start_date = date(2019, 1, 1)
+    # O backtest usa `warmup_bars=300` pregões ANTES do início de cada regime
+    # só para alimentar os indicadores (ver engine.py). O buffer só existe de
+    # fato se os dados alcançarem: 2019-01-01 dava ~290 pregões antes do
+    # primeiro regime (2020-03-01), curto. 2018-06-01 cobre os 300 com folga.
+    start_date = date(2018, 6, 1)
     data = fetch_universe_yfinance(tickers, start=start_date)
 
     print(f"\nRodando Backtest - Estratégia: {sig_cfg.get('strategy', 'default')}")

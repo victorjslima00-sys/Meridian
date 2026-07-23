@@ -106,6 +106,7 @@ def run_regime_backtest(
     ibov_filter: bool = True,          # Filtro macro: só opera quando IBOV > SMA-50
     brokerage_pct: float = 0.0003,
     spread_pct: float = 0.0002,
+    warmup_bars: int = 300,            # História ANTES de `start` só p/ indicadores
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -126,12 +127,29 @@ def run_regime_backtest(
     if ibov_filter:
         ibov_df = get_ibov_data(date(start.year - 1, 1, 1))  # 1 ano antes p/ SMA-50
 
-    # Filtrar dados para o período
+    # Filtrar dados para o período — COM buffer de aquecimento.
+    #
+    # Antes, o corte era `df[(ts >= start) & (ts <= end)]` direto, ANTES de
+    # qualquer indicador ser calculado. Como a abertura de posição exige
+    # `len(df_hist) >= 200` (SMA-200), os primeiros 200 pregões de CADA janela
+    # ficavam estruturalmente incapazes de gerar sinal. Medido nos regimes
+    # reais: crise_volatilidade (148 pregões) tinha 0% da janela testável — o
+    # `n=0 trades` dali era ARTEFATO DE MEDIÇÃO, não resultado; alta_juros
+    # rodava 49% da janela e recuperacao_lateral 46%.
+    #
+    # O buffer traz barras ANTERIORES a `start` só como história de indicador.
+    # Ele NÃO estende o período operado: `all_dates` abaixo continua restrito a
+    # [start, end], então nenhuma entrada acontece fora do regime medido.
     regime_data: dict[str, pd.DataFrame] = {}
     for ticker, df in data.items():
-        df_r = df[(df["ts"] >= start) & (df["ts"] <= end)].copy()
-        if len(df_r) >= 30:
-            regime_data[ticker] = df_r.sort_values("ts").reset_index(drop=True)
+        df_s = df.sort_values("ts")
+        df_janela = df_s[(df_s["ts"] >= start) & (df_s["ts"] <= end)]
+        # O mínimo de 30 barras vale para o que negociou DENTRO da janela: o
+        # buffer não pode ressuscitar um ticker ausente no período.
+        if len(df_janela) < 30:
+            continue
+        df_warm = df_s[df_s["ts"] < start].tail(warmup_bars)
+        regime_data[ticker] = pd.concat([df_warm, df_janela]).reset_index(drop=True)
 
     if not regime_data:
         logger.warning("[%s] Sem dados para o regime", regime_name)
@@ -140,9 +158,11 @@ def run_regime_backtest(
             initial_capital=initial_capital, final_capital=initial_capital
         )
 
-    # Todos os dias de pregão do período
+    # Dias simulados = só os pregões DA JANELA (o buffer é história, não período)
     all_dates = sorted(set(
-        ts for df in regime_data.values() for ts in df["ts"].tolist()
+        ts for df in regime_data.values()
+        for ts in df["ts"].tolist()
+        if start <= ts <= end
     ))
 
     logger.info("[%s] %s → %s | %d ativos | %d dias",
@@ -408,6 +428,7 @@ def run_full_backtest(
     ibov_filter: bool = True,
     brokerage_pct: float = 0.0003,
     spread_pct: float = 0.0002,
+    warmup_bars: int = 300,
 ) -> list[BacktestResult]:
     """Roda backtest nos 3 regimes obrigatórios do plano v4."""
     regimes = regimes or REGIMES
@@ -425,6 +446,7 @@ def run_full_backtest(
             ibov_filter=ibov_filter,
             brokerage_pct=brokerage_pct,
             spread_pct=spread_pct,
+            warmup_bars=warmup_bars,
         )
         for r in regimes
     ]

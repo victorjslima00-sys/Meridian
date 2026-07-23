@@ -2,51 +2,132 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
-## 🛑 PRIORIDADE MÁXIMA — O PROJETO NÃO POSSUI ESTRATÉGIA COM EDGE DEMONSTRADO
+## 🛑 PRIORIDADE MÁXIMA — A BASELINE ANTERIOR ERA INVÁLIDA (bug de warm-up, corrigido)
 
-**O projeto não possui estratégia com edge demonstrado.** Donchian mede
-Sharpe **-1,22** (parâmetros de produção) / **-0,85** (defaults antigos
-2.0/4.0) nos dados atuais; o **0.33 citado é irreproduzível**. Perda
-concentrada em `alta_juros` (**-2,49**, win rate **17%**) = regime de
-**whipsaw**. O filtro de tendência **FUNCIONA em bear real**
-(`crise_volatilidade`: **n=0 trades**). **O próximo passo é PESQUISA DE
-ESTRATÉGIA, não mais engenharia.**
+**Correção de registro (2026-07-23).** A entrada anterior deste backlog
+afirmava duas coisas como fato. Ambas eram falsas, e ambas vinham do MESMO
+defeito de medição:
 
-Enriquecer uma estratégia sem edge (indicadores novos, filtros
-fundamentais) é otimizar o lugar errado — por isso os Commits 3 (pandas-ta)
-e 4 (filtro fundamental) da Fase 1 foram **cancelados** deliberadamente.
+1. ~~"O projeto não possui estratégia com edge demonstrado" (Sharpe -1,22)~~
+2. ~~"O filtro de tendência FUNCIONA em bear real (`crise_volatilidade`:
+   n=0 trades)"~~
 
-Medido em 2026-07-22, backtest (`scripts/fase1_backtest.py`) com os
-parâmetros de PRODUÇÃO (`settings.yaml`: stop_atr_mult 1.5, target_atr_mult
-3.0), stdout cru:
+**O bug.** `run_regime_backtest` cortava o DataFrame PARA a janela do regime
+**antes** de calcular indicadores (`engine.py:132`) e depois exigia
+`len(df_hist) >= 200` para a SMA-200 (`engine.py:241`). Os primeiros 200
+pregões de CADA janela ficavam estruturalmente incapazes de gerar sinal:
 
 ```
-Sharpe Agregado: -1.22
-  crise_volatilidade: n=0   wr=0%   Sh=0.00
-  alta_juros        : n=29  wr=17%  aw=+7.1%  al=-3.8%  Sh=-2.49
-  recuperacao_latera: n=21  wr=43%  aw=+6.1%  al=-3.5%  Sh=-0.09
+crise_volatilidade   148 pregões ->   0 testáveis (0%)
+alta_juros           396 pregões -> 196 testáveis (49%)  — só a partir de 2022-03-22
+recuperacao_lateral  372 pregões -> 172 testáveis (46%)  — só a partir de 2023-10-19
 ```
 
-- **O "~0.33 (alta_juros)" do comentário em `settings.yaml` é IRREPRODUZÍVEL
-  com os dados atuais.** Nem 1.5/3.0 (Sh alta_juros -2.49) nem os defaults
-  antigos 2.0/4.0 (Sh alta_juros -2.52; agregado -0.85) chegam perto. Causa
-  provável: tickers DESLISTADOS (ELET3/ELET6/NTCO3 dão HTTP 404 no yfinance
-  hoje), janela/fonte de dados diferente (settings menciona brapi.dev), ou
-  versão anterior da estratégia. **Não usar 0.33 como referência** — a
-  referência da fase é o número medido acima.
-- **A perda NÃO é em bear market — é em WHIPSAW.** No crash real
-  (`crise_volatilidade`, COVID 2020) o bot fez **ZERO trades**: o filtro de
-  tendência (SMA-200 no `compute_signal` + macro IBOV>SMA-50) bloqueou todas
-  as entradas — funcionou. A perda vem de `alta_juros`, regime lateral/choppy
-  (juros subindo, mercado de repiques): o filtro deixa entrar nos rallies
-  (preço acima da SMA-200), mas os breakouts falham (wr 17%, falsos
-  rompimentos estopados). **É "perde em chop", não "perde em bear".**
-- É a natureza do breakout de tendência sofrer em lateralização. Ao vivo, se
-  a B3 entrar em whipsaw, o bot sangra até haver: (a) detecção de regime
-  (Fase 3) que reduza/desligue entradas em chop; (b) endurecimento do filtro
-  (choppiness/ADX, ou exigir o rompimento se manter N dias); ou (c)
-  multi-mercado que diversifique. **NÃO interpretar perda em chop como bug** —
-  mas TAMBÉM não confundir com perda em bear (o filtro de bear funciona).
+- **O `n=0` do `crise_volatilidade` NÃO era prova de nada.** A janela tem 148
+  pregões e o backtest precisava de 200: era impossível abrir posição ali,
+  independentemente do que o mercado fizesse. Foi artefato de medição
+  registrado como fato. Com o bug corrigido, a mesma janela produz **29
+  trades** — o filtro de tendência **não** bloqueou o crash da COVID.
+- **A baseline `-1,22` é inválida.** Vinha de 50 trades colhidos em ~metade
+  de duas janelas e em nada da terceira.
+
+**Correção:** `warmup_bars=300` — barras anteriores ao `start` entram só como
+história de indicador; `all_dates` continua restrito a `[start, end]`, então
+nenhuma entrada ocorre fora do regime medido. Regressão em
+`tests/test_backtest_warmup.py` (RED provado antes do fix).
+
+**Baseline NOVA** (2026-07-23, `scripts/fase1_backtest.py`, parâmetros de
+produção 1.5/3.0, custo 0,10% round-trip), stdout cru:
+
+```
+Trades totais: 138
+Sharpe Agregado: -0.18 ([REPROVA])
+  crise_volatilidade: n=29  wr=34%  aw=+7.9%  al=-4.1%  Sh=-0.17
+  alta_juros        : n=55  wr=31%  aw=+6.9%  al=-3.9%  Sh=-0.95
+  recuperacao_latera: n=54  wr=44%  aw=+6.3%  al=-3.6%  Sh=0.58
+```
+
+- A amostra quase triplicou (50 → 138) e o agregado subiu de -1,22 para
+  **-0,18**. `recuperacao_lateral` passou de -0,09 para **+0,58** — agora
+  acima do portão de 0,5 por regime.
+- **O achado do whipsaw sobrevive, atenuado:** `alta_juros` segue o pior
+  regime (**-0,95**, wr 31%), mas longe do -2,49 anterior.
+- **O `~0.33` do comentário em `settings.yaml` continua irreproduzível** com
+  os dados atuais. Causa provável: tickers deslistados (ELET3/ELET6/NTCO3 dão
+  404 no yfinance hoje), janela/fonte diferente (settings menciona brapi.dev),
+  ou versão anterior da estratégia. Não usar como referência.
+
+**Sobre "existe edge?" — a pergunta segue ABERTA, e a razão é tamanho de
+amostra.** Com desvio de ~5% por trade, provar um edge de +0,5%/trade a 95%
+com 80% de poder exige **~730 trades**; os 3 regimes dão 138. As medições de
+amostra longa (20 anos, universo atual) estão registradas na seção
+"Pesquisa de estratégia" abaixo. **Não afirmar ausência de edge com base nos
+3 regimes** — eles cobrem 18% do tempo disponível e são o pedaço pior dele.
+
+Os Commits 3 (pandas-ta) e 4 (filtro fundamental) da Fase 1 seguem
+**cancelados**: enriquecer indicadores antes de ter uma medição confiável é
+otimizar no escuro. A ordem correta é medir, depois decidir.
+
+
+## Pesquisa de estratégia — medições de amostra longa (2026-07-23)
+
+Universo atual (47 dos 50 tickers retornam dados), 2006-2025, parâmetros de
+produção, com o warm-up já corrigido.
+
+**Carteira real — `max_positions=3`, capital R$300** (é este o número que
+responde "o bot ganha dinheiro", não a expectância por trade):
+
+```
+round-trip     n   cap.final   ret total     CAGR  Sharpe curva    MaxDD  media/trade       t
+     0.0%   848    1051.49      250.5%    6.47%          0.62   -17.5%       0.656%   +3.28
+     0.1%   848     852.77      184.3%    5.36%          0.52   -17.9%       0.556%   +2.78   <- custo modelado hoje
+     0.3%   848     560.60       86.9%    3.18%          0.34   -21.6%       0.356%   +1.78
+     0.5%   848     368.26       22.8%    1.03%          0.15   -30.6%       0.156%   +0.78
+```
+
+Sem cap efetivo (`max_positions=50`, custo 0,1%): n=1148, média +0,524%/trade,
+t=+3,06. **O cap de 3 captura 74% do fluxo de sinal** — não é o gargalo.
+
+### O que estes números dizem, e o que NÃO dizem
+
+- **Custo é a variável que decide.** `engine.py:123` modela
+  `(brokerage 0,03% + spread 0,02%) × 2 = 0,10%` de round-trip. A **0,3% o
+  edge deixa de ser estatisticamente significativo** (t=1,78 < 1,96); a 0,5%
+  o CAGR cai para 1,03%. Para posições de algumas dezenas de reais,
+  corretagem **fixa** (ex.: R$2,50) equivale a 5-10% de round-trip — nesse
+  regime não sobra nada. **Confirmar se a corretora cobra percentual ou fixo
+  é pré-requisito para qualquer decisão de operar.**
+- **Sharpe aqui é contra risk-free ZERO** (`optimizer.py:13`,
+  `risk_free_rate=0.0`). No Brasil de 2006-2025 a taxa livre de risco rodou
+  em dois dígitos na maior parte do período. Um CAGR de 5,36% com drawdown
+  de -17,9% provavelmente perde para renda fixa com folga. **Significância
+  estatística não é o mesmo que valer a pena** — a comparação contra CDI
+  **não foi medida** e é o próximo teste honesto.
+- **Viés de sobrevivência não corrigido:** o universo foi escolhido hoje.
+  Trades pré-2010 rendem +0,98%/trade contra +0,55% pós-2016 — o viés infla,
+  e infla mais no começo da série.
+
+### Anatomia das perdas — re-medida sobre 848 trades
+
+```
+                 dias ate o topo (mediana)   topo no dia 0    MFE mediana
+PERDEDORES (488)            0                52%              +1.93%
+GANHADORES (360)           11                 2%              +8.40%
+```
+
+Saídas: `stop` 420, `stop_gap` 47, `target` 206, `target_gap` 19,
+`timeout` 154. Win rate 42%.
+
+**O padrão é real e forte:** metade dos perdedores nunca faz uma máxima nova
+depois do dia da entrada; 0% dos ganhadores tem MFE ≤ 1%.
+
+⚠️ **MAS o corte "topo até o dia 2 → win rate 8% / topo depois → 69%" é em
+boa parte TAUTOLÓGICO** e não deve ser lido como filtro achado. "Dia do
+topo" só é conhecido na saída: um trade cujo topo é o dia da entrada é, quase
+por definição, um trade que só caiu. A versão acionável tem de ser uma regra
+**para a frente** — "no fim do dia N, com informação só até N, sai se não
+avançou X%" — e essa **não foi testada**. Não confundir a descrição da perda
+com um preditor.
 
 
 ## Multi-mercado (encaixe pronto na Fase 1, Commit 1)
