@@ -1,5 +1,6 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, ChevronRight, X } from 'lucide-react';
+import { FreshnessTag } from './Freshness';
 
 // ─── Narrativa por posição — mesmo dado real de sempre (alocado,
 // current_price, pnl_monetario vêm prontos da API, honest-dashboard
@@ -136,7 +137,7 @@ const PositionNarrativeCard = ({ pos, onClick, onClose }) => {
   );
 };
 
-const PositionNarrative = ({ positions, onSelectTrade, onClosePosition, lastUpdatedLabel }) => {
+const PositionNarrative = ({ positions, onSelectTrade, onClosePosition, lastUpdated, refreshing }) => {
   const ativas = positions?.active_positions || [];
 
   return (
@@ -146,11 +147,7 @@ const PositionNarrative = ({ positions, onSelectTrade, onClosePosition, lastUpda
           <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Suas Posições</h3>
           <span className="muted-tag">O que está aberto agora, explicado — clique numa posição pra ver o dossiê completo</span>
         </div>
-        {lastUpdatedLabel && (
-          <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-            atualizado {lastUpdatedLabel}
-          </span>
-        )}
+        <FreshnessTag ts={lastUpdated} refreshing={refreshing} />
       </div>
 
       {ativas.length === 0 ? (

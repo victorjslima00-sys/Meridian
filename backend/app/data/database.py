@@ -63,6 +63,7 @@ def init_db():
             patrimonio_total  REAL DEFAULT 0.0,
             saldo_disponivel  REAL DEFAULT 100.0,
             em_posicoes       REAL DEFAULT 0.0,
+            margem_operavel   REAL,
             updated_at        TIMESTAMP
         )
         """
@@ -90,6 +91,11 @@ def init_db():
                     patrimonio_total = 0.0
             """
             )
+
+        # usabilidade 2e: teto de exposição do bot. NULL = sem teto
+        # (comportamento anterior intacto em bancos existentes).
+        if "margem_operavel" not in existing:
+            cursor.execute("ALTER TABLE portfolio ADD COLUMN margem_operavel REAL")
 
         # Trades Table
         cursor.execute(
@@ -201,6 +207,8 @@ def get_portfolio() -> Dict[str, Any]:
             "saldo_disponivel": 100.0,
             "em_posicoes": 0.0,
             "saldo_livre": 100.0,
+            "margem_operavel": None,
+            "saldo_operavel": 100.0,
         }
 
     d = dict(row)
@@ -210,7 +218,59 @@ def get_portfolio() -> Dict[str, Any]:
     # entregue ao bot). Bug real encontrado pelo usuário: os dois
     # apareciam sempre iguais no dashboard porque esta linha existia.
     d["saldo_livre"] = round(d.get("saldo_disponivel", 0) - d.get("em_posicoes", 0), 4)
+    # usabilidade 2e — fonte única do capital operável do bot: com
+    # margem_operavel definida, ela é um TETO de exposição total
+    # (em_posicoes + novas alocações ≤ margem); sem margem (NULL),
+    # operável = livre, comportamento anterior. Todo consumidor (sizing
+    # do laço automático, rota manual, executor, UI) lê ESTE campo —
+    # nunca recalcula por conta própria.
+    margem = d.get("margem_operavel")
+    if margem is None:
+        d["saldo_operavel"] = d["saldo_livre"]
+    else:
+        d["saldo_operavel"] = round(
+            min(d["saldo_livre"], max(0.0, margem - d.get("em_posicoes", 0))), 4
+        )
     return d
+
+
+def set_margem_operavel(valor: float) -> Dict[str, Any]:
+    """usabilidade 2e: define o teto de exposição do bot (ação humana).
+    Validações fail-closed: nunca negativa, nunca acima do saldo real
+    entregue ao bot (saldo_disponivel). Zero é válido — congela novas
+    entradas, saídas seguem gerenciadas (mesma semântica FAIL-CLOSED do
+    resto do sistema)."""
+    if valor < 0:
+        return {"ok": False, "error": "Margem operável não pode ser negativa."}
+
+    conn = get_connection(isolation_level="IMMEDIATE")
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, saldo_disponivel FROM portfolio ORDER BY id DESC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {"ok": False, "error": "Portfolio não encontrado."}
+
+        pid, disponivel = row
+        if valor > disponivel:
+            return {
+                "ok": False,
+                "error": (
+                    f"Margem acima do saldo real entregue ao bot "
+                    f"(disponível: R$ {disponivel:.2f})."
+                ),
+            }
+
+        cursor.execute(
+            "UPDATE portfolio SET margem_operavel=?, updated_at=? WHERE id=?",
+            (valor, datetime.datetime.now(), pid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "margem_operavel": valor}
 
 
 def depositar_no_disponivel(valor: float) -> Dict[str, Any]:

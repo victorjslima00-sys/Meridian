@@ -117,7 +117,11 @@ export const PositionSizingCalc = ({ capital }) => {
   );
 };
 
-export const FastExecutionWidget = React.memo(({ trade, saldoLivre = 0, onExecute }) => {
+// usabilidade 2b: o rodapé "Poder de Compra" (saldo_livre, já exibido no
+// KPI "Caixa Livre" sempre visível acima) e "Margem req: R$ 0,00" (texto
+// FIXO no código imitando métrica — paper trading não tem margem) foram
+// removidos. Um fato, um lugar; nenhum número fabricado.
+export const FastExecutionWidget = React.memo(({ trade, onExecute }) => {
   const [qty, setQty] = useState(100);
   const [loading, setLoading] = useState(false);
   const [localTicker, setLocalTicker] = useState('');
@@ -192,10 +196,6 @@ export const FastExecutionWidget = React.memo(({ trade, saldoLivre = 0, onExecut
           <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: '0.2rem', textTransform: 'uppercase', fontWeight: 700 }}>Preço</div>
           <input type="text" defaultValue="Mercado" style={{ width: '100%', background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)', color: '#10b981', padding: '0.5rem', borderRadius: '4px', fontSize: '0.85rem', fontFamily: 'JetBrains Mono, monospace', textAlign: 'center', fontWeight: 700 }} readOnly />
         </div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', color: 'var(--text-muted)', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '0.75rem' }}>
-        <span>Poder de Compra: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ {saldoLivre.toFixed(2)}</strong></span>
-        <span>Margem req: <strong style={{ color: '#fff', fontFamily: 'JetBrains Mono, monospace' }}>R$ 0,00</strong></span>
       </div>
     </div>
   );
