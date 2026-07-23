@@ -168,6 +168,44 @@ distinção entre descrever a perda e prevê-la é o que separou uma hipótese
 promissora de um resultado nulo.
 
 
+## 🪙 CRIPTO — o custo já começa dentro da faixa que matou a B3
+
+Registrado ANTES de qualquer implementação, porque muda a expectativa.
+
+`engine.py` calcula `round_trip = (brokerage_pct + spread_pct) × 2`. Todas as
+medições da BT foram reportadas em **round-trip**:
+
+```
+  B3, modelo usado          0,10% round-trip  (0,05% por ponta)
+  Binance taker realista    0,20% round-trip  (0,10% por ordem)   = 2x a B3
+  Binance conservador       0,30% round-trip  (com slippage)      = 3x a B3
+```
+
+**A B3 perdeu significância estatística a 0,3% de round-trip** (t caiu de
++2,78 para +1,78, abaixo de 1,96) e o CAGR desabou de 5,36% para 3,18%.
+
+Ou seja: **cripto na Binance começa a 0,2% — metade do caminho até o ponto
+onde o edge da B3 morreu — e o cenário conservador cai exatamente em cima
+dele.** Não é um detalhe de configuração; é a expectativa correta antes de
+rodar. Uma estratégia de rompimento em cripto precisa de um edge bruto
+materialmente maior que o da B3 só para empatar depois do custo.
+
+### Critério de aprovação declarado ANTES de rodar
+
+Benchmark primário: **buy-and-hold da mesma carteira de moedas**, no mesmo
+período, com o **mesmo custo aplicado**. CDI como piso.
+
+Aprovação exige **ajuste a risco, não retorno absoluto**:
+
+- `Sharpe(estratégia) > Sharpe(buy-and-hold)` **E**
+- `Calmar(estratégia) > Calmar(buy-and-hold)`
+
+Retorno absoluto sozinho NÃO aprova. Buy-and-hold de BTC tem drawdown de
+~-80%; uma estratégia que rende 70% do BTC com metade do drawdown pode ser
+superior, e uma que rende mais com drawdown pior não é. Este critério existe
+para não repetir na cripto o erro que a B3 expôs: aprovar contra régua baixa.
+
+
 ## 🔧 DEFEITOS DE MEDIÇÃO — corrigir ANTES de qualquer pesquisa nova
 
 Nenhum dos dois é o portão (`backtest.min_sharpe_aggregate`). **O portão está
