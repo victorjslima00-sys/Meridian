@@ -2,6 +2,32 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🧭 ACHADO METODOLÓGICO (vale mais que qualquer resultado desta sessão)
+
+Duas armadilhas que o projeto atravessou inteiras antes de perceber. Valem
+para toda pesquisa futura, aqui ou em outro mercado.
+
+**1. Significância estatística ≠ vantagem econômica.** O edge do Donchian é
+REAL e mensurável: t=+2,78 na carteira, +3,06 na expectância por trade,
+1.100+ trades, IC95% por bootstrap de bloco anual que não cruza zero. E
+mesmo assim a estratégia PERDE do CDI (5,36% contra 10,08% a.a.). Provar que
+um edge existe e provar que ele vale a pena são perguntas diferentes, e a
+primeira não implica a segunda. **Sempre medir contra o custo de
+oportunidade real, nunca contra zero.**
+
+**2. Descrever a perda não é prevê-la.** A anatomia de 848 trades mostrou um
+padrão nítido e estatisticamente forte: 52% dos perdedores fazem o topo no
+próprio dia da entrada; 0% dos ganhadores tem MFE ≤ 1%; o corte "topo até o
+dia 2" separava win rate de 8% contra 69%. Parecia um filtro pronto. **Era
+descrição verdadeira e preditor inútil** — "dia do topo" só se conhece na
+saída, então a informação que separa os grupos só existe DEPOIS do fato. A
+versão para a frente da mesma hipótese foi rejeitada em 12 de 12 células.
+
+Corolário prático: toda métrica derivada do histórico COMPLETO de um trade
+(MFE, dia do topo, duração) é suspeita como sinal. Antes de desenhar regra
+em cima de um padrão, perguntar: **essa informação existiria no momento da
+decisão?**
+
 ## 🔴 ACHADO CENTRAL — A ESTRATÉGIA PERDE PARA O CDI (medido 2026-07-23)
 
 **Sharpe contra risk-free real: −0,33.** Não é "edge pequeno": é retorno
@@ -140,6 +166,87 @@ Lição de método: o padrão "perdedores topam no dia 0" era descrição
 verdadeira e preditor inútil — a informação só existe depois do fato. A
 distinção entre descrever a perda e prevê-la é o que separou uma hipótese
 promissora de um resultado nulo.
+
+
+## 🪙 CRIPTO — o custo já começa dentro da faixa que matou a B3
+
+Registrado ANTES de qualquer implementação, porque muda a expectativa.
+
+`engine.py` calcula `round_trip = (brokerage_pct + spread_pct) × 2`. Todas as
+medições da BT foram reportadas em **round-trip**:
+
+```
+  B3, modelo usado          0,10% round-trip  (0,05% por ponta)
+  Binance taker realista    0,20% round-trip  (0,10% por ordem)   = 2x a B3
+  Binance conservador       0,30% round-trip  (com slippage)      = 3x a B3
+```
+
+**A B3 perdeu significância estatística a 0,3% de round-trip** (t caiu de
++2,78 para +1,78, abaixo de 1,96) e o CAGR desabou de 5,36% para 3,18%.
+
+Ou seja: **cripto na Binance começa a 0,2% — metade do caminho até o ponto
+onde o edge da B3 morreu — e o cenário conservador cai exatamente em cima
+dele.** Não é um detalhe de configuração; é a expectativa correta antes de
+rodar. Uma estratégia de rompimento em cripto precisa de um edge bruto
+materialmente maior que o da B3 só para empatar depois do custo.
+
+### Critério de aprovação declarado ANTES de rodar
+
+Benchmark primário: **buy-and-hold da mesma carteira de moedas**, no mesmo
+período, com o **mesmo custo aplicado**. CDI como piso.
+
+Aprovação exige **ajuste a risco, não retorno absoluto**:
+
+- `Sharpe(estratégia) > Sharpe(buy-and-hold)` **E**
+- `Calmar(estratégia) > Calmar(buy-and-hold)`
+
+Retorno absoluto sozinho NÃO aprova. Buy-and-hold de BTC tem drawdown de
+~-80%; uma estratégia que rende 70% do BTC com metade do drawdown pode ser
+superior, e uma que rende mais com drawdown pior não é. Este critério existe
+para não repetir na cripto o erro que a B3 expôs: aprovar contra régua baixa.
+
+
+## 🔧 DEFEITOS DE MEDIÇÃO — corrigir ANTES de qualquer pesquisa nova
+
+Nenhum dos dois é o portão (`backtest.min_sharpe_aggregate`). **O portão está
+CORRETO:** `metrics.py::_trade_sharpe` já subtrai risk-free e reprovou a
+estratégia atual (`Sharpe Agregado: -0.18 [REPROVA]`). Os defeitos estão em
+volta dele — registrar isso importa porque a sessão chegou a acreditar que o
+portão media contra zero, confundindo-o com o otimizador.
+
+### 1. PRIORIDADE ALTA — o otimizador ranqueia contra ZERO
+
+`trading_bot/backtest/optimizer.py:13` —
+`calculate_sharpe_ratio(equity_curve, risk_free_rate: float = 0.0)`.
+
+Não é o portão, mas é o que **ESCOLHE parâmetros** numa varredura
+(`optimizer.py:65` ordena os resultados por esse Sharpe). Otimizar com ele
+seleciona configurações que batem ZERO, não o CDI — e entrega o resultado
+com aparência de rigor: varredura ampla, ranking, melhor configuração no
+topo. Num país com juros de dois dígitos, "melhor que zero" é um filtro que
+não filtra nada.
+
+**Qualquer pesquisa futura de parâmetros DEVE corrigir isto antes de rodar.**
+Rodar a Fase 3 (quant optimizer) com o default atual produz resultado
+ENGANOSO, não apenas subótimo.
+
+### 2. Risk-free é número mágico fixo
+
+`trading_bot/backtest/metrics.py:24` — `RISK_FREE_RATE_ANNUAL = 0.10`
+("Selic aproximada"). Usado por `_trade_sharpe` (o portão) e por `_sortino`.
+
+Calibrou bem **por coincidência**: o CDI medido em 2006-2025 deu 10,08% a.a.
+Mas é fixo — se a Selic for a 15% ou cair a 2%, o portão segue medindo
+contra 10% em silêncio, e aprova ou reprova errado sem avisar. Viola a regra
+do próprio CLAUDE.md: "nunca usar número/limite inventado quando já existe um
+equivalente configurado no sistema — derivar dali, não duplicar".
+
+**Deveria vir da série real do BCB** (API SGS, série 12 = CDI diário), que
+esta sessão usou para medir mas que **NÃO está no repositório** — vive num
+script de scratchpad e se perde. Integrar como módulo com cache local e
+derivar o risk-free do período que o backtest realmente cobre, em vez de uma
+constante anual.
+
 
 ## 🛑 PRIORIDADE MÁXIMA — A BASELINE ANTERIOR ERA INVÁLIDA (bug de warm-up, corrigido)
 
