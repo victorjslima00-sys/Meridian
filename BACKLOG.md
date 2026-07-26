@@ -7,13 +7,17 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
 Duas armadilhas que o projeto atravessou inteiras antes de perceber. Valem
 para toda pesquisa futura, aqui ou em outro mercado.
 
-**1. Significância estatística ≠ vantagem econômica.** O edge do Donchian é
-REAL e mensurável: t=+2,78 na carteira, +3,06 na expectância por trade,
-1.100+ trades, IC95% por bootstrap de bloco anual que não cruza zero. E
-mesmo assim a estratégia PERDE do CDI (5,36% contra 10,08% a.a.). Provar que
-um edge existe e provar que ele vale a pena são perguntas diferentes, e a
-primeira não implica a segunda. **Sempre medir contra o custo de
-oportunidade real, nunca contra zero.**
+**1. Significância num nível não transfere para outro.** O edge POR TRADE do
+Donchian é real e significativo: t=+2,78, +3,06 na expectância por trade,
+1.100+ trades, IC95% por bootstrap de bloco anual que não cruza zero. Mas o
+excesso da CARTEIRA sobre o CDI **não** é significativo: t=+1,21 (o sleeve de
+ações é ≤25% do patrimônio, então o alfa dele dilui contra o benchmark).
+Provar que os trades têm expectância positiva e provar que a carteira bate a
+renda fixa são perguntas diferentes — a primeira não implica a segunda.
+**Sempre medir contra o custo de oportunidade real (CDI), e no nível da
+CARTEIRA, não do trade.** (Ver o achado central: a conclusão "perde do CDI"
+era artefato de caixa a zero; corrigida, o ponto-estimativa vira positivo mas
+segue dentro do ruído.)
 
 **2. Descrever a perda não é prevê-la.** A anatomia de 848 trades mostrou um
 padrão nítido e estatisticamente forte: 52% dos perdedores fazem o topo no
@@ -28,54 +32,71 @@ Corolário prático: toda métrica derivada do histórico COMPLETO de um trade
 em cima de um padrão, perguntar: **essa informação existiria no momento da
 decisão?**
 
-## 🔴 ACHADO CENTRAL — A ESTRATÉGIA PERDE PARA O CDI (medido 2026-07-23)
+## 🟡 ACHADO CENTRAL — REVERTIDO: "perde para o CDI" era artefato do caixa a zero
 
-**Sharpe contra risk-free real: −0,33.** Não é "edge pequeno": é retorno
-abaixo do ativo livre de risco, com risco de ações.
+**A conclusão anterior ("perde para o CDI, Sharpe −0,33") NÃO sobreviveu à
+correção do caixa ocioso.** Era artefato de um defeito de modelagem: o
+backtest rendia 0% sobre o dinheiro fora de posições, que é ~66% do
+patrimônio em média (kelly 0,25 / 3 slots → teto de exposição 25%; 42% dos
+pregões sem posição alguma). A comparação confrontava 100%-no-CDI contra
+34%-em-ações-**e-66%-embaixo-do-colchão**.
 
-Carteira do backtest (`max_positions=3`, R$300, 2006-2025, custo 0,10%
-round-trip, warm-up já corrigido) contra o CDI diário do Banco Central
-(API SGS, série 12), 4.958 pregões alinhados:
+Corrigido (`cash_daily_yield`, o caixa ocioso rende o CDI diário real,
+`trading_bot/data/cdi_sgs12.csv`), a mesma carteira de PRODUÇÃO
+(`max_positions=3`, R$300, 2006-2025, custo 0,10%), stdout cru:
 
 ```
-                       capital final   retorno acum.      a.a.
-  ESTRATEGIA                  852.77          184.3%     5.36%
-  CDI (SGS serie 12)         2044.77          581.6%    10.08%
-  DIFERENCA                 -1191.99          -58.3%
+cenario                          n    final R$    CAGR    maxDD  Sharpe vs CDI  Calmar
+COM filtro + caixa CDI (PROD)  848     3289.94  12.72%  -16.9%        +0.270   0.752
+COM filtro, caixa ZERO (antigo)848      852.77   5.36%  -17.9%        -0.334   0.300
+CDI (SGS serie 12), base R$300  —      2046.10  10.08%      —              —       —
 
-  Sharpe com risk-free ZERO (como optimizer.py:13 calcula) : +0.524
-  Sharpe com risk-free REAL (CDI diario)                   : -0.334
-  excesso medio: -0,01508%/dia  ->  -3,73% a.a. SOBRE o CDI
-  anos em que a estrategia bate o CDI: 7/20
+excesso sobre CDI (config producao, caixa corrigido):
+  Information Ratio anualizado = +0.270
+  t-stat ingenuo               = +1.21   (>1.96 = significativo)
+  t-stat robusto a cluster anual = +1.24   (20 anos)
+  anos com excesso positivo sobre CDI: 9/20
 ```
 
-**Consequências que mudam a leitura de tudo que veio antes:**
+**A leitura honesta — nem "perde", nem "ganha" com confiança:**
 
-1. **O `+0,52` de Sharpe que aparecia como resultado positivo é artefato de
-   `risk_free_rate=0.0`** (`trading_bot/backtest/optimizer.py:13`). Num país
-   com CDI de dois dígitos, comparar contra zero infla qualquer estratégia.
-   Todo Sharpe já reportado neste repo tem esse viés embutido.
-2. **O edge estatístico é real e continua irrelevante.** t=+2,78 na
-   expectância por trade — a estratégia realmente ganha dinheiro em termos
-   absolutos (+184%). Só que ganha MENOS que deixar parado no CDI, e com
-   drawdown de −17,9%. **Significância estatística não é vantagem
-   econômica.**
-3. **Não existe capital que resolva.** O melhor caso possível (taxa fixa
-   zero, custo só percentual) já é o 5,36% a.a. acima. Aumentar capital
-   dilui a corretagem fixa mas não muda o retorno percentual — o teto da
-   estratégia como está fica abaixo do CDI em qualquer capital.
+1. **O sinal do ponto-estimativa VIROU.** Com o caixa corrigido a carteira
+   rende **12,72% a.a. contra 10,08% do CDI**, com drawdown menor (−16,9% vs
+   as próprias oscilações do 100%-CDI seriam ~0, mas contra buy-hold de ações
+   é baixo). Sharpe vs CDI de −0,334 para **+0,270**; Calmar 0,752.
+2. **MAS o excesso sobre o CDI NÃO é estatisticamente significativo:** t=+1,21
+   (ingênuo) / +1,24 (robusto a cluster anual), ambos < 1,96; bate o CDI em
+   apenas **9 de 20 anos**. O ponto-estimativa é positivo; a barra de erro
+   cruza o CDI com folga.
+3. **De onde vem o resultado:** a carteira é ~75%+ CDI o tempo todo, com uma
+   sobreposição de ações de no máximo 25%. Os +2,64 p.p. sobre o CDI vêm
+   dessa sobreposição fina. **Não é "a Donchian é ótima"** — é "um overlay
+   pequeno de ações sobre CDI adiciona ~2,6 p.p., dentro do ruído".
+4. **O edge POR TRADE continua real e significativo** (t=+2,78 na expectância
+   por trade): as ações que a estratégia compra têm expectância positiva. O
+   que não é significativo é o excesso da CARTEIRA sobre o CDI — porque o
+   sleeve de ações é pequeno demais para o alfa dele descolar do benchmark.
 
-**O que isso NÃO significa:** que o motor esteja errado. O backtest, o
-sizing, o executor e a reconexão determinística estão corretos e testados —
-o que está errado é a expectativa de que ESTE conjunto de parâmetros de
-Donchian, neste universo, supere a renda fixa brasileira.
+**A lição metodológica desta reversão** (registrada no topo, seção
+"Significância ≠ vantagem econômica" tem agora sua irmã): um defeito de
+modelagem no denominador da comparação inverteu o SINAL da conclusão
+principal. O mesmo ceticismo aplicado à má notícia teve de ser aplicado à boa:
+o resultado positivo também não passa no teste de significância.
 
-**Próximo passo honesto:** qualquer pesquisa de estratégia daqui em diante
-tem de ser avaliada contra CDI, não contra zero. O portão de aprovação
-(`backtest.min_sharpe_aggregate`) mede contra zero e por isso é fraco demais
-para este mercado.
+**Próximo passo honesto:** o portão de aprovação e o otimizador precisam
+medir contra CDI real E creditar o caixa (hoje só o `fase1_backtest.py`
+credita; ver defeitos de medição). E a comparação justa não é contra
+100%-CDI — é contra um benchmark de MESMO risco (ex.: 25% IBOV + 75% CDI),
+que **não foi medido**.
 
-### Capital mínimo operável: NÃO EXISTE (para esta estratégia)
+### Capital mínimo operável — corretagem FIXA destrói conta pequena
+
+> ⚠️ **Números CAGR/Sharpe/veredito desta tabela são do caixa-a-zero (antigo)
+> e estão SUPERADOS pelo achado central revertido.** O que permanece VÁLIDO e
+> é o ponto desta seção: (a) corretagem FIXA destrói contas pequenas, (b) o
+> retorno percentual do sleeve de ações é invariante a escala. A conclusão
+> "nenhum capital opera" caía do teto 5,36%, que era artefato — com o caixa no
+> CDI o teto sobe. Não reler os vereditos "perde do CDI" abaixo como atuais.
 
 `fixed_fee_per_order` (corretagem fixa em R$ por ordem) agora é modelado —
 antes o custo era 100% percentual, o que escondia o efeito abaixo:
@@ -98,11 +119,14 @@ antes o custo era 100% percentual, o que escondia o efeito abaixo:
   +0,56%. Não é margem apertada — é ruína matemática.
 - **O custo fixo deixa de ser fatal por volta de R$10k e vira irrelevante em
   R$50k** (come 1,61 p.p. do CAGR em R$10k, 0,28 p.p. em R$50k).
-- **Mas o teto não depende do capital.** Controle de invariância de escala:
-  com taxa fixa zero, R$300 e R$50.000 dão CAGR **idêntico** (5,3646%,
-  diferença 0,000000 p.p.) — o retorno percentual não escala com capital.
-  Logo o melhor caso possível é 5,36% a.a. contra CDI de 10,08%.
-  **Nenhum capital torna esta estratégia operável.**
+- **O retorno percentual do sleeve de ações é invariante a escala.** Controle:
+  com taxa fixa zero, R$300 e R$50.000 dão CAGR do sleeve **idêntico**
+  (5,3646%, diferença 0,000000 p.p.). Isso continua válido. **O que mudou:**
+  esse 5,36% era o CAGR SEM o caixa render — com o caixa no CDI a carteira
+  vai a 12,72%. A frase original "nenhum capital opera porque o teto 5,36% <
+  CDI" está ERRADA: o teto não era 5,36%, era o sleeve isolado. Corrigido, a
+  carteira supera o CDI no ponto-estimativa (sem significância — ver achado
+  central).
 
 **O que o modelo de custo ainda NÃO cobre** (relevante antes de configurar
 custo real): IR de 15% sobre ganho líquido em swing trade (com isenção de
@@ -214,21 +238,25 @@ estratégia atual (`Sharpe Agregado: -0.18 [REPROVA]`). Os defeitos estão em
 volta dele — registrar isso importa porque a sessão chegou a acreditar que o
 portão media contra zero, confundindo-o com o otimizador.
 
-### 1. PRIORIDADE ALTA — o otimizador ranqueia contra ZERO
+### 1. ~~PRIORIDADE ALTA — o otimizador ranqueia contra ZERO~~ ✅ CORRIGIDO (PR #18)
 
-`trading_bot/backtest/optimizer.py:13` —
-`calculate_sharpe_ratio(equity_curve, risk_free_rate: float = 0.0)`.
+`calculate_sharpe_ratio` agora ranqueia contra `RISK_FREE_RATE_ANNUAL` (mesma
+régua do portão), com o parâmetro renomeado para `risk_free_annual` (era
+`risk_free_rate=0.0`, e ainda subtraía taxa anual de retorno diário). Fica o
+registro do que era: ranquear contra zero selecionava configs que batem zero,
+não o CDI, com aparência de rigor. Medido no RED: curva de 4% a.a. num mundo
+de 10% pontuava Sharpe +0,494.
 
-Não é o portão, mas é o que **ESCOLHE parâmetros** numa varredura
-(`optimizer.py:65` ordena os resultados por esse Sharpe). Otimizar com ele
-seleciona configurações que batem ZERO, não o CDI — e entrega o resultado
-com aparência de rigor: varredura ampla, ranking, melhor configuração no
-topo. Num país com juros de dois dígitos, "melhor que zero" é um filtro que
-não filtra nada.
+### 1b. PENDENTE — os otimizadores NÃO creditam o caixa ocioso
 
-**Qualquer pesquisa futura de parâmetros DEVE corrigir isto antes de rodar.**
-Rodar a Fase 3 (quant optimizer) com o default atual produz resultado
-ENGANOSO, não apenas subótimo.
+O `cash_daily_yield` (caixa ocioso rende CDI) só está ligado em
+`fase1_backtest.py`. Os otimizadores (`backtest/optimizer.py:76`,
+`signals/optimizer.py:62`, `scripts/fase3_quant_optimizer.py:92`) chamam
+`run_regime_backtest` **sem** ele → medem com caixa a zero. Como o caixa a
+zero distorce o CAGR (ver achado central), qualquer varredura de parâmetros
+hoje ranqueia por uma métrica enviesada. **Religar antes de qualquer Fase 3.**
+Não foi feito neste turno porque muda comportamento de código de medição, que
+exige aprovação explícita.
 
 ### 2. Risk-free é número mágico fixo
 
@@ -241,11 +269,30 @@ contra 10% em silêncio, e aprova ou reprova errado sem avisar. Viola a regra
 do próprio CLAUDE.md: "nunca usar número/limite inventado quando já existe um
 equivalente configurado no sistema — derivar dali, não duplicar".
 
-**Deveria vir da série real do BCB** (API SGS, série 12 = CDI diário), que
-esta sessão usou para medir mas que **NÃO está no repositório** — vive num
-script de scratchpad e se perde. Integrar como módulo com cache local e
-derivar o risk-free do período que o backtest realmente cobre, em vez de uma
-constante anual.
+**Deveria vir da série real do BCB.** ✅ **A série já está versionada**
+(`trading_bot/data/cdi_sgs12.csv` + `trading_bot/data/risk_free.py`,
+`load_cdi_daily_fractions` / `cdi_annualized`). Falta o passo final: fazer
+`metrics.RISK_FREE_RATE_ANNUAL` derivar de `cdi_annualized()` em vez da
+constante 0,10 — aí o portão acompanha a Selic real em vez de um número fixo.
+Não feito neste turno (muda comportamento do portão; exige aprovação).
+
+### A/B do filtro macro (ibov_filter) — medido com a régua corrigida
+
+Nunca havia sido validado: `ibov_filter=True` rodava em tudo sem medição. Com
+o caixa no CDI (régua correta), 2006-2025:
+
+```
+              n     CAGR    maxDD   Sharpe vs CDI  Calmar
+COM filtro   848   12.72%  -16.9%       +0.270     0.752
+SEM filtro  1154   11.78%  -22.6%       +0.186     0.522
+```
+
+**O filtro macro vence nas duas métricas** (Sharpe E Calmar) e corta o
+drawdown de −22,6% para −16,9%, ao custo de 306 trades. Mantê-lo ligado.
+Ressalva de poder: são ~4-5 episódios de regime macro em 20 anos; o delta é
+indicativo, não prova. (Na medição anterior, com caixa a zero, a régua estava
+torta CONTRA o filtro — ele perdia em Sharpe; a correção do caixa reverteu
+isso, porque o filtro aumenta o tempo em caixa, que agora rende.)
 
 
 ## 🛑 PRIORIDADE MÁXIMA — A BASELINE ANTERIOR ERA INVÁLIDA (bug de warm-up, corrigido)
