@@ -67,3 +67,13 @@
   no rótulo "MERGED" do GitHub sem checar CONTRA QUAL branch. Este projeto já
   teve três incidentes desta classe (PR #4, #11, #12), sempre pelo mesmo
   motivo.
+- **CAUSA RAIZ dos incidentes de merge (diagnosticada 2026-07-23):** o
+  repositório exige *branch atualizada com a base antes do merge*. Quando o
+  `main` anda (ex.: você mergeou outro PR), todo PR aberto vira `BEHIND`
+  **silenciosamente** — estava `MERGEABLE/CLEAN` e passa a `BEHIND/DIRTY` sem
+  aviso, e `gh pr merge` falha com *"the head branch is not up to date with
+  the base branch"*. Foi o que travou os PRs #4, #11, #12 e as duas
+  tentativas do #17. **Cura:** `gh pr update-branch <n>` → esperar o CI
+  re-rodar (o update cria um commit de merge novo, status vai a `BLOCKED` até
+  o CI passar) → `gh pr merge <n>`. Ao mergear uma fila de PRs, o SEGUNDO em
+  diante quase sempre precisa de `update-branch` antes.

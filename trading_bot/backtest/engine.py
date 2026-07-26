@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Optional
+from typing import Mapping, Optional
 
 import pandas as pd
 
@@ -110,6 +110,7 @@ def run_regime_backtest(
     warmup_bars: int = 300,            # História ANTES de `start` só p/ indicadores
     early_exit_day: int = 0,           # 0 = desligado. Ver saída antecipada abaixo.
     early_exit_min_gain: float = 0.0,  # fração (0.01 = 1%)
+    cash_daily_yield: Optional[Mapping[date, float]] = None,  # CDI diário sobre caixa ocioso
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -192,6 +193,14 @@ def run_regime_backtest(
 
     for current_date in all_dates:
         # ------------------------------------------------------------------
+        # 0. Creditar juros (CDI) sobre o CAIXA OCIOSO do dia.
+        # `capital_cash` é, por construção, só o dinheiro FORA de posições — o
+        # capital investido vive em `pos.capital`. Compor a taxa aqui rende
+        # juros exatamente sobre a fração não alocada, nunca sobre o investido.
+        # Sem a série (None), nada acontece: comportamento anterior preservado.
+        if cash_daily_yield:
+            capital_cash *= 1 + cash_daily_yield.get(current_date, 0.0)
+
         # 1. Atualizar contagem de dias das posições abertas
         # ------------------------------------------------------------------
         for pos in open_positions.values():
@@ -458,6 +467,7 @@ def run_full_backtest(
     brokerage_pct: float = 0.0003,
     spread_pct: float = 0.0002,
     warmup_bars: int = 300,
+    cash_daily_yield: Optional[Mapping[date, float]] = None,
 ) -> list[BacktestResult]:
     """Roda backtest nos 3 regimes obrigatórios do plano v4."""
     regimes = regimes or REGIMES
@@ -476,6 +486,7 @@ def run_full_backtest(
             brokerage_pct=brokerage_pct,
             spread_pct=spread_pct,
             warmup_bars=warmup_bars,
+            cash_daily_yield=cash_daily_yield,
         )
         for r in regimes
     ]
