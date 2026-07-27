@@ -12,6 +12,7 @@ import yaml
 sys.path.insert(0, ".")
 
 from trading_bot.data.ingestion import fetch_universe_yfinance
+from trading_bot.data.risk_free import load_cdi_daily_fractions
 from trading_bot.backtest.engine import run_full_backtest
 from trading_bot.backtest.metrics import compute_aggregate_metrics
 from trading_bot.core.config import AppConfig, setup_logging
@@ -68,7 +69,10 @@ def main():
         regimes=bt_cfg.get("regimes"),
         ibov_filter=sig_cfg.get("ibov_filter", True),
         brokerage_pct=risk_cfg.get("brokerage_pct", 0.0003),
-        spread_pct=risk_cfg.get("spread_est_pct", 0.0002)
+        spread_pct=risk_cfg.get("spread_est_pct", 0.0002),
+        # Caixa ocioso rende CDI (série SGS 12 versionada). Sem isto, ~66% do
+        # patrimônio ficava a 0% e a comparação com o CDI ficava distorcida.
+        cash_daily_yield=load_cdi_daily_fractions(),
     )
 
     agg = compute_aggregate_metrics(
