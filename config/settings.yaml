@@ -51,7 +51,15 @@ signals:
   target_atr_mult: 3.0             # Alvo dinâmico R:R 1:2 (Otimizado via Quant)
   max_hold_days: 15                # Timeout: 15 dias
   ibov_filter: true                # Filtro macro: só opera quando IBOV > SMA-50
-  # Baseline Sharpe: ~0.33 (alta_juros) — gate Sharpe>1.0 avaliado após Módulo 7 (IA)
+  # BASELINE MEDIDA (2026-07-27) — o "~0.33" que ficava aqui era IRREPRODUZÍVEL
+  # e ancorou leitores (inclusive uma auditoria externa) num número que não
+  # existe nos dados atuais. Números reais, medidos contra o benchmark de MESMO
+  # RISCO (25% IBOV + 75% CDI), universo corrigido por sobrevivência:
+  #   excesso OOS  = +2,22% a.a.  (walk-forward, 5 janelas, 4/5 positivas)
+  #   IR           = +0,207
+  #   p-valor      =  0,128  -> NÃO significativo
+  # Ver BACKLOG.md. Não citar Sharpe absoluto sem dizer contra qual benchmark:
+  # contra risk-free ZERO qualquer estratégia parece boa num país de juro alto.
 
 # ----------------------------------------------------------
 # Gestão de risco
@@ -150,7 +158,10 @@ backtest:
       description: "Recuperação lateral pós-ciclo"
 
   # Gates de saída
-  # Baseline técnico (sem IA): Sharpe ~0.33 — gate reavaliado após Módulo 7
+  # ATENÇÃO: estes gates medem Sharpe contra `RISK_FREE_RATE_ANNUAL` (10% fixo
+  # em metrics.py), NÃO contra o benchmark de mesmo risco. Passar neles não
+  # significa bater 25% IBOV + 75% CDI. A métrica de decisão do projeto hoje é
+  # o excesso sobre esse benchmark (+2,22% a.a. OOS, IR +0,207, p=0,128).
   min_sharpe_aggregate: 1.0        # Gate final (após Módulo 7 IA)
   min_sharpe_baseline: 0.25        # Gate aceito para avançar agora (técnico puro)
   min_sharpe_per_regime: 0.5       # Gate por regime (após Módulo 7 IA)
