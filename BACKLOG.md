@@ -2,6 +2,32 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🧱 A FUNDAÇÃO DE DADOS É O ELO FRACO DO PROJETO
+
+**Quatro correções de medição, e CADA UMA alterou a conclusão:**
+
+| # | defeito | conclusão ANTES | conclusão DEPOIS |
+|---|---|---|---|
+| 1 | **warm-up** cortava 200 pregões de cada regime | "filtro de tendência funciona em bear (n=0)" | artefato — a janela era incapaz de gerar sinal |
+| 2 | **caixa ocioso** rendia 0% (66% do patrimônio) | "perde para o CDI, Sharpe −0,33" | bate o CDI, Sharpe +0,27 |
+| 3 | **sobrevivência** (universo escolhido hoje) | CAGR 12,72% | 11,91% — custa 0,82 p.p. |
+| 4 | **volume corrompido** no yfinance | "capital máximo R$10-50k" | curva inteira invalidada |
+
+Nenhuma dessas foi erro de estratégia. **Todas foram erro de dado ou de
+modelagem do dado.** O motor está correto; o que faltava era medir sobre
+realidade.
+
+**Consequência para capital próprio: dado licenciado é PRÉ-REQUISITO, não
+otimização.** brapi Pro (~R$117/mês) ou feed da própria corretora. O yfinance
+é aceitável para pesquisa exploratória e **inaceitável** como base de decisão
+sobre dinheiro real — 11,6% dos pregões têm volume implausível e 4,78% têm
+preço congelado, sem nenhum aviso da fonte.
+
+Corolário operacional: **todo número deste repositório deve declarar sobre
+qual janela de dado confiável foi medido.** A janela limpa (volume e preço com
+<5% de anomalia) é **2019-2025** — sete anos, não vinte.
+
+
 ## 🧭 ACHADO METODOLÓGICO (vale mais que qualquer resultado desta sessão)
 
 Duas armadilhas que o projeto atravessou inteiras antes de perceber. Valem
@@ -474,6 +500,77 @@ mas corta a amostra pela metade; opção 1 depende de credencial/contrato.
 **Testar filtro de liquidez sobre este dado produziria resultado convincente e
 FALSO** — o filtro removeria exatamente os trades de ADTV corrompido e
 "melhoraria" a curva por motivo errado.
+
+### Auditoria de PREÇO (2026-07-27) — comprometido no passado, LIMPO no OOS
+
+A pergunta que decidia tudo: se o `close`/`adj_close` também estivesse
+corrompido, não seria a capacidade que estaria errada — seria **toda** a
+medição (+2,22%, Sharpe, regimes, sobrevivência).
+
+```
+  preco <= 0                                : 0
+  preco NaN                                 : 0
+  fechamento CONGELADO >=5 pregoes seguidos : 13.006  (4,78%)
+  |retorno diario| > 50%                    : 76      (0,028%)
+  distribuicao temporal dos gaps: dispersa, SEM corte sistemico
+```
+
+**Séries costuradas** (o risco de rompimento fantasma) — maiores blocos
+congelados e o salto na emenda:
+
+```
+  PCAR3  577 pregoes fixos em R$2,18   -> emenda 2007-09-24, salto  -1,3%
+  SUZB3  585 pregoes fixos em R$12,15  -> emenda 2009-10-29, salto  +0,5%
+  UGPA3  590 pregoes fixos em R$3.302.501,25 (!) -> emenda 2007-05-04, -100%
+  BHIA3  320 pregoes fixos em R$40,08  -> emenda 2006-04-11, salto +54,5%
+  RADL3  157 pregoes fixos em R$0,04   -> emenda 2006-11-03, salto +74,4%
+```
+
+**VEREDITO: o número de referência SOBREVIVE.**
+
+```
+  emenda mais RECENTE: 2009-10-29   |   inicio do OOS: 2011-01-01
+  -> TODAS as emendas estao FORA da janela OOS
+
+  trades OOS com adj_close suspeito : 4/691 = 0,6%
+  trades OOS com gap >50% na janela : 0    = 0,0%   (nenhum rompimento fantasma)
+  pnl medio SUSPEITOS: -6,443%   vs   LIMPOS: +0,492%
+  contribuicao dos suspeitos ao pnl agregado: -8,3%
+```
+
+Os poucos trades tocados por preço suspeito **PERDEM dinheiro** — deflacionam
+o resultado em 8,3%, não o inflam. Removê-los MELHORARIA o número. **O +2,22%
+não é lucro fantasma; é conservador.**
+
+⚠️ **MAS isso invalida parcialmente a análise de DECAIMENTO.** O bloco
+2006-2010 (que mediu excesso −0,00% e sustentou a conclusão "o edge cresce")
+roda sobre dado com **37,5% de volume ruim e 28,2% de preço congelado**. O
+bloco antigo pode parecer fraco porque o dado é ruim, não porque o mercado
+era pior. **A conclusão "o edge cresce" precisa ser rebaixada para "não há
+evidência de decaimento no período com dado confiável".**
+
+### Qual janela sobra com sanidade de volume E preço
+
+```
+   ano   pregoes   vol<R$100k  preco congel.      veredito
+  2006     8.667       37,5%          28,2%          RUIM
+  2010    11.907       17,5%          13,0%          RUIM
+  2015    13.228       11,8%          11,2%          RUIM
+  2018    13.689        6,2%           4,9%          RUIM
+  2019    13.823        3,9%           4,1%            OK
+  2020    13.898        2,1%           1,5%            OK
+  2023    14.136        0,6%           2,8%            OK
+  2025    14.250        4,6%           3,8%            OK
+```
+
+**Janela limpa contígua: 2019-2025 — 7 anos, 352 trades** (contra 691 no OOS
+atual e 935 na amostra cheia).
+
+Custo em poder estatístico: blocos anuais independentes caem de 15 para **7**;
+o walk-forward de 5 folds vira **2 folds** de 3 anos. Com 7 blocos, o bootstrap
+tem pouquíssima resolução e o walk-forward praticamente deixa de existir.
+**Trade-off explícito: dado confiável e amostra insuficiente, ou amostra grande
+e dado que sabidamente mente.**
 
 ### ⚠️ Mesmo com dado bom, o limite tende a ser de POUCOS TRADES, não estrutural
 
