@@ -332,9 +332,68 @@ muda de regime e otimizar é caçar ruído.
 
 **Limitação:** 5 folds é amostra pequena para o próprio walk-forward, e a
 variância entre folds é enorme (−4,98% a +10,68%). O +2,46% é média de 5
-pontos muito dispersos; **não faz sentido testar significância com n=5**. E o
-edge é visivelmente mais fraco nos dados recentes: no IS 2018-2022, 6 das 9
-combinações têm excesso NEGATIVO.
+pontos muito dispersos; **não faz sentido testar significância com n=5**.
+
+### O NÚMERO HONESTO: walk-forward OOS com universo corrigido
+
+Os +2,46% acima ainda carregavam o viés de sobrevivência. Re-rodado com o
+universo expandido (58 tickers, com os desastres):
+
+```
+fold OOS          n   exc 47 (viesado)   exc 58 (honesto)    delta    IR 58
+2011-2013        95             +2.50%             +2.84%    +0.34   +0.315
+2014-2016       136             +4.04%             +3.64%    -0.40   +0.301
+2017-2019       178             +0.07%             +2.35%    +2.28   +0.189
+2020-2022       145             -4.98%             -4.33%    +0.65   -0.357
+2023-2025       139            +10.68%             +6.62%    -4.06   +0.590
+------------------------------------------------------------------------
+  MEDIA OOS   universo 47: +2.46%  |  universo 58 (HONESTO): +2.22% a.a.
+  MEDIANA     universo 47: +2.50%  |  universo 58: +2.84%
+  folds positivos: 4/5 em ambos    |    IR medio (58): +0.207
+```
+
+**Este é o número de referência da estratégia: +2,22% a.a. de excesso sobre
+o benchmark de mesmo risco, fora da amostra, com o universo corrigido por
+sobrevivência, 4 de 5 janelas positivas.** O viés custou só 0,24 p.p. no OOS
+(contra 0,70 p.p. na amostra cheia) — porque o OOS cobre 2011-2025, onde há
+menos casualidades que no início da série.
+
+### Decaimento do edge: HIPÓTESE REFUTADA — o edge é MAIS forte no recente
+
+Motivação da suspeita: o fold IS 2018-2022 teve 6 de 9 combinações com
+excesso negativo. Se o edge decaísse monotonicamente, a média de 20 anos
+superestimaria a expectativa futura — que é o que importa para capital
+próprio. Medido em blocos de 5 anos, universo expandido, params de produção:
+
+```
+bloco              n     CAGR    bench   excesso a.a.       IR    maxDD
+2006-2010        244   13.35%   13.72%         -0.00%   -0.000   -10.7%
+2011-2015        161    6.34%    5.54%         +1.01%   +0.109    -9.0%
+2016-2020        305   15.33%   12.16%         +3.74%   +0.267   -13.7%
+2021-2025        225   12.90%   10.07%         +3.18%   +0.292   -16.9%
+
+  tendencia: -0.00% -> +1.01% -> +3.74% -> +3.18%
+  monotonicamente decrescente? NAO
+  inclinacao: +1.23 p.p. por bloco de 5 anos
+  media 2006-2015: +0.51%   |   media 2016-2025: +3.46%
+```
+
+**O edge CRESCE, não decai.** Os dois blocos recentes (+3,46% médio) são
+muito melhores que os dois antigos (+0,51%). O bloco 2006-2010 entrega
+excesso ZERO.
+
+**Por que a intuição estava errada, e é instrutivo:** na amostra viesada o
+período antigo parecia forte (+0,98%/trade pré-2010 contra +0,55% pós-2016).
+Isso era **survivorship inflando o passado** — as empresas que quebraram entre
+2008 e 2015 (OGX, PDG, Rossi, Viver) não estavam no universo. Corrigido, o
+passado desinflaciona e a tendência inverte de sinal. O "6 de 9 negativos" do
+IS 2018-2022 era artefato daquela janela específica (crash COVID + bear de
+2022), não uma tendência.
+
+**Ressalva:** 4 blocos é amostra minúscula; a inclinação de +1,23 p.p./bloco
+vem de 4 pontos e **não é estatisticamente significativa**. A conclusão
+defensável é a negativa — **não há evidência de decaimento** — não a positiva
+de que o edge esteja crescendo de forma confiável.
 
 
 ## 🚫 ALTA FREQUÊNCIA — HIPÓTESE TESTADA E REJEITADA (2026-07-26)
