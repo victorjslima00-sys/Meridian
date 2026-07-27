@@ -396,6 +396,69 @@ defensável é a negativa — **não há evidência de decaimento** — não a p
 de que o edge esteja crescendo de forma confiável.
 
 
+## 🏦 CAPACIDADE — qual capital MÁXIMO antes do edge sumir (2026-07-27)
+
+Último bloqueante quantitativo, e o único termo de custo que **piora** com o
+tamanho do capital (os demais são fração fixa, invariantes a escala).
+
+**Modelo: lei da raiz quadrada** (Almgren et al.; Grinold & Kahn) —
+`slippage_por_ponta = coef · σ_diária · √(valor_ordem / ADTV)`, `coef = 1.0`
+(conservador), ADTV e σ em janela móvel de 21 pregões por ativo, round-trip
+paga 2 pontas. Escolhido por ser o padrão de impacto temporário na literatura;
+a raiz importa porque um modelo linear erraria a curva por ordens de grandeza.
+
+```
+     capital     n     CAGR   excesso a.a.       IR   part.media ADTV      p95      max
+R$    10,000   691    9.53%         +0.92%   +0.080           1.0374%    0.51%   184.0%
+R$    50,000   691    7.48%         -0.96%   -0.082           4.4809%    2.33%   768.4%
+R$   100,000   691    6.12%         -2.19%   -0.183           8.1095%    4.32%  1353.8%
+R$   500,000   691    1.52%         -6.28%   -0.469          28.4702%   13.82%  4223.8%
+R$ 1,000,000   691   -1.12%         -8.54%   -0.591          46.0031%   19.30%  7286.6%
+R$ 5,000,000   691   -8.49%        -14.58%   -0.805         121.1284%   56.18% 28614.5%
+```
+
+**Resposta direta:** o excesso de +2,22% cai para **+0,92% já em R$10 mil**
+(o impacto custa 1,30 p.p. mesmo em capital pequeno) e **zera entre R$10 mil
+e R$50 mil**. Acima disso a estratégia perde do benchmark de mesmo risco, e em
+R$1M o CAGR fica negativo.
+
+### ⚠️ Mas o limite é ARTEFATO DE POUCOS TRADES ILÍQUIDOS, não estrutural
+
+A distribuição de participação é extremamente assimétrica — a média (2,21%)
+é maior que o p95 (1,02%), o que sozinho já denuncia outliers dominando:
+
+```
+  p50: 0.0196%   p75: 0.0559%   p90: 0.1908%   p95: 1.0231%   p99: 15.42%
+  trades com participacao > 5% do ADTV:  14/691 = 2.0%
+  trades com participacao > 100%:         4
+
+  TOP participacoes (capital R$10k):
+  PCAR3   416.9%   ordem R$11.385   ADTV R$2.731
+  PCAR3   402.7%   ordem R$ 9.400   ADTV R$2.334
+  BHIA3   238.8%   ordem R$ 7.680   ADTV R$3.216
+  BHIA3   169.2%   ordem R$ 6.165   ADTV R$3.644
+
+  54,6% de TODO o slippage vem dos 5% de trades mais ilíquidos
+  63,3% vem dos 10% mais ilíquidos
+```
+
+**O trade mediano participa com 0,02% do ADTV — completamente inofensivo.**
+O que destrói a capacidade são ~14 trades em papéis que viraram quase
+intradeáveis (PCAR3 e BHIA3 pós-colapso). Note que estes NÃO são os
+tickers-desastre adicionados: estavam no universo original, escolhidos por
+liquidez de HOJE, e ficaram ilíquidos no meio do caminho.
+
+**Mitigação óbvia e NÃO TESTADA:** um filtro de liquidez mínima (ex.: não
+entrar se a ordem > 1% do ADTV, ou se ADTV < R$X) removeria os 2% de trades
+que causam 55% do dano. **Isso provavelmente move o teto de capacidade em
+ordens de grandeza** — mas é hipótese, não medição.
+
+**Suspeita de qualidade de dado:** ADTV de R$2.731/dia para PCAR3 (Pão de
+Açúcar) é implausível mesmo pós-colapso. Pode ser artefato do yfinance
+(volume mal ajustado após grupamento/desdobramento). Não verificado — se for
+erro de dado, a curva de capacidade está pessimista demais no topo da cauda.
+
+
 ## 🚫 ALTA FREQUÊNCIA — HIPÓTESE TESTADA E REJEITADA (2026-07-26)
 
 Proposta avaliada: muitas operações pequenas (~100/dia, alvo R$5-10) apostando
