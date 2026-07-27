@@ -422,7 +422,60 @@ R$ 5,000,000   691   -8.49%        -14.58%   -0.805         121.1284%   56.18% 2
 e R$50 mil**. Acima disso a estratégia perde do benchmark de mesmo risco, e em
 R$1M o CAGR fica negativo.
 
-### ⚠️ Mas o limite é ARTEFATO DE POUCOS TRADES ILÍQUIDOS, não estrutural
+### 🔴 A CURVA ACIMA ESTÁ SOBRE DADO CORROMPIDO — não usar para decidir
+
+Verificação de qualidade do ADTV (2026-07-27) invalidou a curva. O volume do
+yfinance para tickers brasileiros é **sistematicamente quebrado em períodos
+antigos**:
+
+```
+PCAR3 — volume financeiro medio ANUAL
+  2017: R$          280/dia      2019: R$        1.313/dia
+  2020: R$   96.473.549/dia   <== SALTO de 73.478x
+BHIA3
+  2017: R$      102.768/dia      2018: R$    4.618.310/dia  (44x)
+  2019: R$  201.050.400/dia   <== outro salto de 43x
+```
+
+Não é grupamento/desdobramento — é **dado ausente**. PCAR3 (Pão de Açúcar) é
+blue chip há décadas; volume de 3 ações/dia em 2008 não existe.
+
+**Extensão do problema:**
+```
+  31.579/271.891 pregoes = 11,6% com volume financeiro < R$100k/dia
+  31 de 58 tickers com >2% de pregoes ruins
+  varios com "ultimo pregao ruim" em 2018-01-25 -> corte sistemico da fonte
+  SUZB3 59,8% | PCAR3 69,9% | BHIA3 54,7% | PDGR3 85,2%
+```
+
+**Impacto direto na curva de capacidade:**
+```
+  12/691 trades (1,7%) usam ADTV < R$100k  -> respondem por 40,5% do slippage
+  37/691 trades (5,4%) usam ADTV < R$1M    -> respondem por 55,7% do slippage
+  participacao media nesses trades: 119,1%  vs 0,1476% nos demais
+```
+
+**Ou seja: o colapso de capacidade entre R$10k e R$50k é dirigido por trades
+cujo ADTV é dado inválido, não por iliquidez real.** A conclusão "capital
+máximo ~R$10-50k" **não se sustenta** e não deve ser usada.
+
+**Correção necessária antes de repetir a medição** (não implementada):
+1. Fonte de volume confiável — brapi exige token (HTTP 401 sem chave); a
+   alternativa é dado da própria corretora ou vendor pago.
+2. Enquanto não houver, **restringir a janela de medição** ao período em que o
+   volume é plausível (pós-2019/2020 para a maioria) — reduz a amostra mas
+   mede sobre dado real.
+3. Filtro de sanidade no ingestor: descartar/sinalizar pregão com volume
+   financeiro implausível em vez de propagá-lo silenciosamente.
+
+**Custo:** opção 2 é barata (uma linha de janela + re-rodar a curva, ~30 min)
+mas corta a amostra pela metade; opção 1 depende de credencial/contrato.
+
+**Testar filtro de liquidez sobre este dado produziria resultado convincente e
+FALSO** — o filtro removeria exatamente os trades de ADTV corrompido e
+"melhoraria" a curva por motivo errado.
+
+### ⚠️ Mesmo com dado bom, o limite tende a ser de POUCOS TRADES, não estrutural
 
 A distribuição de participação é extremamente assimétrica — a média (2,21%)
 é maior que o p95 (1,02%), o que sozinho já denuncia outliers dominando:

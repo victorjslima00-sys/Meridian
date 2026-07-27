@@ -347,7 +347,7 @@ def assert_validation_passed(report_dir: Path = REPORT_DIR) -> None:
             "Execute run_cross_validation() antes de rodar o backtest."
         )
 
-    with open(report_path) as f:
+    with open(report_path, encoding="utf-8") as f:
         summary = json.load(f)
 
     if summary["status"] != "passed":

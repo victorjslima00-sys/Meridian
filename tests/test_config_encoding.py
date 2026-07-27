@@ -47,6 +47,45 @@ class TestConfigLeEmUTF8:
         assert cfg.get("risk", "kelly_fraction") == 0.25
         assert cfg.get("_universe", "tickers") == ["PETR4"]
 
+    def test_ingestion_le_os_mesmos_yamls_em_utf8(self):
+        """`ingestion._load_settings/_load_universe` leem os MESMOS arquivos que
+        o AppConfig — e tinham o mesmo `open()` sem encoding. Corrigir só um
+        lado deixaria o bug vivo no caminho de ingestão de dados."""
+        from trading_bot.data.ingestion import _load_settings, _load_universe
+
+        assert _load_settings()["risk"]["kelly_fraction"] is not None
+        assert len(_load_universe()) > 0
+
+    def test_nenhum_open_de_texto_sem_encoding_em_producao(self):
+        """Varredura estrutural: o bug é latente e invisível no CI (Ubuntu usa
+        UTF-8 por padrão). Só um teste que olha o CÓDIGO pega a reintrodução —
+        um teste de comportamento passaria em Linux e falharia em Windows."""
+        import ast
+        from pathlib import Path
+
+        raiz = Path(__file__).resolve().parents[1]
+        infratores = []
+        for py in list((raiz / "trading_bot").rglob("*.py")) + list(
+            (raiz / "backend").rglob("*.py")
+        ):
+            arvore = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+            for no in ast.walk(arvore):
+                if not (isinstance(no, ast.Call) and getattr(no.func, "id", None) == "open"):
+                    continue
+                kwargs = {k.arg for k in no.keywords}
+                if "encoding" in kwargs:
+                    continue
+                # modo binário não precisa de encoding
+                modo = ""
+                if len(no.args) > 1 and isinstance(no.args[1], ast.Constant):
+                    modo = str(no.args[1].value)
+                if "b" in modo:
+                    continue
+                infratores.append(f"{py.relative_to(raiz)}:{no.lineno}")
+        assert infratores == [], (
+            f"open() de texto sem encoding= (quebra em Windows/cp1252): {infratores}"
+        )
+
     def test_settings_do_projeto_e_utf8_valido(self):
         """O arquivo em si tem de ser UTF-8 — se alguém salvar em cp1252, o
         `encoding="utf-8"` do loader passa a falhar do outro lado."""

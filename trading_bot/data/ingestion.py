@@ -33,12 +33,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _load_settings(path: str = "config/settings.yaml") -> dict:
-    with open(path) as f:
+    # encoding EXPLÍCITO — mesmo bug que existia em core/config.py: sem ele,
+    # `open()` usa a codepage do sistema (cp1252 no Windows) para ler um YAML
+    # UTF-8 com comentários acentuados. Falha dura em acento cujo byte não
+    # existe em cp1252, e corrompe em silêncio nos demais.
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
 def _load_universe(path: str = "config/universe.yaml") -> list[str]:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data["universe"]["tickers"]
 
