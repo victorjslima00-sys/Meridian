@@ -192,6 +192,204 @@ distinção entre descrever a perda e prevê-la é o que separou uma hipótese
 promissora de um resultado nulo.
 
 
+## 📊 BENCHMARK DE MESMO RISCO (25% IBOV + 75% CDI) — o teste que decide
+
+Comparar com 100%-CDI compara carteiras de risco diferente. O benchmark justo
+para uma estratégia que fica ~25-34% em ações é **25% IBOV + 75% CDI
+rebalanceado**, mesmo período, mesmo custo. Medido 2026-07-26:
+
+```
+                          final R$    CAGR    maxDD  Sharpe vs CDI  Calmar
+ESTRATEGIA (producao)      3289.94  12.72%  -16.9%        +0.270    0.752
+25% IBOV + 75% CDI         2121.34  10.28%  -16.1%        +0.063    0.640
+CDI puro                   2046.10  10.06%      —              —       —
+IBOV puro                        —   8.17%      —              —       —
+```
+
+**A estratégia bate o benchmark de mesmo risco em CAGR (+2,44 p.p.), Sharpe e
+Calmar.** Nota: o IBOV puro PERDEU do CDI no período (8,17% vs 10,06%) — não
+é o caso de "bastaria comprar índice".
+
+### Significância do excesso — marginal, NÃO conclusiva
+
+```
+                      vs CDI      vs 25/75 (DECISIVO)
+Information Ratio     +0.271      +0.240
+excesso anualizado    +3.13%      +2.70%
+desvio do excesso   0.7155%/d    0.7006%/d
+t-stat ingenuo        +1.20        +1.06
+t-stat cluster anual  +1.29        +1.51
+anos positivos         9/20        11/20
+
+correlacao estrategia x IBOV = 0.323
+BOOTSTRAP de bloco anual (10k) do excesso sobre 25/75:
+  IC95% = [-0.71% ; +6.39%] a.a.
+  P(excesso <= 0) = 0.065   -> NAO significativo a 5%
+```
+
+**Uma armadilha de raciocínio corrigida aqui:** era intuitivo supor que, sendo
+o excesso sobre o 25/75 MENOR em magnitude que sobre o CDI, o `t` também seria
+menor. Falso — `t = média/(desvio/√n)`, e o 25/75 contém IBOV, correlacionado
+com o sleeve de ações (ρ=0,323), então parte da variância **cancela** na série
+de diferença. Medido: o desvio cai (0,7155% → 0,7006%/dia) e o **t robusto a
+cluster anual SOBE de +1,29 para +1,51**, com 11/20 anos positivos contra
+9/20. Magnitude e significância são coisas distintas.
+
+**Veredito honesto:** p=0,065 é sugestivo, não conclusivo. O IC95% cruza zero
+por pouco (−0,71%). **Não afirmar "edge demonstrado"** — afirmar "excesso
+positivo consistente, marginalmente fora da significância convencional, com
+20 anos de dados". **E este número ainda NÃO corrige sobrevivência — ver
+abaixo, que o reduz.**
+
+### Viés de sobrevivência: custa 0,82 p.p. de CAGR (medido, não estimado)
+
+O universo de 50 tickers foi escolhido HOJE por liquidez — empresas que
+quebraram no caminho não estão nele. Correção aplicada: adicionar ao universo
+os **desastres conhecidos da B3** que o yfinance ainda serve (OGXP3, que
+**deslista em 2019-01-10**; AMER3 (fraude 2023); IRBR3 (fraude 2020); OIBR3,
+LIGT3, PDGR3, RSID3, VIVR3, GFSA3, TCSA3, CVCB3 — 11 dos 14 tentados
+entraram). Universo 47 → 58.
+
+```
+                              47 sobreviventes  58 (+11 desastres)     delta
+  capital final R$                     3289.94             2844.46   -445.48
+  CAGR %                                 12.72               11.91     -0.82
+  max drawdown %                         -16.9               -16.9      -0.0
+  excesso s/ 25/75 % a.a.                 2.70                2.00     -0.70
+  Information Ratio                      0.240               0.171    -0.068
+  t cluster anual                         1.51                1.16     -0.35
+  trades                                   848                 935       +87
+
+  trades EM tickers-desastre: 168 (18% do total)
+    media/trade nos desastres    = -0.033%
+    media/trade nos sobreviventes= +0.555%   -> diferenca -0.588 p.p.
+
+  BOOTSTRAP (universo corrigido) IC95% = [-1.31% ; +5.54%] a.a.
+  P(excesso <= 0) = 0.128  -> NAO significativo
+```
+
+**O viés é real e mensurável: 0,82 p.p. de CAGR e 0,70 p.p. do excesso.** Nos
+tickers-desastre a estratégia entrega −0,033%/trade contra +0,555% nos
+sobreviventes — quase 0,6 p.p. de diferença. Com o universo corrigido, o
+excesso sobre o 25/75 cai para **+2,00% a.a.** e a significância piora de
+p=0,065 para **p=0,128**.
+
+**Limitação desta correção (não é completa):** 3 dos 14 desastres tentados não
+têm dados no yfinance (MMXM3, HRTP3, BTOW3/LAME4/VIIA3 aparecem como
+renomeações ou sumiram), e a própria lista foi montada com hindsight — sei
+quais quebraram. A correção é **conservadora e direcionalmente correta**
+(só pode piorar o resultado, e quantifica quanto), mas o viés residual
+verdadeiro é provavelmente **maior** que 0,82 p.p., não menor. Correção plena
+exigiria composições históricas de índice, que o projeto não tem.
+
+
+### Walk-forward: o EDGE sobrevive, a OTIMIZAÇÃO de parâmetros é rejeitada
+
+Primeiro walk-forward do projeto (antes, tudo era in-sample de 20 anos).
+Protocolo: 5 folds, IS 5 anos → OOS 3 anos, grade 3×3
+(`breakout_period` ∈ {10,20,40} × `target_atr_mult` ∈ {2,3,4}), seleção no IS
+por excesso sobre o 25/75, avaliação no OOS. **Critérios declarados ANTES de
+rodar.**
+
+```
+fold OOS        sel bp/tat    exc SEL   IR SEL   exc FIXO  IR FIXO
+2011-2013           10/4.0     +3.57%   +0.379     +2.50%   +0.267
+2014-2016           10/3.0     +6.99%   +0.577     +4.04%   +0.348
+2017-2019           10/4.0     -3.87%   -0.350     +0.07%   +0.006
+2020-2022           40/3.0     -4.73%   -0.406     -4.98%   -0.428
+2023-2025           40/4.0     +7.35%   +0.803    +10.68%   +1.019
+------------------------------------------------------------------------
+  MEDIA OOS   SELECIONADOS: +1.86% a.a.  |  FIXOS (producao): +2.46% a.a.
+  folds positivos:  SEL 3/5  |  FIXO 4/5
+```
+
+**Contra os critérios pré-declarados:**
+
+| # | critério | SEL | FIXO |
+|---|---|---|---|
+| 1 | OOS agregado > 0 | PASSA (+1,86%) | **PASSA (+2,46%)** |
+| 2 | ≥3/5 folds positivos | PASSA (3/5) | **PASSA (4/5)** |
+| 3 | platô estável do parâmetro | **FALHA** | n/a |
+| 4 | otimização agrega? | **NÃO** (−0,60 p.p.) | — |
+
+**Duas conclusões opostas, e ambas importam:**
+
+1. **O EDGE SOBREVIVE fora da amostra, com os parâmetros de PRODUÇÃO.**
+   +2,46% a.a. de excesso médio sobre o 25/75 em 5 janelas OOS, 4 das 5
+   positivas — notavelmente próximo do +2,70% medido in-sample nos 20 anos
+   (e do +2,00% corrigido por sobrevivência). O edge não evapora.
+2. **A OTIMIZAÇÃO DE PARÂMETROS é rejeitada.** O `breakout_period` ótimo salta
+   de **10** (folds 2006-2016) para **40** (folds 2015-2022) — não há platô,
+   há dois regimes. E os params escolhidos pelo walk-forward performam **PIOR**
+   no OOS (+1,86%) que simplesmente manter os fixos (+2,46%), com menos folds
+   positivos (3/5 vs 4/5).
+
+**O lado bom do critério 3 falhar:** significa que a config de produção
+(`bp=20`, `tat=3.0`) **NÃO está sobreajustada** — ela é um meio-termo que
+performa tão bem ou melhor que qualquer escolha "ótima" fora da amostra.
+**Não perseguir parâmetro ótimo nesta família de estratégia** — a superfície
+muda de regime e otimizar é caçar ruído.
+
+**Limitação:** 5 folds é amostra pequena para o próprio walk-forward, e a
+variância entre folds é enorme (−4,98% a +10,68%). O +2,46% é média de 5
+pontos muito dispersos; **não faz sentido testar significância com n=5**. E o
+edge é visivelmente mais fraco nos dados recentes: no IS 2018-2022, 6 das 9
+combinações têm excesso NEGATIVO.
+
+
+## 🚫 ALTA FREQUÊNCIA — HIPÓTESE TESTADA E REJEITADA (2026-07-26)
+
+Proposta avaliada: muitas operações pequenas (~100/dia, alvo R$5-10) apostando
+em alta taxa de acerto. **Rejeitada por aritmética**, não por opinião. Não
+reabrir sem dado novo que contrarie os mecanismos abaixo.
+
+Win rate de EMPATE: `W = 0,5 + C/(2A)` — C = custo round-trip como fração da
+posição, A = alvo. Custo do repositório (`engine.py`): `(brokerage_pct +
+spread_pct) × 2`, mais `fixed_fee_per_order × 2 / posição`.
+
+```
+custo SO percentual (fixo R$0):
+  alvo A | rt=0.1% | rt=0.2% | rt=0.3% | rt=0.5%
+  0.25%  |  70.0%  |  90.0%  | IMPOSS  | IMPOSS
+  0.50%  |  60.0%  |  70.0%  |  80.0%  | IMPOSS
+  1.00%  |  55.0%  |  60.0%  |  65.0%  |  75.0%
+  2.00%  |  52.5%  |  55.0%  |  57.5%  |  62.5%
+  6.00%  |  50.8%  |  51.7%  |  52.5%  |  54.2%
+
+com FIXO R$2,50/ordem (R$5/round-trip), pct=0.1%:
+  alvo A | pos R$100 | pos R$1000 | pos R$10000
+  0.25%  |  IMPOSS   |  IMPOSS    |   80.0%
+  0.50%  |  IMPOSS   |  IMPOSS    |   65.0%
+  1.00%  |  IMPOSS   |   80.0%    |   57.5%
+  2.00%  |  IMPOSS   |   65.0%    |   53.8%
+  6.00%  |   92.5%   |   55.0%    |   51.2%
+```
+
+**Dois mecanismos independentes matam a hipótese:**
+
+1. **B3 — a corretagem FIXA mata antes de começar.** R$5 de round-trip fixo
+   numa posição de R$100 são 5% de custo; qualquer alvo < 2,5% fica
+   literalmente IMPOSSÍVEL (o custo excede o alvo, nenhum win rate salva).
+   Alta frequência pressupõe posições pequenas E alvos pequenos — exatamente
+   o quadrante morto.
+2. **Cripto (sem taxa fixa) — o win rate exigido é inatingível.** A 0,2% de
+   round-trip (Binance taker), alvo de 0,5% exige **70%** de acerto e 1% exige
+   60%. O sinal medido do projeto entrega ~43% de acerto, operando com alvos
+   de ~6% e MFE de +8% — regime de alvo GRANDE/horizonte diário. Encolher o
+   alvo empurra a exigência para 60-70%, sem nenhuma evidência de que seja
+   alcançável.
+3. **Tributação piora ainda mais.** Day trade paga **20%** sobre ganho líquido
+   **sem** a isenção de R$20 mil/mês (que só vale para swing), mais IRRF
+   "dedo-duro" de **1% sobre o ganho líquido do dia** (creditável, mas trava
+   caixa recorrentemente). Para o MESMO retorno líquido, o edge bruto acima do
+   empate precisa ser 1/(1−0,20) = **25% maior**.
+
+**Conclusão registrada:** não existe combinação de alvo/custo/capital que
+torne a hipótese viável na B3; em cripto só fecharia com win rate de 60-70%,
+para o qual não há evidência. O edge que o projeto tem (rompimento diário,
+alvo ~6%) **não é transportável** para alta frequência.
+
+
 ## 🪙 CRIPTO — o custo já começa dentro da faixa que matou a B3
 
 Registrado ANTES de qualquer implementação, porque muda a expectativa.
@@ -257,6 +455,26 @@ zero distorce o CAGR (ver achado central), qualquer varredura de parâmetros
 hoje ranqueia por uma métrica enviesada. **Religar antes de qualquer Fase 3.**
 Não foi feito neste turno porque muda comportamento de código de medição, que
 exige aprovação explícita.
+
+### 1c. 🔴 BLOQUEANTE PARA CAPITAL REAL — impacto de mercado não modelado
+
+O modelo de custo é **fração fixa** da posição (`brokerage_pct`,
+`spread_pct`) mais taxa fixa por ordem. Nenhum termo escala com a **liquidez
+do ativo**. Em R$300 isso é irrelevante: a posição típica de R$25-75 não move
+preço nenhum. Com capital real a premissa quebra — quando a ordem vira fração
+material do volume diário negociado, o preço de execução piora com o tamanho,
+e o efeito é **não-linear**.
+
+Consequência direta: **todo backtest deste repositório superestima o retorno
+de uma carteira grande**, e superestima mais quanto maior o capital. O
+`12,72%` medido é um teto que assume execução sem impacto.
+
+**Exige dado que o projeto não tem:** volume/liquidez diária por ativo
+(ADTV), para derivar um termo de impacto proporcional a
+`(tamanho da ordem / volume diário)`. Enquanto isso não existir, **não é
+possível dimensionar o capital máximo operável** — nem afirmar que o edge
+sobrevive a ele. Bloqueante antes de qualquer R$ real acima de valores
+simbólicos.
 
 ### 2. Risk-free é número mágico fixo
 
