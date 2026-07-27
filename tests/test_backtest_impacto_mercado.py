@@ -114,3 +114,35 @@ class TestImpactoDeMercado:
                   daily_vol={"OUTRO3.SA": {}}, slippage_coef=1.0)
         base = _roda(dados, janela)
         assert [t.pnl_pct for t in base.trades] == [t.pnl_pct for t in r.trades]
+
+
+class TestSensibilidadeAoModeloDeImpacto:
+    """A ressalva permanente: o modelo de impacto é ESTIMATIVA. A forma da curva
+    (piora com capital) é robusta; o ponto exato onde o edge some não é. Estes
+    testes travam o que muda quando se troca a premissa."""
+
+    def test_expoente_linear_pune_mais_que_raiz(self, dados, janela):
+        """Linear (expoente 1.0) vs raiz (0.5): para participação < 100%, a raiz
+        dá custo MAIOR que o linear (sqrt(x) > x quando x<1). Inverter isso
+        significaria que a escolha do modelo não está fazendo o que se pensa."""
+        adtv, vol = _liquidez(dados, 10_000_000.0)
+        kw = dict(adtv_brl=adtv, daily_vol=vol, slippage_coef=1.0)
+        raiz = _roda(dados, janela, slippage_exponent=0.5, **kw)
+        linear = _roda(dados, janela, slippage_exponent=1.0, **kw)
+        assert raiz.trades and linear.trades
+        # participação << 1, logo sqrt(p) > p  =>  custo raiz > custo linear
+        assert raiz.trades[0].pnl_pct < linear.trades[0].pnl_pct
+
+    def test_coeficiente_escala_o_custo_linearmente(self, dados, janela):
+        """coef=0.5 tem de custar exatamente METADE de coef=1.0 — é o parâmetro
+        que carrega toda a incerteza do modelo, então precisa ser previsível."""
+        # ADTV pequeno de propósito: o slippage precisa ser grande o bastante
+        # para não ser engolido pelo round(pnl_pct, 6) com que o Trade é gravado.
+        adtv, vol = _liquidez(dados, 10_000.0)
+        kw = dict(adtv_brl=adtv, daily_vol=vol)
+        base = _roda(dados, janela)
+        meio = _roda(dados, janela, slippage_coef=0.5, **kw)
+        cheio = _roda(dados, janela, slippage_coef=1.0, **kw)
+        s_meio = base.trades[0].pnl_pct - meio.trades[0].pnl_pct
+        s_cheio = base.trades[0].pnl_pct - cheio.trades[0].pnl_pct
+        assert s_cheio == pytest.approx(2 * s_meio, abs=1e-6)

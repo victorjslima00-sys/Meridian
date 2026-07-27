@@ -606,6 +606,50 @@ substituir um pelo outro.
 1,96. Dado saneado melhorou o ponto-estimativa e a consistência, não a
 conclusão estatística.
 
+### ✅ FILTRO DE LIQUIDEZ — o teto sobe 10-20×, e é ROBUSTO ao modelo
+
+Restrição de EXECUÇÃO (`max_adtv_participation`), não otimização de sinal:
+não abre posição cuja ordem exceda X% do ADTV. Aplicado na ENTRADA e
+dependente do TAMANHO DA ORDEM — o mesmo papel volta a ser elegível com
+capital menor. Um filtro retroativo de universo seria curve-fitting travestido.
+
+```
+     capital               X=0.5%               X=1.0%               X=2.0%               X=5.0%
+R$    10,000   +3.05% n=656  p0.03%   +2.48% n=665  p0.04%   +2.34% n=666  p0.04%   +2.16% n=668  p0.05%
+R$   100,000   +1.33% n=607  p0.12%   +2.02% n=630  p0.16%   +2.12% n=646  p0.20%   +1.57% n=657  p0.25%
+R$ 1,000,000   -3.24% n=385  p0.25%   -2.50% n=490  p0.42%   -1.44% n=565  p0.62%   -1.37% n=608  p1.05%
+```
+
+**Teto de capacidade: viável em R$100k, inviável em R$1M** — contra "zera
+entre R$10k e R$50k" da medição sobre dado corrompido.
+
+**Platô (critério pré-declarado):** existe em R$100k, com X=1-2% (+2,02% e
++2,12%). Nos extremos o comportamento é monotônico mas em **direções opostas**
+— em R$10k apertar melhora, em R$1M afrouxar melhora (apertar bloqueia 37% dos
+trades: 608 → 385). Isso é tranquilizador: se o filtro estivesse apenas
+selecionando vencedores, apertar melhoraria sempre. **Valor adotado: X = 1%**
+(dentro do platô, mais conservador).
+
+### Sensibilidade ao modelo de impacto — a conclusão NÃO depende da premissa
+
+```
+     capital     raiz coef=1.0     raiz coef=0.5    LINEAR coef=1.0   amplitude
+R$    10,000            +2.48%            +2.85%             +3.21%       0.73
+R$   100,000            +2.02%            +2.92%             +3.83%       1.81
+R$ 1,000,000            -2.50%            -1.87%             -1.15%       1.35
+
+  TETO por cenario:  raiz coef=1.0 -> R$100k | raiz coef=0.5 -> R$100k | LINEAR -> R$100k
+```
+
+**Os três cenários dão a MESMA resposta qualitativa.** O ponto-estimativa varia
+(+2,02% a +3,83% em R$100k), mas **o sinal não inverte em nenhum nível de
+capital** e o teto fica em R$100k nos três. A ressalva "modelo é estimativa"
+permanece válida para a MAGNITUDE; para a LOCALIZAÇÃO DO TETO, a conclusão é
+robusta.
+
+`raiz + coef=1.0` é o mais conservador dos três (sqrt(x) > x para x<1, logo a
+raiz pune mais que o linear em participação <100%) — e é o que está adotado.
+
 Custo em poder estatístico: blocos anuais independentes caem de 15 para **7**;
 o walk-forward de 5 folds vira **2 folds** de 3 anos. Com 7 blocos, o bootstrap
 tem pouquíssima resolução e o walk-forward praticamente deixa de existir.

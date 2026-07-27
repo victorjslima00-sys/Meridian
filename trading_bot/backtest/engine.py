@@ -115,6 +115,8 @@ def run_regime_backtest(
     adtv_brl: Optional[Mapping[str, Mapping[date, float]]] = None,   # volume financeiro médio diário
     daily_vol: Optional[Mapping[str, Mapping[date, float]]] = None,  # volatilidade diária do ativo
     slippage_coef: float = 0.0,       # 0 = desligado. Ver lei da raiz quadrada abaixo.
+    max_adtv_participation: float = 0.0,  # 0 = desligado. Teto de ordem/ADTV na ENTRADA.
+    slippage_exponent: float = 0.5,   # 0.5 = raiz quadrada (padrão); 1.0 = linear
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -167,7 +169,7 @@ def run_regime_backtest(
         sigma = ((daily_vol or {}).get(ticker) or {}).get(ref_date)
         if not adtv or adtv <= 0 or not sigma or sigma <= 0:
             return 0.0
-        return 2 * slippage_coef * sigma * math.sqrt(capital_posicao / adtv)
+        return 2 * slippage_coef * sigma * (capital_posicao / adtv) ** slippage_exponent
 
     # Carregar IBOV para filtro macro (se ativo)
     ibov_df = None
@@ -361,6 +363,24 @@ def run_regime_backtest(
                     max_positions=max_positions,
                     current_open_count=len(open_positions)
                 )
+
+                # FILTRO DE LIQUIDEZ (restrição de EXECUÇÃO, não de sinal).
+                # Uma ordem que representa fração grande do volume diário não é
+                # executável ao preço do backtest — a premissa "compro na
+                # abertura" quebra muito antes disso. Recusar a entrada modela
+                # a realidade; não é escolher trades vencedores.
+                #
+                # É filtro de ENTRADA e depende do TAMANHO DA ORDEM: o mesmo
+                # papel volta a ser elegível com capital menor. Um filtro
+                # retroativo de universo ("nunca opere small cap") seria
+                # curve-fitting travestido.
+                #
+                # Fail-safe: sem ADTV para o ticker-data, NÃO bloqueia — vetar
+                # por ausência de dado apagaria trades por motivo errado.
+                if max_adtv_participation > 0 and adtv_brl:
+                    _adtv = (adtv_brl.get(c.ticker) or {}).get(current_date)
+                    if _adtv and _adtv > 0 and pos_size / _adtv > max_adtv_participation:
+                        continue
 
                 if pos_size <= 0:
                     continue
