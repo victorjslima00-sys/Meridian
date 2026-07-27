@@ -16,7 +16,13 @@ class AppConfig:
         import os
         import re
 
-        with open(settings_path) as f:
+        # encoding EXPLÍCITO: os YAMLs são UTF-8, mas `open()` sem encoding usa
+        # a codepage do sistema (cp1252 no Windows). Acentos comuns (ã, ç, é)
+        # decodificavam por acaso — errado, mas sem estourar. Um "Í" (UTF-8
+        # \xc3\x8d) tem segundo byte INDEFINIDO em cp1252 e derrubava a carga
+        # inteira da config, quebrando ~29 testes de uma vez. Bug latente:
+        # dependia de QUAL acento alguém escrevesse num comentário.
+        with open(settings_path, encoding="utf-8") as f:
             raw_text = f.read()
         
         # Expandir ${VAR_NAME} com os valores do ambiente
@@ -27,7 +33,7 @@ class AppConfig:
         expanded = re.sub(r'\$\{([^}]+)\}', expand_env, raw_text)
         settings = yaml.safe_load(expanded)
 
-        with open(universe_path) as f:
+        with open(universe_path, encoding="utf-8") as f:
             universe = yaml.safe_load(f)
         settings["_universe"] = universe["universe"]
         return cls(raw=settings)
