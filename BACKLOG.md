@@ -566,6 +566,46 @@ evidência de decaimento no período com dado confiável".**
 **Janela limpa contígua: 2019-2025 — 7 anos, 352 trades** (contra 691 no OOS
 atual e 935 na amostra cheia).
 
+### ✅ TERCEIRA VIA — descartar o PREGÃO ruim, não o ano. Resolvido.
+
+O dilema "15 anos sujos vs 7 anos limpos" era falso. `trading_bot/data/sanity.py`
+remove a barra implausível e **mantém a janela**:
+
+```
+criterio                    pregoes desc.  % desc.  trades     CAGR   excesso a.a.       IR  t cluster
+SEM filtro (referencia)                 0     0.0%     691   11.43%         +2.69%   +0.233      +1.31
+vol<R$50k  congel>4                29.644    10,9%     666   12.19%         +3.41%   +0.293      +1.70
+vol<R$100k congel>4  (BASE)        32.371    11,9%     668   11.72%         +2.97%   +0.256      +1.55
+vol<R$500k congel>4                42.114    15,5%     662   13.14%         +4.30%   +0.369      +1.81
+vol<R$100k congel>2                34.190    12,6%     670   12.20%         +3.42%   +0.295      +1.82
+```
+
+**VEREDITO: o ruído DEFLACIONA.** Todas as variantes ficam ACIMA do cru, o
+`t` robusto sobe de +1,31 para +1,55…+1,82, e a amostra quase não muda
+(691 → 662-670 trades, **15 blocos anuais preservados**). O número cru é
+**limite inferior**, não otimista.
+
+Descarte no critério base: 32.371 de 271.891 pregões (11,9%) — 31.579 por
+volume, 792 por congelamento. Sobram 88,1% do dado e 97% dos trades.
+
+⚠️ **Ressalva sobre o critério mais rígido:** a melhora é monotônica com o
+limiar (+2,97% a R$100k → +4,30% a R$500k). Isso é suspeito: a R$500k já não
+se está removendo dado quebrado, e sim **small caps reais que perdem dinheiro**
+— ou seja, um filtro de liquidez disfarçado de saneamento. **O número
+defensável é o do critério BASE (+2,97%)**, cujo limiar de R$100k é justificado
+por "nenhum papel deste universo negocia menos que isso de verdade". Ganhos
+acima disso pertencem à discussão de filtro de liquidez, não de sanidade.
+
+⚠️ **Nota de comparabilidade:** o `+2,69%` cru desta tabela NÃO é o mesmo
+número que o `+2,22%` do walk-forward. Aquele era a MÉDIA de 5 janelas OOS de
+3 anos (capital reiniciando a cada fold); este é uma corrida contígua de 15
+anos. Metodologias diferentes, ordens de grandeza compatíveis — não somar nem
+substituir um pelo outro.
+
+**Significância continua ausente:** o melhor `t` robusto é +1,82, abaixo de
+1,96. Dado saneado melhorou o ponto-estimativa e a consistência, não a
+conclusão estatística.
+
 Custo em poder estatístico: blocos anuais independentes caem de 15 para **7**;
 o walk-forward de 5 folds vira **2 folds** de 3 anos. Com 7 blocos, o bootstrap
 tem pouquíssima resolução e o walk-forward praticamente deixa de existir.
