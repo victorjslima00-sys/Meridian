@@ -2,6 +2,32 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🧱 A FUNDAÇÃO DE DADOS É O ELO FRACO DO PROJETO
+
+**Quatro correções de medição, e CADA UMA alterou a conclusão:**
+
+| # | defeito | conclusão ANTES | conclusão DEPOIS |
+|---|---|---|---|
+| 1 | **warm-up** cortava 200 pregões de cada regime | "filtro de tendência funciona em bear (n=0)" | artefato — a janela era incapaz de gerar sinal |
+| 2 | **caixa ocioso** rendia 0% (66% do patrimônio) | "perde para o CDI, Sharpe −0,33" | bate o CDI, Sharpe +0,27 |
+| 3 | **sobrevivência** (universo escolhido hoje) | CAGR 12,72% | 11,91% — custa 0,82 p.p. |
+| 4 | **volume corrompido** no yfinance | "capital máximo R$10-50k" | curva inteira invalidada |
+
+Nenhuma dessas foi erro de estratégia. **Todas foram erro de dado ou de
+modelagem do dado.** O motor está correto; o que faltava era medir sobre
+realidade.
+
+**Consequência para capital próprio: dado licenciado é PRÉ-REQUISITO, não
+otimização.** brapi Pro (~R$117/mês) ou feed da própria corretora. O yfinance
+é aceitável para pesquisa exploratória e **inaceitável** como base de decisão
+sobre dinheiro real — 11,6% dos pregões têm volume implausível e 4,78% têm
+preço congelado, sem nenhum aviso da fonte.
+
+Corolário operacional: **todo número deste repositório deve declarar sobre
+qual janela de dado confiável foi medido.** A janela limpa (volume e preço com
+<5% de anomalia) é **2019-2025** — sete anos, não vinte.
+
+
 ## 🧭 ACHADO METODOLÓGICO (vale mais que qualquer resultado desta sessão)
 
 Duas armadilhas que o projeto atravessou inteiras antes de perceber. Valem
@@ -394,6 +420,277 @@ IS 2018-2022 era artefato daquela janela específica (crash COVID + bear de
 vem de 4 pontos e **não é estatisticamente significativa**. A conclusão
 defensável é a negativa — **não há evidência de decaimento** — não a positiva
 de que o edge esteja crescendo de forma confiável.
+
+
+## 🏦 CAPACIDADE — qual capital MÁXIMO antes do edge sumir (2026-07-27)
+
+Último bloqueante quantitativo, e o único termo de custo que **piora** com o
+tamanho do capital (os demais são fração fixa, invariantes a escala).
+
+**Modelo: lei da raiz quadrada** (Almgren et al.; Grinold & Kahn) —
+`slippage_por_ponta = coef · σ_diária · √(valor_ordem / ADTV)`, `coef = 1.0`
+(conservador), ADTV e σ em janela móvel de 21 pregões por ativo, round-trip
+paga 2 pontas. Escolhido por ser o padrão de impacto temporário na literatura;
+a raiz importa porque um modelo linear erraria a curva por ordens de grandeza.
+
+```
+     capital     n     CAGR   excesso a.a.       IR   part.media ADTV      p95      max
+R$    10,000   691    9.53%         +0.92%   +0.080           1.0374%    0.51%   184.0%
+R$    50,000   691    7.48%         -0.96%   -0.082           4.4809%    2.33%   768.4%
+R$   100,000   691    6.12%         -2.19%   -0.183           8.1095%    4.32%  1353.8%
+R$   500,000   691    1.52%         -6.28%   -0.469          28.4702%   13.82%  4223.8%
+R$ 1,000,000   691   -1.12%         -8.54%   -0.591          46.0031%   19.30%  7286.6%
+R$ 5,000,000   691   -8.49%        -14.58%   -0.805         121.1284%   56.18% 28614.5%
+```
+
+**Resposta direta:** o excesso de +2,22% cai para **+0,92% já em R$10 mil**
+(o impacto custa 1,30 p.p. mesmo em capital pequeno) e **zera entre R$10 mil
+e R$50 mil**. Acima disso a estratégia perde do benchmark de mesmo risco, e em
+R$1M o CAGR fica negativo.
+
+### 🔴 A CURVA ACIMA ESTÁ SOBRE DADO CORROMPIDO — não usar para decidir
+
+Verificação de qualidade do ADTV (2026-07-27) invalidou a curva. O volume do
+yfinance para tickers brasileiros é **sistematicamente quebrado em períodos
+antigos**:
+
+```
+PCAR3 — volume financeiro medio ANUAL
+  2017: R$          280/dia      2019: R$        1.313/dia
+  2020: R$   96.473.549/dia   <== SALTO de 73.478x
+BHIA3
+  2017: R$      102.768/dia      2018: R$    4.618.310/dia  (44x)
+  2019: R$  201.050.400/dia   <== outro salto de 43x
+```
+
+Não é grupamento/desdobramento — é **dado ausente**. PCAR3 (Pão de Açúcar) é
+blue chip há décadas; volume de 3 ações/dia em 2008 não existe.
+
+**Extensão do problema:**
+```
+  31.579/271.891 pregoes = 11,6% com volume financeiro < R$100k/dia
+  31 de 58 tickers com >2% de pregoes ruins
+  varios com "ultimo pregao ruim" em 2018-01-25 -> corte sistemico da fonte
+  SUZB3 59,8% | PCAR3 69,9% | BHIA3 54,7% | PDGR3 85,2%
+```
+
+**Impacto direto na curva de capacidade:**
+```
+  12/691 trades (1,7%) usam ADTV < R$100k  -> respondem por 40,5% do slippage
+  37/691 trades (5,4%) usam ADTV < R$1M    -> respondem por 55,7% do slippage
+  participacao media nesses trades: 119,1%  vs 0,1476% nos demais
+```
+
+**Ou seja: o colapso de capacidade entre R$10k e R$50k é dirigido por trades
+cujo ADTV é dado inválido, não por iliquidez real.** A conclusão "capital
+máximo ~R$10-50k" **não se sustenta** e não deve ser usada.
+
+**Correção necessária antes de repetir a medição** (não implementada):
+1. Fonte de volume confiável — brapi exige token (HTTP 401 sem chave); a
+   alternativa é dado da própria corretora ou vendor pago.
+2. Enquanto não houver, **restringir a janela de medição** ao período em que o
+   volume é plausível (pós-2019/2020 para a maioria) — reduz a amostra mas
+   mede sobre dado real.
+3. Filtro de sanidade no ingestor: descartar/sinalizar pregão com volume
+   financeiro implausível em vez de propagá-lo silenciosamente.
+
+**Custo:** opção 2 é barata (uma linha de janela + re-rodar a curva, ~30 min)
+mas corta a amostra pela metade; opção 1 depende de credencial/contrato.
+
+**Testar filtro de liquidez sobre este dado produziria resultado convincente e
+FALSO** — o filtro removeria exatamente os trades de ADTV corrompido e
+"melhoraria" a curva por motivo errado.
+
+### Auditoria de PREÇO (2026-07-27) — comprometido no passado, LIMPO no OOS
+
+A pergunta que decidia tudo: se o `close`/`adj_close` também estivesse
+corrompido, não seria a capacidade que estaria errada — seria **toda** a
+medição (+2,22%, Sharpe, regimes, sobrevivência).
+
+```
+  preco <= 0                                : 0
+  preco NaN                                 : 0
+  fechamento CONGELADO >=5 pregoes seguidos : 13.006  (4,78%)
+  |retorno diario| > 50%                    : 76      (0,028%)
+  distribuicao temporal dos gaps: dispersa, SEM corte sistemico
+```
+
+**Séries costuradas** (o risco de rompimento fantasma) — maiores blocos
+congelados e o salto na emenda:
+
+```
+  PCAR3  577 pregoes fixos em R$2,18   -> emenda 2007-09-24, salto  -1,3%
+  SUZB3  585 pregoes fixos em R$12,15  -> emenda 2009-10-29, salto  +0,5%
+  UGPA3  590 pregoes fixos em R$3.302.501,25 (!) -> emenda 2007-05-04, -100%
+  BHIA3  320 pregoes fixos em R$40,08  -> emenda 2006-04-11, salto +54,5%
+  RADL3  157 pregoes fixos em R$0,04   -> emenda 2006-11-03, salto +74,4%
+```
+
+**VEREDITO: o número de referência SOBREVIVE.**
+
+```
+  emenda mais RECENTE: 2009-10-29   |   inicio do OOS: 2011-01-01
+  -> TODAS as emendas estao FORA da janela OOS
+
+  trades OOS com adj_close suspeito : 4/691 = 0,6%
+  trades OOS com gap >50% na janela : 0    = 0,0%   (nenhum rompimento fantasma)
+  pnl medio SUSPEITOS: -6,443%   vs   LIMPOS: +0,492%
+  contribuicao dos suspeitos ao pnl agregado: -8,3%
+```
+
+Os poucos trades tocados por preço suspeito **PERDEM dinheiro** — deflacionam
+o resultado em 8,3%, não o inflam. Removê-los MELHORARIA o número. **O +2,22%
+não é lucro fantasma; é conservador.**
+
+⚠️ **MAS isso invalida parcialmente a análise de DECAIMENTO.** O bloco
+2006-2010 (que mediu excesso −0,00% e sustentou a conclusão "o edge cresce")
+roda sobre dado com **37,5% de volume ruim e 28,2% de preço congelado**. O
+bloco antigo pode parecer fraco porque o dado é ruim, não porque o mercado
+era pior. **A conclusão "o edge cresce" precisa ser rebaixada para "não há
+evidência de decaimento no período com dado confiável".**
+
+### Qual janela sobra com sanidade de volume E preço
+
+```
+   ano   pregoes   vol<R$100k  preco congel.      veredito
+  2006     8.667       37,5%          28,2%          RUIM
+  2010    11.907       17,5%          13,0%          RUIM
+  2015    13.228       11,8%          11,2%          RUIM
+  2018    13.689        6,2%           4,9%          RUIM
+  2019    13.823        3,9%           4,1%            OK
+  2020    13.898        2,1%           1,5%            OK
+  2023    14.136        0,6%           2,8%            OK
+  2025    14.250        4,6%           3,8%            OK
+```
+
+**Janela limpa contígua: 2019-2025 — 7 anos, 352 trades** (contra 691 no OOS
+atual e 935 na amostra cheia).
+
+### ✅ TERCEIRA VIA — descartar o PREGÃO ruim, não o ano. Resolvido.
+
+O dilema "15 anos sujos vs 7 anos limpos" era falso. `trading_bot/data/sanity.py`
+remove a barra implausível e **mantém a janela**:
+
+```
+criterio                    pregoes desc.  % desc.  trades     CAGR   excesso a.a.       IR  t cluster
+SEM filtro (referencia)                 0     0.0%     691   11.43%         +2.69%   +0.233      +1.31
+vol<R$50k  congel>4                29.644    10,9%     666   12.19%         +3.41%   +0.293      +1.70
+vol<R$100k congel>4  (BASE)        32.371    11,9%     668   11.72%         +2.97%   +0.256      +1.55
+vol<R$500k congel>4                42.114    15,5%     662   13.14%         +4.30%   +0.369      +1.81
+vol<R$100k congel>2                34.190    12,6%     670   12.20%         +3.42%   +0.295      +1.82
+```
+
+**VEREDITO: o ruído DEFLACIONA.** Todas as variantes ficam ACIMA do cru, o
+`t` robusto sobe de +1,31 para +1,55…+1,82, e a amostra quase não muda
+(691 → 662-670 trades, **15 blocos anuais preservados**). O número cru é
+**limite inferior**, não otimista.
+
+Descarte no critério base: 32.371 de 271.891 pregões (11,9%) — 31.579 por
+volume, 792 por congelamento. Sobram 88,1% do dado e 97% dos trades.
+
+⚠️ **Ressalva sobre o critério mais rígido:** a melhora é monotônica com o
+limiar (+2,97% a R$100k → +4,30% a R$500k). Isso é suspeito: a R$500k já não
+se está removendo dado quebrado, e sim **small caps reais que perdem dinheiro**
+— ou seja, um filtro de liquidez disfarçado de saneamento. **O número
+defensável é o do critério BASE (+2,97%)**, cujo limiar de R$100k é justificado
+por "nenhum papel deste universo negocia menos que isso de verdade". Ganhos
+acima disso pertencem à discussão de filtro de liquidez, não de sanidade.
+
+⚠️ **Nota de comparabilidade:** o `+2,69%` cru desta tabela NÃO é o mesmo
+número que o `+2,22%` do walk-forward. Aquele era a MÉDIA de 5 janelas OOS de
+3 anos (capital reiniciando a cada fold); este é uma corrida contígua de 15
+anos. Metodologias diferentes, ordens de grandeza compatíveis — não somar nem
+substituir um pelo outro.
+
+**Significância continua ausente:** o melhor `t` robusto é +1,82, abaixo de
+1,96. Dado saneado melhorou o ponto-estimativa e a consistência, não a
+conclusão estatística.
+
+### ✅ FILTRO DE LIQUIDEZ — o teto sobe 10-20×, e é ROBUSTO ao modelo
+
+Restrição de EXECUÇÃO (`max_adtv_participation`), não otimização de sinal:
+não abre posição cuja ordem exceda X% do ADTV. Aplicado na ENTRADA e
+dependente do TAMANHO DA ORDEM — o mesmo papel volta a ser elegível com
+capital menor. Um filtro retroativo de universo seria curve-fitting travestido.
+
+```
+     capital               X=0.5%               X=1.0%               X=2.0%               X=5.0%
+R$    10,000   +3.05% n=656  p0.03%   +2.48% n=665  p0.04%   +2.34% n=666  p0.04%   +2.16% n=668  p0.05%
+R$   100,000   +1.33% n=607  p0.12%   +2.02% n=630  p0.16%   +2.12% n=646  p0.20%   +1.57% n=657  p0.25%
+R$ 1,000,000   -3.24% n=385  p0.25%   -2.50% n=490  p0.42%   -1.44% n=565  p0.62%   -1.37% n=608  p1.05%
+```
+
+**Teto de capacidade: viável em R$100k, inviável em R$1M** — contra "zera
+entre R$10k e R$50k" da medição sobre dado corrompido.
+
+**Platô (critério pré-declarado):** existe em R$100k, com X=1-2% (+2,02% e
++2,12%). Nos extremos o comportamento é monotônico mas em **direções opostas**
+— em R$10k apertar melhora, em R$1M afrouxar melhora (apertar bloqueia 37% dos
+trades: 608 → 385). Isso é tranquilizador: se o filtro estivesse apenas
+selecionando vencedores, apertar melhoraria sempre. **Valor adotado: X = 1%**
+(dentro do platô, mais conservador).
+
+### Sensibilidade ao modelo de impacto — a conclusão NÃO depende da premissa
+
+```
+     capital     raiz coef=1.0     raiz coef=0.5    LINEAR coef=1.0   amplitude
+R$    10,000            +2.48%            +2.85%             +3.21%       0.73
+R$   100,000            +2.02%            +2.92%             +3.83%       1.81
+R$ 1,000,000            -2.50%            -1.87%             -1.15%       1.35
+
+  TETO por cenario:  raiz coef=1.0 -> R$100k | raiz coef=0.5 -> R$100k | LINEAR -> R$100k
+```
+
+**Os três cenários dão a MESMA resposta qualitativa.** O ponto-estimativa varia
+(+2,02% a +3,83% em R$100k), mas **o sinal não inverte em nenhum nível de
+capital** e o teto fica em R$100k nos três. A ressalva "modelo é estimativa"
+permanece válida para a MAGNITUDE; para a LOCALIZAÇÃO DO TETO, a conclusão é
+robusta.
+
+`raiz + coef=1.0` é o mais conservador dos três (sqrt(x) > x para x<1, logo a
+raiz pune mais que o linear em participação <100%) — e é o que está adotado.
+
+Custo em poder estatístico: blocos anuais independentes caem de 15 para **7**;
+o walk-forward de 5 folds vira **2 folds** de 3 anos. Com 7 blocos, o bootstrap
+tem pouquíssima resolução e o walk-forward praticamente deixa de existir.
+**Trade-off explícito: dado confiável e amostra insuficiente, ou amostra grande
+e dado que sabidamente mente.**
+
+### ⚠️ Mesmo com dado bom, o limite tende a ser de POUCOS TRADES, não estrutural
+
+A distribuição de participação é extremamente assimétrica — a média (2,21%)
+é maior que o p95 (1,02%), o que sozinho já denuncia outliers dominando:
+
+```
+  p50: 0.0196%   p75: 0.0559%   p90: 0.1908%   p95: 1.0231%   p99: 15.42%
+  trades com participacao > 5% do ADTV:  14/691 = 2.0%
+  trades com participacao > 100%:         4
+
+  TOP participacoes (capital R$10k):
+  PCAR3   416.9%   ordem R$11.385   ADTV R$2.731
+  PCAR3   402.7%   ordem R$ 9.400   ADTV R$2.334
+  BHIA3   238.8%   ordem R$ 7.680   ADTV R$3.216
+  BHIA3   169.2%   ordem R$ 6.165   ADTV R$3.644
+
+  54,6% de TODO o slippage vem dos 5% de trades mais ilíquidos
+  63,3% vem dos 10% mais ilíquidos
+```
+
+**O trade mediano participa com 0,02% do ADTV — completamente inofensivo.**
+O que destrói a capacidade são ~14 trades em papéis que viraram quase
+intradeáveis (PCAR3 e BHIA3 pós-colapso). Note que estes NÃO são os
+tickers-desastre adicionados: estavam no universo original, escolhidos por
+liquidez de HOJE, e ficaram ilíquidos no meio do caminho.
+
+**Mitigação óbvia e NÃO TESTADA:** um filtro de liquidez mínima (ex.: não
+entrar se a ordem > 1% do ADTV, ou se ADTV < R$X) removeria os 2% de trades
+que causam 55% do dano. **Isso provavelmente move o teto de capacidade em
+ordens de grandeza** — mas é hipótese, não medição.
+
+**Suspeita de qualidade de dado:** ADTV de R$2.731/dia para PCAR3 (Pão de
+Açúcar) é implausível mesmo pós-colapso. Pode ser artefato do yfinance
+(volume mal ajustado após grupamento/desdobramento). Não verificado — se for
+erro de dado, a curva de capacidade está pessimista demais no topo da cauda.
 
 
 ## 🚫 ALTA FREQUÊNCIA — HIPÓTESE TESTADA E REJEITADA (2026-07-26)
