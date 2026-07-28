@@ -19,11 +19,24 @@ X=1% do ADTV e modelo de impacto de mercado ativo.
 | métrica | valor |
 |---|---|
 | excesso sobre benchmark de mesmo risco | **+2,02% a.a.** |
-| `t` robusto a cluster anual | **+1,82** (limiar 1,96) → **NÃO significativo** |
+| `t` robusto a cluster anual | **+1,18** (limiar 1,96) → **NÃO significativo** |
 | Information Ratio | +0,207 |
 | teto de capacidade | **R$100 mil** (inviável em R$1M) |
 | drawdown máximo | ~17% |
 | **valor absoluto** | **≈ R$2.000/ano** |
+
+> ⚠️ **Correção (2026-07-28).** A primeira versão deste documento pareava
+> `+2,02%` com `t=+1,82`. Os dois números vinham de **runs diferentes** — o
+> excesso de `liq_c100000_x0.01` (R$100k, X=1%, com slippage) e o `t` de
+> `san_congel2` (capital R$300, sem slippage nem filtro de liquidez, cujo
+> excesso era +3,42%). Medidos no MESMO run, o par correto é
+> **(+2,02% ; t=+1,18)**. A correção **reforça** a não-significância.
+
+> ⚠️ **Múltiplos testes.** Ao longo da pesquisa foram testadas **13
+> configurações** (11 famílias de estratégia + 2 combinações). Reportar o
+> melhor `t` de 13 tentativas **infla o número por seleção**. Com correção de
+> Bonferroni o limiar efetivo seria ≈ **2,7**, não 1,96 — e o melhor `t`
+> medido em qualquer configuração foi **+1,31**.
 
 ### Robustez do que foi medido
 
@@ -219,6 +232,55 @@ gerava aviso. Cinco deles alteraram — ou teriam alterado — o **sinal** ou a
 **ordem de grandeza** de uma conclusão. A defesa que funcionou não foi
 revisão de código: foi **ceticismo simétrico** — aplicar à boa notícia o mesmo
 rigor que se aplica à má.
+
+---
+
+## 3.8 Varredura de famílias — o que mais foi testado e falhou
+
+Depois do encerramento, 11 configurações de estratégia foram medidas sob a
+mesma régua (dado saneado, X=1%, caixa no CDI, benchmark 25/75, custo com
+componente fixo, impacto de mercado, OOS 2011-2025, R$100k), com parâmetros
+**canônicos da literatura, não otimizados**.
+
+```
+estrategia        exc a.a.      IR  t robusto  P(exc<=0)   maxDD     n  winrate
+Donchian 20d        +2.02%  +0.180      +1.18      0.119  -17.4%   630   41.1%
+Donchian+ADX        +4.02%  +0.273      +1.12      0.127  -22.6%   757   44.0%
+Cruz.50/200         +1.28%  +0.124      +0.62      0.267  -12.8%   275   50.2%
+Squeeze Boll.       +1.42%  +0.124      +0.57      0.278  -23.1%   657   44.6%
+Donchian 55d        +0.76%  +0.074      +0.42      0.343  -19.1%   552   41.1%
+Donchian 40d        +0.63%  +0.060      +0.38      0.371  -17.4%   589   40.4%
+Mom.absoluto        +0.19%  +0.011      +0.04      0.475  -38.7%   690   44.6%
+RSI(2)Connors       -2.34%  -0.174      -0.70      0.739  -36.7%   812   42.7%
+Mom.XS 12-1         -2.81%  -0.176      -0.81      0.796  -31.2%   670   43.6%
+Boll.reversao       -3.30%  -0.308      -1.21      0.886  -29.3%   398   39.9%
+Reversao 5d         -6.25%  -0.375      -1.67      0.953  -50.0%   761   43.0%
+```
+
+**Nenhuma passa 1,96.** Combinação 50/50 das duas melhores: `t`=+1,31.
+
+Quatro achados que valem além do veredito:
+
+**Reversão é negativa neste universo — não voltar ali.** As três variantes
+perdem (RSI(2), Bollinger, 5 dias), somando **1.971 trades**, e a mais
+agressiva é a pior. Não é ruído: é padrão.
+
+**Variar o período do Donchian não diversifica.** Correlação do 20d com o 40d
+= **0,86** e com o 55d = **0,79**, e ambos rendem menos. É a mesma aposta com
+calibração pior. Diversificar exige mudar de **família**, não de parâmetro.
+
+**Donchian+ADX é o caso didático de por que ranquear por RETORNO engana.** Tem
+o maior excesso (+4,02%, o dobro do Donchian puro) e simultaneamente `t`
+**menor** (+1,12), o IC95% **mais largo de todos** ([−2,84%, +11,21%]) e
+drawdown pior (−22,6%). O ADX seleciona menos oportunidades e mais
+concentradas: a média sobe, a variância sobe mais. Um ranking por retorno o
+colocaria em primeiro; por confiança, ele perde.
+
+**Diversificação melhora, mas não cria edge onde não há.** As estratégias com
+excesso positivo são pouco correlacionadas entre si (ρ 0,15-0,30) — o cenário
+em tese ideal. Combinar as duas melhores dá `t`=+1,31, superior a qualquer
+isolada e ainda muito longe de 1,96 (ou dos ~2,7 exigidos por Bonferroni).
+**Duas medianas descorrelacionadas continuam sendo duas medianas.**
 
 ---
 
