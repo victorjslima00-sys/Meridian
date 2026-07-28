@@ -2,6 +2,68 @@
 
 Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
+## 🏁 MEDIÇÃO ENCERRADA — quadro final consolidado (2026-07-27)
+
+**Excesso +2,02% a.a.** sobre benchmark de mesmo risco (25% IBOV + 75% CDI),
+dado saneado, X=1% de participação no ADTV, capital R$100k, OOS 2011-2025.
+**`t` robusto +1,82 — NÃO significativo.** Teto de capacidade R$100k, robusto
+a 3 modelos de impacto. Drawdown ~17%.
+
+**Valor absoluto ≈ R$2.000/ano.**
+
+**O TETO É POR MERCADO.** Escalar capital não aumenta o valor absoluto — acima
+de R$100k o excesso vira negativo. Só **mais mercados em paralelo** aumentam.
+
+**Esta é a informação que decide contra construir a camada de execução
+(12 semanas) para a B3 isoladamente.**
+
+### Sondagem de capacidade em cripto (2026-07-27) — ESTIMATIVA, não medição
+
+```
+  B3 (universo saneado, 58 tickers, ultimos 365 pregoes):
+    ADTV mediano  : R$       103.794.576/dia   (US$    19.221.218)
+    ADTV menor    : R$           188.298/dia   (US$        34.870)
+
+  CRIPTO (8 pares com >=7 anos, Binance, ultimos 365 dias):
+    par             ADTV mediano USD
+    BTCUSDT           1.399.735.858
+    ETHUSDT             971.616.632
+    XRPUSDT             181.400.964
+    BNBUSDT             108.004.626
+    DOGEUSDT            105.071.031
+    ZECUSDT              87.533.051
+    TRXUSDT              50.070.141
+    ADAUSDT              41.594.651
+    mediana: US$106.537.828/dia   |   menor: US$41.594.651/dia
+
+  RAZAO cripto/B3:  mediana 5,5x   |   menor-vs-menor 1.192,8x
+```
+
+**Teto implicado: ~R$550k (US$~100k)** — R$100k × 5,5.
+
+⚠️ **NÃO é "ordens de grandeza" — é meia ordem de grandeza.** O número de
+1.192x é inflado: compara o menor par de cripto com a menor small cap da B3.
+O gargalo de uma carteira de 3 posições é o ativo menos líquido **que ela
+escolhe**, e o filtro de liquidez já rejeita os ilíquidos. A comparação
+relevante é a **mediana: 5,5x**.
+
+**Contrapesos medidos:**
+
+| fator | B3 | cripto | efeito |
+|---|---|---|---|
+| custo round-trip | 0,10% | 0,20% (Binance taker) | −0,38 p.p. a.a. no excesso |
+| histórico | 940 ativo-anos | ~66 (8 pares × 8,3a) | **14× menos**; poder ~3,8× pior |
+| ADTV mediano | R$104M | R$575M | teto 5,5× maior |
+
+Se o edge bruto fosse **idêntico**, o excesso em cripto seria **+1,64% a.a.**
+(2,02 − 0,38). Teto ~R$550k → **valor absoluto ≈ R$9.000/ano**.
+
+**Leitura para a decisão:** cripto multiplica o valor absoluto por ~4,5×
+(R$2k → R$9k), não por ordens de grandeza. E isso assumindo que o edge do
+Donchian **transfere** para cripto — hipótese não testada, com 14× menos dado
+para testá-la. Com ~66 ativo-anos, a significância seria pior que a da B3, que
+já não passa.
+
 ## 🧱 A FUNDAÇÃO DE DADOS É O ELO FRACO DO PROJETO
 
 **Quatro correções de medição, e CADA UMA alterou a conclusão:**
