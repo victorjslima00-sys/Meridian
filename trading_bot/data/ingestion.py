@@ -103,6 +103,7 @@ def fetch_yfinance(
     start: date,
     end: Optional[date] = None,
     yf_suffix: str = ".SA",
+    sanitize: bool = True,
 ) -> pd.DataFrame:
     """
     Busca histórico OHLCV via yfinance.
@@ -147,7 +148,25 @@ def fetch_yfinance(
     if "Close" in df.columns:
         df["adj_close"] = df["Close"]
 
-    return _normalize(df, ticker)
+    out = _normalize(df, ticker)
+
+    # SANEAMENTO na porta de entrada. A auditoria de 2026-07-27 mediu, no
+    # yfinance para tickers da B3: 11,6% dos pregões com volume financeiro
+    # implausível (PCAR3 com 3 ações/dia em 2008) e 4,78% com fechamento
+    # congelado (UGPA3 fixo em R$3.302.501,25 por 590 pregões). A fonte não
+    # sinaliza nada disso. Sanear aqui é melhor que sanear em cada consumidor:
+    # o dado sujo nunca chega ao backtest, ao otimizador ou ao relatório.
+    if sanitize and not out.empty:
+        from trading_bot.data.sanity import sanitize_ohlcv
+
+        antes = len(out)
+        out = sanitize_ohlcv(out)
+        if len(out) < antes:
+            logger.info(
+                "[%s] saneamento removeu %d de %d pregoes implausiveis",
+                ticker, antes - len(out), antes,
+            )
+    return out
 
 
 # ---------------------------------------------------------------------------

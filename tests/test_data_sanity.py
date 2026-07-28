@@ -19,6 +19,8 @@ verdade (limite, crise, fraude revelada), e descartá-la apagaria justamente os
 eventos que a estratégia precisa enfrentar. Os dois critérios acima são
 objetivos; "retorno grande demais" não é.
 """
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -115,3 +117,68 @@ class TestFiltroDeSanidade:
         assert rel["descartados_congelamento"] == 0
         assert rel["total_entrada"] == len(df)
         assert rel["total_saida"] == len(out)
+
+
+class TestFiltroLigadoAoIngestor:
+    """O saneamento na PORTA DE ENTRADA: o dado sujo nunca chega ao backtest,
+    ao otimizador ou ao relatório. Sanear em cada consumidor seria repetir a
+    regra em N lugares e esquecer num deles."""
+
+    def _df_sujo(self):
+        import numpy as np
+        n = 30
+        return pd.DataFrame({
+            "ticker": ["X"] * n,
+            "ts": pd.date_range("2020-01-01", periods=n, freq="D").date,
+            "o": [10.0] * n, "h": [10.1] * n, "l": [9.9] * n,
+            "c": [10.0 + i * 0.01 for i in range(n)],
+            "adj_close": [10.0 + i * 0.01 for i in range(n)],
+            "v": [100_000.0] * n,
+        })
+
+    def test_fetch_yfinance_saneia_por_padrao(self, monkeypatch):
+        from trading_bot.data import ingestion
+
+        sujo = self._df_sujo()
+        sujo.loc[5:9, "v"] = 0.01           # volume financeiro ~R$0,10
+        monkeypatch.setattr(ingestion, "_normalize", lambda df, t: sujo)
+        monkeypatch.setattr(
+            ingestion.yf, "download",
+            lambda *a, **k: pd.DataFrame({"Close": [1.0]}),
+        )
+        out = ingestion.fetch_yfinance("X", date(2020, 1, 1))
+        assert len(out) == len(sujo) - 5
+
+    def test_pode_ser_desligado_explicitamente(self, monkeypatch):
+        """Escape hatch para quem precisar do dado cru (auditoria de fonte,
+        comparação antes/depois). Desligar tem de ser DELIBERADO."""
+        from trading_bot.data import ingestion
+
+        sujo = self._df_sujo()
+        sujo.loc[5:9, "v"] = 0.01
+        monkeypatch.setattr(ingestion, "_normalize", lambda df, t: sujo)
+        monkeypatch.setattr(
+            ingestion.yf, "download",
+            lambda *a, **k: pd.DataFrame({"Close": [1.0]}),
+        )
+        out = ingestion.fetch_yfinance("X", date(2020, 1, 1), sanitize=False)
+        assert len(out) == len(sujo)
+
+
+class TestSaneadorNuncaDerrubaOPipeline:
+    """Um filtro de sanidade que estoura é pior que dado sujo: derruba a
+    ingestão inteira. Schema incompleto tem de degradar para o critério que
+    ainda dá para aplicar."""
+
+    def test_sem_coluna_de_volume_aplica_so_o_congelamento(self):
+        df = _serie(n=30).drop(columns=["v"])
+        df.loc[10:20, "c"] = 7.77
+        df.loc[10:20, "adj_close"] = 7.77
+        out = sanitize_ohlcv(df)
+        assert len(out) < len(df)          # congelamento ainda pega
+        assert "v" not in out.columns      # e não inventa a coluna
+
+    def test_sem_coluna_de_fechamento_devolve_intacto(self):
+        df = _serie(n=10).drop(columns=["c"])
+        out = sanitize_ohlcv(df)
+        assert len(out) == len(df)
