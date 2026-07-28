@@ -73,12 +73,21 @@ def sanitize_ohlcv(
     if df is None or len(df) == 0:
         return (df, relatorio) if return_report else df
 
+    # Um saneador NUNCA pode derrubar o pipeline: schema incompleto degrada
+    # para o critério que ainda dá para aplicar, em vez de estourar. Fontes
+    # diferentes (e mocks de teste) nem sempre trazem volume.
+    if "c" not in df.columns:
+        return (df, relatorio) if return_report else df
+
     d = df.sort_values("ts").reset_index(drop=True)
     close = d["c"].to_numpy(dtype=float)
-    vol = d["v"].to_numpy(dtype=float)
 
-    financeiro = close * vol
-    ruim_vol = np.isfinite(financeiro) & (financeiro < min_financial_volume)
+    if "v" in d.columns:
+        financeiro = close * d["v"].to_numpy(dtype=float)
+        ruim_vol = np.isfinite(financeiro) & (financeiro < min_financial_volume)
+    else:
+        ruim_vol = np.zeros(len(close), dtype=bool)
+
     ruim_congelado = _frozen_mask(close, max_frozen_run)
 
     relatorio["descartados_volume"] = int(ruim_vol.sum())
