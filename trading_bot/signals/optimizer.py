@@ -46,6 +46,7 @@ class MeridianGeneticOptimizer:
         Função de fitness real que roda o backtest e devolve o Sharpe.
         """
         from trading_bot.backtest.engine import run_regime_backtest
+        from trading_bot.data.risk_free import load_cdi_daily_fractions
         from trading_bot.backtest.optimizer import calculate_sharpe_ratio
         
         try:
@@ -72,6 +73,10 @@ class MeridianGeneticOptimizer:
                     "rsi_max": float(individual["rsi_max"]),
                     "stop_pct": float(individual["stop_pct"]),
                 },
+                # Caixa ocioso rende CDI — ver comentário em
+                # backtest/optimizer.py. Sem isto o fitness da busca genética
+                # ranqueia por CAGR distorcido.
+                cash_daily_yield=load_cdi_daily_fractions(),
             )
 
             if len(result.equity_curve) < 10:
