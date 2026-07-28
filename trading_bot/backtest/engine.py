@@ -117,6 +117,7 @@ def run_regime_backtest(
     slippage_coef: float = 0.0,       # 0 = desligado. Ver lei da raiz quadrada abaixo.
     max_adtv_participation: float = 0.0,  # 0 = desligado. Teto de ordem/ADTV na ENTRADA.
     slippage_exponent: float = 0.5,   # 0.5 = raiz quadrada (padrão); 1.0 = linear
+    signal_fn=None,                   # None = compute_signal (Donchian). Ver abaixo.
 ) -> BacktestResult:
     """
     Simula a estratégia em um regime de mercado.
@@ -129,6 +130,11 @@ def run_regime_backtest(
           capital_cash += pos.capital + pnl_abs
     """
     signal_params = signal_params or {}
+    # A FAMILIA de estrategia e parametro; todo o resto (custo, benchmark,
+    # janela, filtro de liquidez, contabilidade de caixa) fica constante.
+    # Reimplementar o loop por familia daria a comparacao errada: qualquer
+    # diferenca de contabilidade viraria "alfa".
+    gerar_sinal = signal_fn or compute_signal
     initial_capital = capital
     round_trip = (brokerage_pct + spread_pct) * 2
 
@@ -334,7 +340,7 @@ def run_regime_backtest(
                 if len(df_hist) < 200:   # Mínimo para SMA-200
                     continue
                 try:
-                    c = compute_signal(df_hist, ticker, **signal_params)
+                    c = gerar_sinal(df_hist, ticker, **signal_params)
                     if c:
                         candidates.append(c)
                 except Exception as e:
