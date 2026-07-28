@@ -664,6 +664,38 @@ async def _run_one_scan_cycle():
             if decision["approved"]:
                 await broadcast_log("RiskManager", decision["reason"], "success")
 
+                # 2b. PORTÃO DE LIQUIDEZ — fail-CLOSED.
+                # A pesquisa mediu que limitar a ordem a 1% do ADTV move o teto
+                # de capacidade de ~R$10-50k para R$100k (ver BACKLOG). Ao vivo
+                # o filtro tem um segundo papel: recusar entrada quando NÃO SE
+                # SABE a liquidez — ADTV ausente aqui significa feed degradado
+                # AGORA, não lacuna histórica como no backtest.
+                #
+                # Só ENTRADAS. A gestão de saídas roda no exit_loop e não passa
+                # por aqui: bloquear saída por falta de dado prenderia capital
+                # em risco, que é o oposto de fail-closed.
+                from .data.feed import fetch_recent_data as _fetch_liq
+                from .risk.liquidity import (
+                    adtv_do_feed,
+                    avaliar_liquidez_para_entrada,
+                    max_participation_configurada,
+                )
+
+                _df_liq = await asyncio.to_thread(_fetch_liq, ticker, "30d", "1d")
+                _liq = avaliar_liquidez_para_entrada(
+                    ticker=ticker,
+                    # `allocated_capital` é a chave que o RiskManager devolve
+                    # (risk_manager.py:148). Ler uma chave inexistente daria
+                    # 0.0 -> participação 0% -> APROVA TUDO em silêncio, que é
+                    # o pior modo de falha possível para um portão de risco.
+                    order_value=float(decision.get("allocated_capital", 0.0) or 0.0),
+                    adtv_brl=adtv_do_feed(_df_liq),
+                    max_participation=max_participation_configurada(),
+                )
+                if not _liq.aprovado:
+                    await broadcast_log("RiskManager", _liq.motivo, "error")
+                    continue
+
                 # 3. Executor
                 executor = ExecutorAgent()
                 res = executor.execute_order(ticker, decision, analysis)
