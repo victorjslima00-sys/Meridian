@@ -17,6 +17,7 @@ sys.path.insert(0, ".")
 from trading_bot.data.ingestion import fetch_universe_yfinance
 from trading_bot.signals.engine import get_ibov_data
 from trading_bot.backtest.engine import run_regime_backtest
+from trading_bot.data.risk_free import load_cdi_daily_fractions
 from trading_bot.backtest.optimizer import run_grid_search, calculate_sharpe_ratio
 from trading_bot.core.config import AppConfig, setup_logging
 from trading_bot.core.telegram import TelegramNotifier
@@ -96,7 +97,9 @@ def main():
         end=hoje,
         capital=capital,
         signal_params=baseline_params,
-        ibov_filter=True
+        ibov_filter=True,
+        # Caixa ocioso rende CDI — ver comentário em backtest/optimizer.py.
+        cash_daily_yield=load_cdi_daily_fractions(),
     )
     baseline_sharpe = calculate_sharpe_ratio(baseline_res.equity_curve)
     baseline_return = (baseline_res.final_capital / capital - 1) * 100

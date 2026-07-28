@@ -21,7 +21,33 @@ from trading_bot.backtest.engine import BacktestResult, Trade
 
 logger = logging.getLogger(__name__)
 
-RISK_FREE_RATE_ANNUAL = 0.10   # Selic aproximada (10% a.a.)
+def _risk_free_anual() -> float:
+    """Taxa livre de risco DERIVADA da série real do BCB (SGS 12, CDI diário).
+
+    Era a constante `0.10` ("Selic aproximada"). Acertava por COINCIDÊNCIA — o
+    CDI medido em 2006-2025 deu 10,08% a.a. — mas coincidência não é fonte de
+    verdade: se a Selic for a 15% ou cair a 2%, o portão seguiria medindo
+    contra 10% em silêncio, aprovando ou reprovando errado sem avisar.
+
+    Viola a regra do CLAUDE.md ("nunca usar número inventado quando já existe
+    o equivalente configurado no sistema") — e a série já está versionada em
+    `trading_bot/data/cdi_sgs12.csv` desde a correção do caixa ocioso.
+
+    Fallback para 0.10 se a série estiver indisponível: um portão que estoura
+    na importação bloquearia o projeto inteiro por um arquivo de dados, e
+    medir contra 10% é melhor que medir contra zero.
+    """
+    try:
+        from trading_bot.data.risk_free import cdi_annualized
+
+        taxa = cdi_annualized()
+        return taxa if 0.02 < taxa < 0.25 else 0.10
+    except Exception:  # pragma: no cover — série ausente/corrompida
+        logger.warning("Série do CDI indisponível; risk-free volta ao default 0.10")
+        return 0.10
+
+
+RISK_FREE_RATE_ANNUAL = _risk_free_anual()
 TRADING_DAYS_PER_YEAR = 252
 
 

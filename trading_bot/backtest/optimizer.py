@@ -8,6 +8,7 @@ import numpy as np
 from trading_bot.backtest.engine import run_regime_backtest, BacktestResult
 from trading_bot.backtest.metrics import RISK_FREE_RATE_ANNUAL, TRADING_DAYS_PER_YEAR
 from trading_bot.data.ingestion import fetch_universe_yfinance
+from trading_bot.data.risk_free import load_cdi_daily_fractions
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,13 @@ def run_grid_search(
             end=end_date,
             capital=capital,
             signal_params=params,
-            ibov_filter=True # Mantém o filtro macro ligado
+            ibov_filter=True, # Mantém o filtro macro ligado
+            # Caixa ocioso rende CDI. SEM isto o otimizador ranqueia por um
+            # CAGR distorcido — ~66% do patrimônio fica fora de posição e
+            # rendia 0%, o mesmo defeito que inverteu o SINAL do achado
+            # central do projeto. Escolher parâmetros por métrica torta é
+            # escolher errado com aparência de rigor.
+            cash_daily_yield=load_cdi_daily_fractions(),
         )
         
         sharpe = calculate_sharpe_ratio(res.equity_curve)
