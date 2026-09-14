@@ -124,29 +124,29 @@ jobs:
           RUNS_JSON=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${DEPLOY_SHA}" 2>/dev/null || echo '{"workflow_runs":[]}')
 
           # 3. Deterministically inspect successful conclusion for the SAME SHA (fail-closed)
-          CI_CHECK=$(python3 -c "
-          import json, sys
-          raw = sys.argv[1]
-          target_sha = sys.argv[2].strip()
-          try:
-              data = json.loads(raw)
-              runs = data.get('workflow_runs', [])
-              if not runs:
-                  print('NO_RUNS')
-                  sys.exit(0)
-              matching_success = [
-                  r for r in runs
-                  if r.get('head_sha') == target_sha
-                  and r.get('status') == 'completed'
-                  and r.get('conclusion') == 'success'
-              ]
-              if matching_success:
-                  print(f'SUCCESS:{matching_success[0].get(\"id\")}')
-              else:
-                  print('NO_SUCCESS')
-          except Exception as e:
-              print(f'ERROR:{e}')
-          " "$RUNS_JSON" "$DEPLOY_SHA")
+          CI_CHECK=$(python3 -c 'import sys, textwrap; exec(textwrap.dedent("""
+            import json, sys
+            raw = sys.argv[1]
+            target_sha = sys.argv[2].strip()
+            try:
+                data = json.loads(raw)
+                runs = data.get("workflow_runs", [])
+                if not runs:
+                    print("NO_RUNS")
+                    sys.exit(0)
+                matching_success = [
+                    r for r in runs
+                    if r.get("head_sha") == target_sha
+                    and r.get("status") == "completed"
+                    and r.get("conclusion") == "success"
+                ]
+                if matching_success:
+                    print("SUCCESS:" + str(matching_success[0].get("id", "")))
+                else:
+                    print("NO_SUCCESS")
+            except Exception as e:
+                print("ERROR:" + str(e))
+          """))' "$RUNS_JSON" "$DEPLOY_SHA")
 
           case "$CI_CHECK" in
             SUCCESS:*)

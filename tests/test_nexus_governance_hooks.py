@@ -125,10 +125,27 @@ class TestNexusGovernanceHooks:
             "git push origin HEAD:nexus/feature-branch",
             "git push origin HEAD:refs/heads/feature-branch",
             "git push origin feature:refs/heads/feature-123",
+            "git push origin refs/heads/maintenance",
+            "git push origin refs/heads/main-feature",
+            "git push origin refs/heads/mainline",
+            "git push origin feature:refs/heads/maintenance",
         ]
         for cmd in allowed:
             res = run_guard(cmd)
             assert res["decision"] == "allow", f"Failed on safe branch push: {cmd}"
+
+    def test_blanket_push_and_mirror_are_denied(self):
+        forbidden = [
+            "git push origin --all",
+            "git push --all",
+            "git push origin --mirror",
+            "git push --mirror",
+            "git push origin :",
+        ]
+        for cmd in forbidden:
+            res = run_guard(cmd)
+            assert res["decision"] == "deny", f"Should have denied blanket push: {cmd}"
+            assert "strictly prohibited" in res["reason"]
 
     # 3. Remote Branch Deletion of Main (Section 5 adversarial ref equivalences)
     def test_git_remote_deletion_of_main_is_denied(self):
@@ -238,11 +255,27 @@ class TestNexusGovernanceHooks:
             "git branch -a",
             "git branch -D temp-scratch-branch",
             "git branch -d temp-scratch-branch",
+            "git branch -d refs/heads/maintenance",
+            "git branch -D refs/heads/main-feature",
             "git checkout -b new-branch",
         ]
         for cmd in allowed:
             res = run_guard(cmd)
             assert res["decision"] == "allow", f"Failed on safe branch command: {cmd}"
+
+    def test_git_branch_rename_and_update_ref_main_are_denied(self):
+        forbidden = [
+            "git branch -m main other",
+            "git branch -M main other",
+            "git branch -m other main",
+            "git branch -M other main",
+            "git branch --move main other",
+            "git update-ref refs/heads/main HEAD",
+            "git update-ref -d refs/heads/main",
+        ]
+        for cmd in forbidden:
+            res = run_guard(cmd)
+            assert res["decision"] == "deny", f"Should have denied ref modification: {cmd}"
 
     # 7. Live Broker Activation
     def test_live_broker_activation_is_denied(self):
@@ -348,7 +381,7 @@ class TestNexusGovernanceHooks:
             res = run_guard(cmd)
             assert res["decision"] == "allow", f"Failed on safe development command: {cmd}"
 
-    # 11. Secret File Guard — view_file (Section 6)
+    # 11. Secret File Guard — view_file & read_file (Section 6)
     def test_secret_file_view_requires_force_ask(self):
         sensitive_paths = [
             ".env",
@@ -360,13 +393,19 @@ class TestNexusGovernanceHooks:
             "~/.ssh/id_rsa",
             "~/.ssh/id_ed25519",
             "infra/secrets/credentials.json",
+            "config/credentials.json",
+            "client_secret.json",
+            "~/.aws/credentials",
+            "secrets.json",
+            "vault.json",
             "certs/server.key",
             "config/private_key.pem",
         ]
-        for path in sensitive_paths:
-            res = run_tool_guard("view_file", {"AbsolutePath": path})
-            assert res["decision"] == "force_ask", f"Expected force_ask for viewing {path}"
-            assert "Reading sensitive credential file" in res["reason"]
+        for tool_name in ("view_file", "read_file"):
+            for path in sensitive_paths:
+                res = run_tool_guard(tool_name, {"AbsolutePath": path})
+                assert res["decision"] == "force_ask", f"Expected force_ask for {tool_name} on {path}"
+                assert "Reading sensitive credential file" in res["reason"]
 
     def test_env_example_view_is_allowed(self):
         example_paths = [
@@ -374,9 +413,10 @@ class TestNexusGovernanceHooks:
             "C:/Users/BIRTUS JANIO/Documents/Codex/2026-09-11/oque/work/Meridian/.env.example",
             "frontend/.env.example",
         ]
-        for path in example_paths:
-            res = run_tool_guard("view_file", {"AbsolutePath": path})
-            assert res["decision"] == "allow", f"Expected allow for viewing {path}"
+        for tool_name in ("view_file", "read_file"):
+            for path in example_paths:
+                res = run_tool_guard(tool_name, {"AbsolutePath": path})
+                assert res["decision"] == "allow", f"Expected allow for viewing {path}"
 
     def test_non_secret_file_view_is_allowed(self):
         safe_paths = [
@@ -387,11 +427,12 @@ class TestNexusGovernanceHooks:
             "README.md",
             "tests/test_deploy_governance.py",
         ]
-        for path in safe_paths:
-            res = run_tool_guard("view_file", {"AbsolutePath": path})
-            assert res["decision"] == "allow", f"Expected allow for viewing safe file {path}"
+        for tool_name in ("view_file", "read_file"):
+            for path in safe_paths:
+                res = run_tool_guard(tool_name, {"AbsolutePath": path})
+                assert res["decision"] == "allow", f"Expected allow for viewing safe file {path}"
 
-    # 12. Secret File Guard — write_to_file & replace_file_content (Section 6)
+    # 12. Secret File Guard — write_to_file, write_file & replace_file_content (Section 6)
     def test_secret_file_write_is_denied(self):
         sensitive_targets = [
             ".env",
@@ -401,9 +442,13 @@ class TestNexusGovernanceHooks:
             "id_rsa",
             "id_ed25519",
             "secrets/vault.json",
+            "config/credentials.json",
+            "client_secret.json",
+            "~/.aws/credentials",
+            "secrets.json",
             "certs/private_key.pem",
         ]
-        for tool_name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+        for tool_name in ("write_to_file", "write_file", "replace_file_content", "multi_replace_file_content"):
             for target in sensitive_targets:
                 res = run_tool_guard(tool_name, {"TargetFile": target})
                 assert res["decision"] == "deny", f"Expected deny for {tool_name} on {target}"
@@ -414,7 +459,7 @@ class TestNexusGovernanceHooks:
             ".env.example",
             "frontend/.env.example",
         ]
-        for tool_name in ("write_to_file", "replace_file_content"):
+        for tool_name in ("write_to_file", "write_file", "replace_file_content"):
             for target in example_targets:
                 res = run_tool_guard(tool_name, {"TargetFile": target})
                 assert res["decision"] == "allow", f"Expected allow for {tool_name} on {target}"
@@ -425,7 +470,7 @@ class TestNexusGovernanceHooks:
             "tests/test_key_manager.py",
             "frontend/src/App.tsx",
         ]
-        for tool_name in ("write_to_file", "replace_file_content"):
+        for tool_name in ("write_to_file", "write_file", "replace_file_content"):
             for target in safe_targets:
                 res = run_tool_guard(tool_name, {"TargetFile": target})
                 assert res["decision"] == "allow", f"Expected allow for {tool_name} on {target}"
@@ -436,6 +481,12 @@ class TestNexusGovernanceHooks:
             "cat .env",
             "type .env",
             "Get-Content .env",
+            "gc .env",
+            "more .env",
+            "less .env",
+            "grep KEY .env",
+            "rg SECRET .env",
+            "findstr KEY .env",
             "cat .env.production",
             "type deploy_key.pem",
             "cat ~/.ssh/id_rsa",

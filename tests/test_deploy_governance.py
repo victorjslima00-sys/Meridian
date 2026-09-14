@@ -120,22 +120,82 @@ class TestDeploymentGovernance:
 
     # 2. P0: Anti-Script Injection
     def test_no_direct_workflow_input_interpolation_in_run_steps(self, deploy_yaml):
-        """Verify no user-controllable input or event metadata is interpolated directly into run: blocks."""
+        """Verify no user-controllable input or expression is interpolated directly into run: blocks."""
         jobs = deploy_yaml.get("jobs", {})
         for job_name, job in jobs.items():
             for step in job.get("steps", []):
                 run_content = step.get("run", "")
                 if not run_content:
                     continue
-                assert "${{ github.event.inputs" not in run_content, (
-                    f"Step '{step.get('name')}' in job '{job_name}' interpolates github.event.inputs into shell run!"
+                assert "${{" not in run_content, (
+                    f"Step '{step.get('name')}' in job '{job_name}' interpolates '${{{{ ... }}}}' into shell run!"
                 )
-                assert "${{ inputs." not in run_content, (
-                    f"Step '{step.get('name')}' in job '{job_name}' interpolates inputs into shell run!"
-                )
-                assert "${{ github.actor }}" not in run_content, (
-                    f"Step '{step.get('name')}' in job '{job_name}' interpolates github.actor into shell run!"
-                )
+
+    def test_inline_ci_verification_script_from_deploy_workflow(self, deploy_yaml):
+        """Extract and execute the exact inline Python script embedded in deploy.yml verify_ci step."""
+        import subprocess
+        import sys
+
+        steps = deploy_yaml["jobs"]["deploy"]["steps"]
+        verify_step = [s for s in steps if s.get("id") == "verify_ci"][0]
+        run_script = verify_step["run"]
+
+        # Extract the python3 -c script block
+        assert "CI_CHECK=$(python3 -c '" in run_script
+        code_part = run_script.split("CI_CHECK=$(python3 -c '", 1)[1]
+        python_code = code_part.split("' \"$RUNS_JSON\"", 1)[0]
+
+        # Case 1: Matching success
+        payload_ok = json.dumps({"workflow_runs": [
+            {"head_sha": "target-sha-123", "status": "completed", "conclusion": "success", "id": 777}
+        ]})
+        proc = subprocess.run(
+            [sys.executable, "-c", python_code, payload_ok, "target-sha-123"],
+            capture_output=True, text=True, check=True
+        )
+        assert proc.stdout.strip() == "SUCCESS:777"
+
+        # Case 2: Different SHA
+        proc = subprocess.run(
+            [sys.executable, "-c", python_code, payload_ok, "other-sha-999"],
+            capture_output=True, text=True, check=True
+        )
+        assert proc.stdout.strip() == "NO_SUCCESS"
+
+        # Case 3: Empty runs (fail-closed)
+        payload_empty = json.dumps({"workflow_runs": []})
+        proc = subprocess.run(
+            [sys.executable, "-c", python_code, payload_empty, "target-sha-123"],
+            capture_output=True, text=True, check=True
+        )
+        assert proc.stdout.strip() == "NO_RUNS"
+
+        # Case 4: Failed conclusion
+        payload_fail = json.dumps({"workflow_runs": [
+            {"head_sha": "target-sha-123", "status": "completed", "conclusion": "failure", "id": 888}
+        ]})
+        proc = subprocess.run(
+            [sys.executable, "-c", python_code, payload_fail, "target-sha-123"],
+            capture_output=True, text=True, check=True
+        )
+        assert proc.stdout.strip() == "NO_SUCCESS"
+
+        # Case 5: In progress
+        payload_running = json.dumps({"workflow_runs": [
+            {"head_sha": "target-sha-123", "status": "in_progress", "conclusion": None, "id": 999}
+        ]})
+        proc = subprocess.run(
+            [sys.executable, "-c", python_code, payload_running, "target-sha-123"],
+            capture_output=True, text=True, check=True
+        )
+        assert proc.stdout.strip() == "NO_SUCCESS"
+
+        # Case 6: Malformed JSON
+        proc = subprocess.run(
+            [sys.executable, "-c", python_code, "malformed-json", "target-sha-123"],
+            capture_output=True, text=True, check=True
+        )
+        assert proc.stdout.strip().startswith("ERROR:")
 
     def test_confirmation_is_closed_choice(self, deploy_yaml):
         triggers = get_triggers(deploy_yaml)

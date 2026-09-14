@@ -38,7 +38,7 @@ PROHIBITED_PATTERNS = [
     # 2. Remote deletion of main
     (
         re.compile(
-            r"\bgit\b.*?\bpush\b.*?(?:--delete\b.*?(?:refs/heads/)?main\b|\s-d\b.*?(?:refs/heads/)?main\b|\s:+(?:refs/heads/)?main\b)",
+            r"\bgit\b.*?\bpush\b.*?(?:--delete\b.*?(?:refs/heads/)?main(?![a-zA-Z0-9_\-\.])|\s-d\b.*?(?:refs/heads/)?main(?![a-zA-Z0-9_\-\.])|\s:+(?:refs/heads/)?main(?![a-zA-Z0-9_\-\.]))",
             re.IGNORECASE,
         ),
         "[NEXUS GUARD] Remote deletion of main branch is strictly prohibited.",
@@ -46,7 +46,7 @@ PROHIBITED_PATTERNS = [
     # 3. Direct push to main
     (
         re.compile(
-            r"\bgit\b.*?\bpush\b.*?(?:\s(?:refs/heads/)?main\b|\S+:(?:refs/heads/)?main\b)",
+            r"\bgit\b.*?\bpush\b.*?(?:\s(?:refs/heads/)?main(?![a-zA-Z0-9_\-\.])|\S+:(?:refs/heads/)?main(?![a-zA-Z0-9_\-\.]))",
             re.IGNORECASE,
         ),
         "[NEXUS GUARD] Direct push to main branch is strictly prohibited. Work must proceed via dedicated directive branches.",
@@ -66,7 +66,7 @@ PROHIBITED_PATTERNS = [
     ),
     # 6. Local branch deletion of main
     (
-        re.compile(r"\bgit\b.*?\bbranch\b.*?\s-(?:d|D)\s+(?:refs/heads/)?main\b", re.IGNORECASE),
+        re.compile(r"\bgit\b.*?\bbranch\b.*?\s-(?:d|D)\s+(?:refs/heads/)?main(?![a-zA-Z0-9_\-\.])", re.IGNORECASE),
         "[NEXUS GUARD] Deletion of main branch is strictly prohibited.",
     ),
     # 7. Live broker command line triggers
@@ -96,8 +96,8 @@ def classify_file_path(raw_path: str) -> str:
     norm_str = cleaned.lower()
     filename = Path(cleaned).name.lower()
 
-    # 1. Safe exception: .env.example
-    if filename == ".env.example" or norm_str.endswith(".env.example"):
+    # 1. Safe exception: .env.example, .env.sample, .env.template
+    if filename in (".env.example", ".env.sample", ".env.template") or norm_str.endswith((".env.example", ".env.sample", ".env.template")):
         return "example"
 
     # 2. .env and .env.* (e.g., .env.local, .env.production, .env.staging)
@@ -105,29 +105,48 @@ def classify_file_path(raw_path: str) -> str:
         return "secret"
 
     # 3. Certificate and key extensions
-    if filename.endswith((".pem", ".p12", ".pkcs12", ".key")):
+    if filename.endswith((".pem", ".p12", ".pkcs12", ".pfx", ".keytab")):
+        return "secret"
+    if filename.endswith(".key") and not filename.endswith((".pub.key", ".public.key")):
         return "secret"
 
     # 4. SSH private keys
-    if filename in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"):
+    if filename in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk"):
         return "secret"
     if (filename.startswith(("id_rsa.", "id_ed25519.", "id_ecdsa.", "id_dsa."))
             and not filename.endswith(".pub")):
         return "secret"
 
-    # 5. Explicit secrets directory or private key filenames
-    if "/secrets/" in norm_str or norm_str.startswith("secrets/") or norm_str.endswith("/secrets") or norm_str == "secrets":
+    # 5. Explicit secrets directory or credentials directory
+    secret_dir_markers = ("/secrets/", "/credentials/", "/.ssh/", "/.aws/")
+    if any(m in f"/{norm_str}/" or norm_str.startswith(m.lstrip("/")) for m in secret_dir_markers):
         return "secret"
+    if norm_str in ("secrets", "credentials", ".ssh", ".aws"):
+        return "secret"
+
+    # 6. Explicit secrets/credentials filenames (data/config files, not general code/docs)
     if "private_key" in filename or "privatekey" in filename:
         return "secret"
+
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    code_suffixes = {".py", ".ts", ".js", ".tsx", ".jsx", ".md", ".rst", ".html", ".css", ".go", ".rs"}
+
+    if suffix not in code_suffixes:
+        if filename in ("credentials", "aws_credentials"):
+            return "secret"
+        if stem in ("credentials", "credential", "client_secret", "client_secrets", "secrets", "secret", "vault", "service_account"):
+            return "secret"
+        if stem.endswith(("_credentials", "-credentials", "_secret", "-secret")):
+            return "secret"
 
     return "safe"
 
 
 def is_protected_main_ref(ref: str) -> bool:
     """Check if a ref targets the protected main branch."""
-    clean = ref.strip().lstrip("+")
-    return clean == "main" or clean == "refs/heads/main" or clean.startswith("refs/heads/main")
+    clean = ref.strip().lstrip("+:")
+    return clean in ("main", "refs/heads/main")
 
 
 def evaluate_structured_git(tokens: list[str]) -> dict[str, str] | None:
@@ -187,11 +206,25 @@ def evaluate_structured_git(tokens: list[str]) -> dict[str, str] | None:
                     "reason": "[NEXUS GUARD] Force push (+refspec) is strictly prohibited by Nexus Directive 000 Git Governance.",
                 }
 
+        # Check blanket push flags targeting all branches or mirroring
+        for arg in subcmd_args:
+            if arg in ("--all", "--mirror"):
+                return {
+                    "decision": "deny",
+                    "reason": f"[NEXUS GUARD] Blanket git push '{arg}' is strictly prohibited as it targets protected main branch.",
+                }
+
         # Check delete flags
         is_delete = any(arg in ("--delete", "-d") for arg in subcmd_args)
         for arg in subcmd_args:
             if arg in ("--delete", "-d"):
                 continue
+            # Empty refspec matching push: 'git push origin :'
+            if arg == ":":
+                return {
+                    "decision": "deny",
+                    "reason": "[NEXUS GUARD] Pushing matching refspec ':' is strictly prohibited as it targets protected main branch.",
+                }
             # Refspecs with :
             if ":" in arg:
                 src, dst = arg.split(":", 1)
@@ -229,8 +262,27 @@ def evaluate_structured_git(tokens: list[str]) -> dict[str, str] | None:
                         "decision": "deny",
                         "reason": "[NEXUS GUARD] Deletion of main branch is strictly prohibited.",
                     }
+        is_move_branch = any(arg in ("-m", "-M", "--move") for arg in subcmd_args)
+        if is_move_branch:
+            for arg in subcmd_args:
+                if arg in ("-m", "-M", "--move"):
+                    continue
+                if is_protected_main_ref(arg):
+                    return {
+                        "decision": "deny",
+                        "reason": "[NEXUS GUARD] Renaming protected main branch is strictly prohibited.",
+                    }
 
-    # 3. git reset analysis
+    # 3. git update-ref analysis
+    if subcmd == "update-ref":
+        for arg in subcmd_args:
+            if is_protected_main_ref(arg):
+                return {
+                    "decision": "deny",
+                    "reason": "[NEXUS GUARD] Direct modification of main ref via update-ref is strictly prohibited.",
+                }
+
+    # 4. git reset analysis
     if subcmd == "reset":
         if any(arg == "--hard" for arg in subcmd_args):
             return {
@@ -238,7 +290,7 @@ def evaluate_structured_git(tokens: list[str]) -> dict[str, str] | None:
                 "reason": "[NEXUS GUARD] Destructive git reset --hard is strictly prohibited by Nexus Directive 000 Git Governance.",
             }
 
-    # 4. git clean analysis
+    # 5. git clean analysis
     if subcmd == "clean":
         for arg in subcmd_args:
             if arg in ("-n", "--dry-run"):
@@ -285,7 +337,7 @@ def evaluate_command(command_line: str) -> dict[str, str]:
 
     # Third pass: Shell command secret access check
     shell_file_op = re.compile(
-        r"(?:\bcat\b|\btype\b|\bGet-Content\b|\bhead\b|\btail\b|\brm\b|\bdel\b|\bcp\b|\bcopy\b|\bmv\b|\bmove\b|\becho\b.*?>)\s*",
+        r"(?:\bcat\b|\btype\b|\bGet-Content\b|\bgc\b|\bhead\b|\btail\b|\bmore\b|\bless\b|\bgrep\b|\brg\b|\bfindstr\b|\bSelect-String\b|\bawk\b|\bsed\b|\brm\b|\bdel\b|\bcp\b|\bcopy\b|\bmv\b|\bmove\b|\becho\b.*?>)\s*",
         re.IGNORECASE,
     )
     if shell_file_op.search(cmd):
@@ -352,9 +404,9 @@ def main() -> None:
             print(json.dumps(result))
             return
 
-        # 2. view_file: Force ask on sensitive secrets; allow example templates
-        if tool_name == "view_file":
-            target_path = (args.get("AbsolutePath") or args.get("TargetFile") or args.get("path") or "")
+        # 2. view_file / read_file: Force ask on sensitive secrets; allow example templates
+        if tool_name in ("view_file", "read_file"):
+            target_path = (args.get("AbsolutePath") or args.get("TargetFile") or args.get("Target") or args.get("path") or "")
             classification = classify_file_path(str(target_path))
             if classification == "secret":
                 print(json.dumps({
@@ -368,9 +420,9 @@ def main() -> None:
             }))
             return
 
-        # 3. write_to_file, replace_file_content, multi_replace_file_content
-        if tool_name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
-            target_path = (args.get("TargetFile") or args.get("AbsolutePath") or args.get("path") or "")
+        # 3. write_to_file, write_file, replace_file_content, multi_replace_file_content
+        if tool_name in ("write_to_file", "write_file", "replace_file_content", "multi_replace_file_content"):
+            target_path = (args.get("TargetFile") or args.get("AbsolutePath") or args.get("Target") or args.get("path") or "")
             classification = classify_file_path(str(target_path))
             if classification == "secret":
                 print(json.dumps({
