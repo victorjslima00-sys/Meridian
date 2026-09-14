@@ -492,16 +492,21 @@ class TestNexusGovernanceHooks:
             "cat ~/.ssh/id_rsa",
             "rm .env",
             "echo SECRET=1 > .env",
+            "python -c \"import os; open('.env').read()\"",
+            "powershell -Command \"Get-Content .env\"",
+            "powershell Get-Content .env.local",
         ]
         for cmd in forbidden_shell:
             res = run_guard(cmd)
             assert res["decision"] == "deny", f"Expected deny for shell access to secret: {cmd}"
-            assert "Direct shell access to sensitive credentials" in res["reason"]
+            assert "sensitive credentials" in res["reason"]
 
     def test_shell_access_to_env_example_is_allowed(self):
         allowed_shell = [
             "cat .env.example",
             "type .env.example",
+            "python -c \"open('.env.example').read()\"",
+            "powershell Get-Content .env.example",
         ]
         for cmd in allowed_shell:
             res = run_guard(cmd)
@@ -533,3 +538,21 @@ class TestNexusGovernanceHooks:
         for cmd in dry_run_commands:
             res = run_guard(cmd)
             assert res["decision"] == "deny", f"Expected deny for dry-run push to main: {cmd}"
+
+    # 15. Commit SHA Traceability Protocol (NEXUS-000D Section 1)
+    def test_commit_sha_traceability_protocol(self):
+        """Ensure git rev-parse HEAD yields a 40-character hex SHA without reconstruction."""
+        import shutil
+        git_exe = shutil.which("git")
+        if not git_exe:
+            for cand in [
+                Path(r"C:\Users\BIRTUS JANIO\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe"),
+            ]:
+                if cand.exists():
+                    git_exe = str(cand)
+                    break
+        if git_exe:
+            p = subprocess.run([git_exe, "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+            head_sha = p.stdout.strip()
+            assert len(head_sha) == 40, f"Expected 40-char SHA, got: {head_sha}"
+            assert all(c in "0123456789abcdefABCDEF" for c in head_sha)

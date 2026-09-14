@@ -335,19 +335,30 @@ def evaluate_command(command_line: str) -> dict[str, str]:
                 "reason": reason,
             }
 
-    # Third pass: Shell command secret access check
-    shell_file_op = re.compile(
-        r"(?:\bcat\b|\btype\b|\bGet-Content\b|\bgc\b|\bhead\b|\btail\b|\bmore\b|\bless\b|\bgrep\b|\brg\b|\bfindstr\b|\bSelect-String\b|\bawk\b|\bsed\b|\brm\b|\bdel\b|\bcp\b|\bcopy\b|\bmv\b|\bmove\b|\becho\b.*?>)\s*",
+    # Third pass: Shell / Interpreter command secret access check (NEXUS-000D Defense-in-depth)
+    interpreter_or_shell = re.compile(
+        r"(?:\bcat\b|\btype\b|\bGet-Content\b|\bgc\b|\bhead\b|\btail\b|\bmore\b|\bless\b|\bgrep\b|\brg\b|\bfindstr\b|\bSelect-String\b|\bawk\b|\bsed\b|\brm\b|\bdel\b|\bcp\b|\bcopy\b|\bmv\b|\bmove\b|\becho\b.*?>|\bpython(?:\d(?:\.\d+)?)?(?:\.exe)?\b|\bpowershell(?:\.exe)?\b|\bpwsh(?:\.exe)?\b)\s*",
         re.IGNORECASE,
     )
-    if shell_file_op.search(cmd):
+    if interpreter_or_shell.search(cmd):
         tokens = [t.strip("'\"") for t in re.split(r"\s+|[|><;]", cmd) if t.strip("'\"")]
         for tok in tokens:
             cls = classify_file_path(tok)
             if cls == "secret":
                 return {
                     "decision": "deny",
-                    "reason": f"[NEXUS GUARD] Direct shell access to sensitive credentials ('{tok}') is strictly prohibited.",
+                    "reason": f"[NEXUS GUARD] Explicit command access to sensitive credentials ('{tok}') is blocked (defense-in-depth). Note: production secrets must not be stored in the workspace.",
+                }
+        secret_subpat = re.compile(
+            r"(\.env(?:\.[a-zA-Z0-9_\-]+)?|\b(?:id_rsa|id_ed25519|credentials\.json|client_secret\.json)\b|[\w\.\-/\\~]+\.(?:pem|p12|pkcs12|pfx|keytab))",
+            re.IGNORECASE,
+        )
+        for match in secret_subpat.findall(cmd):
+            cls = classify_file_path(match)
+            if cls == "secret":
+                return {
+                    "decision": "deny",
+                    "reason": f"[NEXUS GUARD] Explicit command access to sensitive credentials ('{match}') is blocked (defense-in-depth). Note: production secrets must not be stored in the workspace.",
                 }
 
     return {
