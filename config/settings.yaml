@@ -71,6 +71,13 @@ risk:
   max_position_fraction: 0.10       # Máximo de 10% do saldo livre por posição
   capital_initial: 300.00          # R$ 300 (capital inicial informado)
 
+  # Teto de participação da ORDEM no volume financeiro médio diário (ADTV).
+  # Valor MEDIDO, não arbitrado: é o platô da curva de capacidade — com X=1%
+  # o excesso sobre o benchmark de mesmo risco se sustenta em R$100k, e o teto
+  # de capacidade sobe ~10-20x contra não filtrar (ver BACKLOG). Ao vivo tem um
+  # segundo papel: sem dado de liquidez, a entrada é BLOQUEADA (fail-closed).
+  max_adtv_participation: 0.01
+
   # Correlação: não abrir posições em ativos com correlação > threshold
   correlation_window_days: 60
   correlation_max: 0.70

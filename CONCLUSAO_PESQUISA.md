@@ -356,6 +356,37 @@ provado:
 
 ---
 
+## 5b. O que está RODANDO em paper trading (2026-07-28)
+
+**Estratégia em produção: Donchian 20d.** É o `compute_signal` que o
+`MarketAnalyst` já usava — zero mudança de código no sinal.
+
+⚠️ **A combinação 50/50 (Donchian 20d + Donchian+ADX) NÃO está rodando e NÃO
+é executável.** O `+3,01% a.a.` e o `t=+1,31` daquela linha da varredura são a
+**média de duas séries de excesso** calculada em pós-processamento — não a
+medição de uma estratégia que alguém possa operar. O motor ao vivo executa um
+sinal por vez; rodar dois exigiria arquitetura nova. Nenhum backtest mediu uma
+implementação que produza aquele número em operação.
+
+Escolha do Donchian 20d sobre o Donchian+ADX, apesar do ADX ter excesso maior
+(+4,02% vs +2,02%): `t` **maior** (+1,18 vs +1,12), IC95% muito mais estreito
+([−1,34%, +5,53%] vs [−2,84%, +11,21%]) e drawdown melhor (−17,4% vs −22,6%).
+Estabilidade acima de retorno nominal — e zero mudança de código elimina risco
+de bug na virada.
+
+**O que dos parâmetros da pesquisa se aplica ao runtime:**
+
+| parâmetro | ao vivo? | por quê |
+|---|---|---|
+| filtro de liquidez X=1% | **SIM, ligado** | proteção real; fail-closed sem ADTV |
+| filtro de sanidade | não | calibrado para barra diária; no feed de 1min descartaria 100% das barras de papéis de liquidez média (medido) |
+| caixa ocioso no CDI | n/a | contabilidade de backtest — ao vivo o dinheiro rende o que a corretora paga |
+| custo com componente fixo | n/a | modelagem de backtest — ao vivo o custo é o que a corretora cobra |
+
+**Paper trading contra broker simulado.** O `CedroClient` é fictício: `auth()`
+devolve token mock e `send_order()` devolve `order_id` hardcoded, sem HTTP.
+As "ordens" gravam em SQLite local. Isso é deliberado — ver seção 2.
+
 ## 6. Estado do repositório
 
 - **436 testes passando** (suíte completa, incluindo e2e).
