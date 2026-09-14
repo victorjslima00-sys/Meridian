@@ -1,13 +1,16 @@
 """
-Automated validation of Deployment Governance (NEXUS-000B)
+Automated validation of Deployment Governance (NEXUS-000C)
 Enforces:
-1. CI VERDE != AUTORIZACAO DE PRODUCAO
-2. workflow_run trigger is completely abolished from deploy.yml
-3. No automatic trigger can start production deployment
-4. workflow_dispatch is the only allowed trigger and requires explicit confirmation
-5. CI pipeline is decoupled and independent of deploy pipeline
-6. Fail-closed gate behavior
+1. CI VERDE != AUTORIZACAO DE PRODUCAO (CI is necessary prerequisite, not authorizer)
+2. No script injection via workflow inputs (inputs transported strictly via env:)
+3. Closed-choice confirmation (default CANCEL)
+4. Same-SHA CI prerequisite deterministically verified (fail-closed)
+5. Separation of Executive Authorization (Astra audit ref) and Technical Directive (Nexus technical ref)
+6. Victor required human reviewer gate via GitHub Environment
+7. Minimal permissions (contents: read, actions: read — zero write)
+8. Deploy branch restricted exclusively to main
 """
+import json
 from pathlib import Path
 import pytest
 import yaml
@@ -25,6 +28,53 @@ def get_triggers(yaml_data: dict) -> dict:
     return {}
 
 
+def evaluate_ci_prerequisite(runs_payload: dict, target_sha: str, target_ref: str) -> dict[str, str]:
+    """
+    Deterministic reproduction of the CI prerequisite verification gate.
+    Mirrors the inline verification step in deploy.yml.
+    """
+    if target_ref not in ("refs/heads/main", "main"):
+        return {"status": "blocked", "reason": f"Deploy permitted only from main. Ref: {target_ref}"}
+
+    runs = runs_payload.get("workflow_runs", [])
+    if not runs:
+        return {"status": "blocked", "reason": "Ausencia de evidencia de CI (fail-closed)"}
+
+    matching_success = [
+        r for r in runs
+        if r.get("head_sha") == target_sha
+        and r.get("status") == "completed"
+        and r.get("conclusion") == "success"
+    ]
+
+    if not matching_success:
+        return {"status": "blocked", "reason": f"Nenhuma execucao bem-sucedida do CI para o SHA {target_sha}"}
+
+    return {"status": "allowed", "run_id": str(matching_success[0].get("id"))}
+
+
+def evaluate_executive_gate(
+    event_name: str,
+    confirmation: str,
+    nexus_ref: str,
+    astra_ref: str,
+    server_ip: str,
+    ssh_key: str,
+) -> str:
+    """Simulation of full deployment interlock gate evaluation."""
+    if event_name != "workflow_dispatch":
+        return "blocked_event"
+    if confirmation != "DEPLOY-TO-PRODUCTION":
+        return "blocked_confirmation"
+    if not nexus_ref:
+        return "blocked_nexus_ref"
+    if not astra_ref:
+        return "blocked_astra_ref"
+    if not server_ip or not ssh_key:
+        return "blocked_secrets"
+    return "allowed_deploy"
+
+
 @pytest.fixture
 def deploy_yaml() -> dict:
     with open(DEPLOY_WORKFLOW, "r", encoding="utf-8") as f:
@@ -38,6 +88,7 @@ def ci_yaml() -> dict:
 
 
 class TestDeploymentGovernance:
+    # 1. Pipeline decoupling
     def test_workflow_run_is_completely_abolished(self, deploy_yaml):
         triggers = get_triggers(deploy_yaml)
         assert "workflow_run" not in triggers, (
@@ -63,66 +114,163 @@ class TestDeploymentGovernance:
     def test_workflow_dispatch_is_the_only_trigger(self, deploy_yaml):
         triggers = get_triggers(deploy_yaml)
         assert "workflow_dispatch" in triggers, "workflow_dispatch must be available in deploy.yml."
-        # Confirm no other triggers exist
         assert set(triggers.keys()) == {"workflow_dispatch"}, (
             f"Expected only workflow_dispatch trigger, found: {set(triggers.keys())}"
         )
 
+    # 2. P0: Anti-Script Injection
+    def test_no_direct_workflow_input_interpolation_in_run_steps(self, deploy_yaml):
+        """Verify no user-controllable input or event metadata is interpolated directly into run: blocks."""
+        jobs = deploy_yaml.get("jobs", {})
+        for job_name, job in jobs.items():
+            for step in job.get("steps", []):
+                run_content = step.get("run", "")
+                if not run_content:
+                    continue
+                assert "${{ github.event.inputs" not in run_content, (
+                    f"Step '{step.get('name')}' in job '{job_name}' interpolates github.event.inputs into shell run!"
+                )
+                assert "${{ inputs." not in run_content, (
+                    f"Step '{step.get('name')}' in job '{job_name}' interpolates inputs into shell run!"
+                )
+                assert "${{ github.actor }}" not in run_content, (
+                    f"Step '{step.get('name')}' in job '{job_name}' interpolates github.actor into shell run!"
+                )
+
+    def test_confirmation_is_closed_choice(self, deploy_yaml):
+        triggers = get_triggers(deploy_yaml)
+        inputs = triggers["workflow_dispatch"].get("inputs", {})
+        assert "confirmation" in inputs
+        conf = inputs["confirmation"]
+        assert conf.get("type") == "choice", "confirmation must be a choice input"
+        assert conf.get("default") == "CANCEL", "confirmation default must be CANCEL"
+        assert set(conf.get("options", [])) == {"CANCEL", "DEPLOY-TO-PRODUCTION"}
+
+    # 3. P0: Authorization Model & Mandatory Inputs
     def test_workflow_dispatch_enforces_mandatory_inputs(self, deploy_yaml):
         triggers = get_triggers(deploy_yaml)
-        wd = triggers["workflow_dispatch"]
-        inputs = wd.get("inputs", {})
-        assert "confirmation" in inputs, "workflow_dispatch must require 'confirmation' input."
-        assert inputs["confirmation"].get("required") is True, "Confirmation input must be required: true."
+        inputs = triggers["workflow_dispatch"].get("inputs", {})
 
-        assert "nexus_directive_ref" in inputs, "workflow_dispatch must require 'nexus_directive_ref' input."
-        assert inputs["nexus_directive_ref"].get("required") is True, "nexus_directive_ref must be required: true."
+        assert "confirmation" in inputs
+        assert inputs["confirmation"].get("required") is True
 
-        assert "environment" in inputs, "workflow_dispatch must declare target 'environment'."
+        assert "nexus_directive_ref" in inputs
+        assert inputs["nexus_directive_ref"].get("required") is True
+
+        assert "astra_authorization_ref" in inputs
+        assert inputs["astra_authorization_ref"].get("required") is True
+
+        assert "environment" in inputs
+        assert inputs["environment"].get("default") == "production"
+
+    def test_minimal_permissions_granted(self, deploy_yaml):
+        perms = deploy_yaml.get("permissions", {})
+        assert perms.get("contents") == "read", "Expected contents: read"
+        assert perms.get("actions") == "read", "Expected actions: read"
+        # No write permissions permitted
+        for perm_name, perm_val in perms.items():
+            assert perm_val != "write", f"Write permission granted to '{perm_name}'!"
 
     def test_deploy_job_has_environment_and_fail_closed_condition(self, deploy_yaml):
         jobs = deploy_yaml.get("jobs", {})
-        assert "deploy" in jobs, "deploy job must exist in deploy.yml."
+        assert "deploy" in jobs
         deploy_job = jobs["deploy"]
-
-        assert deploy_job.get("environment") == "production", (
-            "deploy job must be explicitly bound to GitHub Environment 'production'."
-        )
+        assert deploy_job.get("environment") == "production"
 
         job_if = deploy_job.get("if", "")
-        assert "workflow_dispatch" in job_if, "deploy job 'if' condition must enforce workflow_dispatch."
-        assert "DEPLOY-TO-PRODUCTION" in job_if, (
-            "deploy job 'if' condition must require confirmation 'DEPLOY-TO-PRODUCTION'."
-        )
+        assert "workflow_dispatch" in job_if
+        assert "DEPLOY-TO-PRODUCTION" in job_if
 
-    def test_ci_pipeline_is_independent_and_does_not_trigger_deploy(self, ci_yaml, deploy_yaml):
-        # CI must not reference deploy.yml
-        ci_text = CI_WORKFLOW.read_text(encoding="utf-8")
-        assert "deploy.yml" not in ci_text
-        assert "deploy" not in ci_yaml.get("jobs", {})
+    # 4. P0: Same-SHA CI Prerequisite Logic
+    def test_commit_without_successful_ci_fails(self):
+        empty_payload = {"workflow_runs": []}
+        res = evaluate_ci_prerequisite(empty_payload, "target-sha-123", "refs/heads/main")
+        assert res["status"] == "blocked"
+        assert "fail-closed" in res["reason"]
 
-        # deploy.yml must not reference CI workflow
-        deploy_text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
-        assert 'workflows: ["CI"]' not in deploy_text
-        assert "workflows: ['CI']" not in deploy_text
+    def test_ci_of_different_sha_fails(self):
+        payload = {
+            "workflow_runs": [
+                {"id": 101, "head_sha": "other-sha-999", "status": "completed", "conclusion": "success"}
+            ]
+        }
+        res = evaluate_ci_prerequisite(payload, "target-sha-123", "refs/heads/main")
+        assert res["status"] == "blocked"
+        assert "Nenhuma execucao bem-sucedida" in res["reason"]
 
+    def test_ci_failed_conclusion_fails(self):
+        payload = {
+            "workflow_runs": [
+                {"id": 102, "head_sha": "target-sha-123", "status": "completed", "conclusion": "failure"}
+            ]
+        }
+        res = evaluate_ci_prerequisite(payload, "target-sha-123", "refs/heads/main")
+        assert res["status"] == "blocked"
+
+    def test_ci_in_progress_fails(self):
+        payload = {
+            "workflow_runs": [
+                {"id": 103, "head_sha": "target-sha-123", "status": "in_progress", "conclusion": None}
+            ]
+        }
+        res = evaluate_ci_prerequisite(payload, "target-sha-123", "refs/heads/main")
+        assert res["status"] == "blocked"
+
+    def test_ci_correct_same_sha_success(self):
+        payload = {
+            "workflow_runs": [
+                {"id": 104, "head_sha": "target-sha-123", "status": "completed", "conclusion": "success"}
+            ]
+        }
+        res = evaluate_ci_prerequisite(payload, "target-sha-123", "refs/heads/main")
+        assert res["status"] == "allowed"
+        assert res["run_id"] == "104"
+
+    def test_deploy_from_non_main_branch_fails(self):
+        payload = {
+            "workflow_runs": [
+                {"id": 105, "head_sha": "target-sha-123", "status": "completed", "conclusion": "success"}
+            ]
+        }
+        res = evaluate_ci_prerequisite(payload, "target-sha-123", "refs/heads/feature-branch")
+        assert res["status"] == "blocked"
+        assert "only from main" in res["reason"]
+
+    def test_deploy_from_main_branch_allowed(self):
+        payload = {
+            "workflow_runs": [
+                {"id": 106, "head_sha": "target-sha-123", "status": "completed", "conclusion": "success"}
+            ]
+        }
+        res = evaluate_ci_prerequisite(payload, "target-sha-123", "refs/heads/main")
+        assert res["status"] == "allowed"
+
+    # 5. Full executive gate simulation
     def test_fail_closed_behavior_on_invalid_inputs(self):
-        # Simulation of gate evaluation logic
-        def evaluate_gate(event_name: str, confirmation: str, directive_ref: str, server_ip: str, ssh_key: str):
-            if event_name != "workflow_dispatch":
-                return "blocked_event"
-            if confirmation != "DEPLOY-TO-PRODUCTION":
-                return "blocked_confirmation"
-            if not directive_ref:
-                return "blocked_directive"
-            if not server_ip or not ssh_key:
-                return "blocked_secrets"
-            return "allowed_deploy"
+        assert evaluate_executive_gate(
+            "workflow_run", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "ASTRA-001", "1.2.3.4", "key"
+        ) == "blocked_event"
 
-        assert evaluate_gate("workflow_run", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "1.2.3.4", "key") == "blocked_event"
-        assert evaluate_gate("workflow_dispatch", "", "NEXUS-001", "1.2.3.4", "key") == "blocked_confirmation"
-        assert evaluate_gate("workflow_dispatch", "deploy", "NEXUS-001", "1.2.3.4", "key") == "blocked_confirmation"
-        assert evaluate_gate("workflow_dispatch", "DEPLOY-TO-PRODUCTION", "", "1.2.3.4", "key") == "blocked_directive"
-        assert evaluate_gate("workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "", "key") == "blocked_secrets"
-        assert evaluate_gate("workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "1.2.3.4", "") == "blocked_secrets"
-        assert evaluate_gate("workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "1.2.3.4", "key") == "allowed_deploy"
+        assert evaluate_executive_gate(
+            "workflow_dispatch", "CANCEL", "NEXUS-001", "ASTRA-001", "1.2.3.4", "key"
+        ) == "blocked_confirmation"
+
+        assert evaluate_executive_gate(
+            "workflow_dispatch", "DEPLOY-TO-PRODUCTION", "", "ASTRA-001", "1.2.3.4", "key"
+        ) == "blocked_nexus_ref"
+
+        assert evaluate_executive_gate(
+            "workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "", "1.2.3.4", "key"
+        ) == "blocked_astra_ref"
+
+        assert evaluate_executive_gate(
+            "workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "ASTRA-001", "", "key"
+        ) == "blocked_secrets"
+
+        assert evaluate_executive_gate(
+            "workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "ASTRA-001", "1.2.3.4", ""
+        ) == "blocked_secrets"
+
+        assert evaluate_executive_gate(
+            "workflow_dispatch", "DEPLOY-TO-PRODUCTION", "NEXUS-001", "ASTRA-001", "1.2.3.4", "key"
+        ) == "allowed_deploy"
