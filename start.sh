@@ -15,7 +15,7 @@ python3 -c "from trading_bot.core.llm_client import ResilientLLMClient; print('â
 
 # Iniciar backend com PYTHONPATH correto
 echo "ðŸ”Œ Iniciando Backend (porta 8000)..."
-PYTHONPATH="$ROOT" python3 "$ROOT/backend/run.py" &
+PYTHONPATH="$ROOT" uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 &
 BACKEND_PID=$!
 echo "   Backend PID: $BACKEND_PID"
 
