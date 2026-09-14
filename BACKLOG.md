@@ -4,10 +4,22 @@ Itens conhecidos, ainda não implementados. Marcados por prioridade.
 
 ## 🏁 MEDIÇÃO ENCERRADA — quadro final consolidado (2026-07-27)
 
+> ⚠️ **CORREÇÃO (2026-07-28).** A versão anterior desta seção dizia
+> *"excesso +2,02% a.a., `t` robusto +1,82"* como se fossem do MESMO run.
+> **Não eram.** O `+2,02%` vinha de `liq_c100000_x0.01` (R$100k, X=1%, com
+> slippage) e o `+1,82` de `san_congel2` (capital R$300, SEM slippage nem
+> filtro de liquidez, cujo excesso era +3,42%). Medidos no mesmo run, o par
+> correto é **(+2,02% ; t=+1,18)**. Isso REFORÇA a não-significância.
+
 **Excesso +2,02% a.a.** sobre benchmark de mesmo risco (25% IBOV + 75% CDI),
 dado saneado, X=1% de participação no ADTV, capital R$100k, OOS 2011-2025.
-**`t` robusto +1,82 — NÃO significativo.** Teto de capacidade R$100k, robusto
+**`t` robusto +1,18 — NÃO significativo.** Teto de capacidade R$100k, robusto
 a 3 modelos de impacto. Drawdown ~17%.
+
+⚠️ **Múltiplos testes.** Foram testadas **13 configurações** (11 famílias +
+2 combinações). Reportar o melhor `t` de 13 tentativas **infla** o número por
+seleção. Com correção de Bonferroni, o limiar efetivo seria ≈ **2,7**, não
+1,96 — e o melhor `t` medido em qualquer configuração foi **+1,31**.
 
 **Valor absoluto ≈ R$2.000/ano.**
 
@@ -16,6 +28,68 @@ de R$100k o excesso vira negativo. Só **mais mercados em paralelo** aumentam.
 
 **Esta é a informação que decide contra construir a camada de execução
 (12 semanas) para a B3 isoladamente.**
+
+## 🔬 VARREDURA DE FAMÍLIAS DE ESTRATÉGIA (2026-07-28) — nenhuma passa
+
+11 configurações sob **régua única**: dado saneado, filtro de liquidez X=1%,
+caixa ocioso no CDI, benchmark 25/75, custo com componente fixo, impacto de
+mercado, universo expandido de 58 tickers, OOS 2011-2025, R$100k. Parâmetros
+**canônicos da literatura, não otimizados** — otimizar por família faria a que
+tem mais graus de liberdade vencer por overfit, não por mérito.
+
+```
+estrategia        exc a.a.      IR  t robusto       IC95% bootstrap  P(exc<=0)   maxDD     n  winrate
+Donchian 20d        +2.02%  +0.180      +1.18       [-1.34%,+5.53%]      0.119  -17.4%   630   41.1%
+Donchian+ADX        +4.02%  +0.273      +1.12      [-2.84%,+11.21%]      0.127  -22.6%   757   44.0%
+Cruz.50/200         +1.28%  +0.124      +0.62       [-2.33%,+5.71%]      0.267  -12.8%   275   50.2%
+Squeeze Boll.       +1.42%  +0.124      +0.57       [-3.51%,+6.42%]      0.278  -23.1%   657   44.6%
+Donchian 55d        +0.76%  +0.074      +0.42       [-2.68%,+4.38%]      0.343  -19.1%   552   41.1%
+Donchian 40d        +0.63%  +0.060      +0.38       [-2.39%,+3.93%]      0.371  -17.4%   589   40.4%
+Mom.absoluto        +0.19%  +0.011      +0.04       [-8.34%,+9.02%]      0.475  -38.7%   690   44.6%
+RSI(2)Connors       -2.34%  -0.174      -0.70       [-9.13%,+3.89%]      0.739  -36.7%   812   42.7%
+Mom.XS 12-1         -2.81%  -0.176      -0.81       [-9.22%,+4.16%]      0.796  -31.2%   670   43.6%
+Boll.reversao       -3.30%  -0.308      -1.21       [-8.45%,+2.01%]      0.886  -29.3%   398   39.9%
+Reversao 5d         -6.25%  -0.375      -1.67      [-13.36%,+0.94%]      0.953  -50.0%   761   43.0%
+
+COMBINACOES 50/50:
+  Donchian 20d + Donchian+ADX      +3.01%  IR +0.280  t +1.31  P(exc<=0)=0.095
+  Donchian+ADX + Cruz.50/200       +2.64%  IR +0.265  t +1.16  P(exc<=0)=0.116
+```
+
+**NENHUMA passa 1,96.** Melhor de todas as 13 medições: **+1,31**.
+
+### Quatro achados com valor além do veredito
+
+**1. Reversão é NEGATIVA neste universo — não voltar ali.** As três variantes
+perdem: RSI(2) Connors −2,34%, Bollinger reversão −3,30%, reversão de 5 dias
+−6,25%. Somam **1.971 trades**; não é ruído, é padrão. E a mais agressiva é a
+pior. Comprar fraqueza não funciona na B3 neste período.
+
+**2. Variar o período do Donchian NÃO diversifica.** Correlação do 20d com o
+40d = **0,86** e com o 55d = **0,79**. É a mesma aposta com calibração pior
+(+0,63% e +0,76% contra +2,02%). Quem quiser diversificar tem de mudar de
+família, não de parâmetro.
+
+**3. Donchian+ADX é o caso didático de por que ranquear por RETORNO engana.**
+Tem o **maior excesso** (+4,02%, o dobro do Donchian puro) e ao mesmo tempo
+`t` **menor** (+1,12 vs +1,18), IC95% **mais largo de todos**
+([−2,84%, +11,21%]) e drawdown pior (−22,6% vs −17,4%). O ADX seleciona menos
+oportunidades, mais concentradas: a média sobe, a variância sobe mais. **Um
+ranking por retorno o colocaria em primeiro; por confiança, ele perde.**
+
+**4. Correlação: diversificação melhora, mas não cria edge onde não há.** As
+positivas são pouco correlacionadas entre si (ρ 0,15-0,30) — o que em tese é
+o cenário ideal. Combinar as duas melhores dá `t`=+1,31, melhor que qualquer
+isolada, e ainda muito longe de 1,96 (ou dos ~2,7 com Bonferroni). Duas
+medianas descorrelacionadas continuam sendo duas medianas.
+
+**Teto de capacidade do Donchian+ADX:** +0,51% em R$500k, +1,69% em R$1M —
+pior que o do Donchian puro. A não-monotonicidade entre os dois é ruído
+(550-678 trades, IC cruzando zero), não recuperação.
+
+**Conclusão:** a varredura **não muda** a decisão de encerramento. Nenhuma
+família justifica reabrir a questão da camada de execução.
+
 
 ### Sondagem de capacidade em cripto (2026-07-27) — ESTIMATIVA, não medição
 
