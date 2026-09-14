@@ -20,3 +20,8 @@ Nenhuma diretiva Nexus padrao autoriza automaticamente:
 
 ## 3. Autorizacao Formal
 Qualquer acao envolvendo implantacao live requer autorizacao explicita, documentada e com duplo aval da autoridade humana (Victor) e da Diretoria Executiva (Astra).
+
+## 4. Desacoplamento Estrito de Deploy (NEXUS-000B)
+- O pipeline `.github/workflows/deploy.yml` opera exclusivamente por disparo manual (`workflow_dispatch`).
+- Nenhum gatilho automático (`workflow_run`, `push`, `pull_request`) é permitido para produção.
+- Requer autorização identificável (`nexus_directive_ref`) e confirmação inequívoca (`confirmation: DEPLOY-TO-PRODUCTION`).

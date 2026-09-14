@@ -1,58 +1,96 @@
 name: Deploy Meridian Bot to AWS
 
-# Só roda depois que o workflow "CI" terminar com sucesso no branch main.
-# Isso garante que código quebrado nunca chega ao servidor.
+# =====================================================================
+# MERIDIAN INSTITUTIONAL GOVERNANCE — NEXUS-000B DEPLOYMENT INTERLOCK
+# =====================================================================
+# REGRA VITAL: CI VERDE != AUTORIZACAO DE PRODUCAO
 #
-# Gate extra: sem os secrets de deploy configurados no repositório,
-# SSH_PRIVATE_KEY/SERVER_IP chegam vazios no job e o primeiro passo
-# (ssh-keyscan) falha na hora — toda merge em main disparava uma
-# tentativa de deploy fadada a falhar, virando ruído em vez de sinal.
-# O gate fica dentro do primeiro step (não na condição `if:` do job —
-# referenciar `secrets` ali faz o GitHub rejeitar o workflow inteiro na
-# validação, confirmado no run 29720950364), via step de checagem +
-# `if:` nos steps seguintes lendo o output dele. Sem os secrets
-# configurados, os steps de deploy ficam "skipped", não "failed", até
-# alguém configurar Settings → Secrets and variables → Actions:
-# SSH_PRIVATE_KEY, SERVER_IP, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-# EMERGENCY_PASSWORD, API_KEY, ALLOWED_ORIGINS (ver README.md).
-# workflow_dispatch permite disparar manualmente depois de configurar,
-# sem esperar o próximo push em main.
-on:
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
-    branches:
-      - main
-  workflow_dispatch: {}
+# Este workflow está estritamente desacoplado do pipeline de CI.
+# Gatilhos automáticos (workflow_run, push, pull_request) foram abolidos.
+#
+# REQUISITOS DE DISPARO:
+# 1. Disparo manual explícito via workflow_dispatch.
+# 2. Confirmação obrigatória: 'DEPLOY-TO-PRODUCTION'.
+# 3. Referência formal de diretiva/autorização obrigatória.
+# 4. Vinculação ao GitHub Environment 'production'.
+# 5. Fail-closed: Ausência de autorização ou secrets aborta com exit 1.
+#
+# MANUAL CONTROL REQUIRED:
+# Para governança completa em nível de plataforma GitHub, Victor deve
+# configurar em Settings -> Environments -> production:
+#   1. Required reviewers: Adicionar Victor como revisor obrigatório.
+#   2. Deployment branches: Restringir exclusivamente para a branch 'main'.
+# =====================================================================
+
+"on":
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Confirmação mandatória (digite EXATAMENTE 'DEPLOY-TO-PRODUCTION'):"
+        required: true
+        type: string
+      nexus_directive_ref:
+        description: "Referência formal da Diretiva / Autorização Executiva (ex: NEXUS-001 / ASTRA-001):"
+        required: true
+        type: string
+      environment:
+        description: "Ambiente de destino:"
+        required: true
+        type: choice
+        options:
+          - production
+        default: production
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    name: Deploy to AWS Production
     runs-on: ubuntu-latest
+    environment: production
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'DEPLOY-TO-PRODUCTION' }}
 
     steps:
+    - name: Validate explicit executive authorization
+      id: auth_gate
+      run: |
+        echo "=== MERIDIAN DEPLOYMENT INTERLOCK GATE ==="
+        echo "Invocado por: ${{ github.actor }}"
+        echo "Referência de Autorização: ${{ github.event.inputs.nexus_directive_ref }}"
+        echo "Ambiente Alvo: ${{ github.event.inputs.environment }}"
+
+        if [ "${{ github.event.inputs.confirmation }}" != "DEPLOY-TO-PRODUCTION" ]; then
+          echo "::error::Confirmação de produção inválida. Esperado: 'DEPLOY-TO-PRODUCTION'."
+          exit 1
+        fi
+
+        if [ -z "${{ github.event.inputs.nexus_directive_ref }}" ]; then
+          echo "::error::Referência de diretiva formal obrigatória ausente."
+          exit 1
+        fi
+
+        echo "Autorização executiva validada com sucesso."
+
     - name: Check deploy secrets configured
       id: check
       run: |
-        if [ -n "$SERVER_IP" ]; then
+        if [ -n "$SERVER_IP" ] && [ -n "$SSH_PRIVATE_KEY" ]; then
           echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "Deploy secrets detectados."
         else
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::SERVER_IP não configurado em Settings > Secrets and variables > Actions — deploy pulado (não é falha, é configuração pendente)."
+          echo "::error::SERVER_IP ou SSH_PRIVATE_KEY ausentes em Settings > Secrets. Abortando (fail-closed)."
+          exit 1
         fi
       env:
         SERVER_IP: ${{ secrets.SERVER_IP }}
+        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
 
     - name: Checkout code
-      if: steps.check.outputs.ready == 'true'
       uses: actions/checkout@v4
 
     - name: Setup SSH Key
-      if: steps.check.outputs.ready == 'true'
       run: |
         mkdir -p ~/.ssh/
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key.pem
@@ -63,14 +101,12 @@ jobs:
         SERVER_IP: ${{ secrets.SERVER_IP }}
 
     - name: Copy files to AWS
-      if: steps.check.outputs.ready == 'true'
       run: |
         rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'infra' --exclude '.env' --exclude '.agents' --exclude '.pytest_cache' --exclude '__pycache__' --exclude 'node_modules' --exclude 'data/*.db*' --exclude 'logs' -e "ssh -i ~/.ssh/deploy_key.pem" ./ ubuntu@$SERVER_IP:/app/Meridian/
       env:
         SERVER_IP: ${{ secrets.SERVER_IP }}
 
     - name: Inject Secrets & Restart Docker
-      if: steps.check.outputs.ready == 'true'
       run: |
         ssh -i ~/.ssh/deploy_key.pem ubuntu@$SERVER_IP << 'EOF'
           cd /app/Meridian
