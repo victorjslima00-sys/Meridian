@@ -72,7 +72,7 @@ def snapshot_env(tmp_path, monkeypatch):
     database.DB_PATH = orig_db
 
 
-def test_snapshot_freezes_exact_positions_and_balances(snapshot_env):
+def test_snapshot_preserves_balances_but_rejects_untraceable_quotes(snapshot_env):
     db_file, store_dir, _ = snapshot_env
     quotes = {"PETR4.SA": 32.50, "VALE3.SA": 64.00}
     clock = datetime.datetime(2026, 9, 14, 11, 0, 0, tzinfo=datetime.timezone.utc)
@@ -84,8 +84,8 @@ def test_snapshot_freezes_exact_positions_and_balances(snapshot_env):
         clock_now=clock,
     )
 
-    assert snap.is_valid is True
-    assert snap.reason is None
+    assert snap.is_valid is False
+    assert snap.reason == "quote_evidence_required_for_VALE3.SA"
     assert snap.unit == "currency_brl"
     assert snap.observed_at == clock
     assert snap.collected_at == clock
@@ -103,22 +103,23 @@ def test_snapshot_freezes_exact_positions_and_balances(snapshot_env):
     pos_petr = [p for p in snap.active_positions if p.ticker == "PETR4.SA"][0]
     assert pos_petr.shares == 100.0
     assert pos_petr.entry_price == 30.0
-    assert pos_petr.current_price == 32.50
-    assert pos_petr.alocado == 3000.0
-    assert pos_petr.pnl_monetario == 250.0  # 100 * (32.5 - 30.0)
-    assert pos_petr.pnl_pct == pytest.approx(8.3333, abs=1e-3)
+    assert pos_petr.current_price is None
+    assert pos_petr.alocado is None
+    assert pos_petr.pnl_monetario is None
+    assert pos_petr.pnl_pct is None
+    assert pos_petr.quote_observed_at is None
+    assert pos_petr.quote_source is None
 
     pos_vale = [p for p in snap.active_positions if p.ticker == "VALE3.SA"][0]
     assert pos_vale.shares == 50.0
     assert pos_vale.entry_price == 60.0
-    assert pos_vale.current_price == 64.00
-    assert pos_vale.alocado == 3000.0
-    assert pos_vale.pnl_monetario == 200.0  # 50 * (64.0 - 60.0)
+    assert pos_vale.current_price is None
+    assert pos_vale.alocado is None
+    assert pos_vale.pnl_monetario is None
 
-    # mtm_total = (100 * 32.5) + (50 * 64.0) = 3250 + 3200 = 6450.0
-    assert snap.mtm_total == 6450.0
-    # equity = saldo_livre(7000) + mtm(6450) = 13450.0
-    assert snap.equity == 13450.0
+    # Untraceable scalar quotes cannot establish market valuation.
+    assert snap.mtm_total is None
+    assert snap.equity is None
     assert snap.source_sha256 is not None
     assert len(snap.source_sha256) == 64
 
@@ -174,6 +175,10 @@ def test_snapshot_requery_reproduces_identical_hash_and_values(snapshot_env):
 
 def test_independent_approval_lifecycle_for_valuation_snapshot(test_app, snapshot_env):
     db_file, store_dir, registry_path = snapshot_env
+    # Explicitly synthetic cash-only example: scalar mocks are not quote evidence.
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM trades")
+        conn.execute("UPDATE portfolio SET em_posicoes=0")
     quotes = {"PETR4.SA": 30.00, "VALE3.SA": 60.00}
     now = datetime.datetime.now(datetime.timezone.utc)
     clock = now - datetime.timedelta(hours=2)
@@ -237,16 +242,12 @@ def test_independent_approval_lifecycle_for_valuation_snapshot(test_app, snapsho
             assert data_appr["value"] == snap.equity
             assert data_appr["patrimonio_total"] == snap.equity
 
-            # 4. Positions route also publishes verified positions
+            # 4. Positions route publishes the same cash-only snapshot
             pos_resp = client.get("/api/positions")
             assert pos_resp.status_code == 200
             pos_data = pos_resp.json()
             assert pos_data["verification_status"] == "verified"
-            assert len(pos_data["active_positions"]) == 2
-            active_petr = [p for p in pos_data["active_positions"] if p["ticker"] == "PETR4.SA"][0]
-            assert active_petr["verification_status"] == "verified"
-            assert active_petr["current_price"] == 30.00
-            assert active_petr["alocado"] == 3000.00
+            assert pos_data["active_positions"] == []
 
             # 5. Subsequent query reproduces exact verified state (idempotency)
             resp_repeat = client.get("/api/portfolio")

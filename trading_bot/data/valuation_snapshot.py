@@ -72,7 +72,12 @@ def create_valuation_snapshot(
 ) -> ValuationSnapshot:
     """Create and persist an immutable valuation snapshot.
 
-    If any active position lacks a positive feed quote, valuation fails closed:
+    The current float-only feed cannot provide quote provenance or timestamps.
+    Any active position therefore fails closed until an evidence-bearing quote
+    contract is implemented and independently reviewed. Cash-only snapshots
+    remain possible, but validity does not imply publication approval.
+
+    If any active position lacks an evidenced feed quote, valuation fails closed:
     equity is None, is_valid is False, reason indicates feed unavailability,
     and entry_price is NEVER used to substitute current market price.
     """
@@ -124,43 +129,26 @@ def create_valuation_snapshot(
         entry_p = float(r["entry_price"] or 0.0)
         price = provider(ticker)
 
-        if price is None or price <= 0:
-            # FAIL-CLOSED: absolutely no fallback to entry_price.
-            is_valid = False
+        # A scalar has no source, observed timestamp, or raw evidence to audit.
+        # Do not promote the local collection clock to market observation time.
+        is_valid = False
+        if price is None or (type(price) in (int, float) and price <= 0):
             reason = f"feed_price_unavailable_for_{ticker}"
-            items.append(
-                PositionSnapshotItem(
-                    ticker=ticker,
-                    shares=shares,
-                    entry_price=entry_p,
-                    current_price=None,
-                    alocado=None,
-                    pnl_monetario=None,
-                    pnl_pct=None,
-                    quote_observed_at=None,
-                    quote_source=None,
-                )
-            )
         else:
-            current_p = round(float(price), 4)
-            alocado = round(shares * entry_p, 4)
-            pnl_mon = round(shares * (current_p - entry_p), 4)
-            pnl_pct = round(((current_p / entry_p) - 1.0) * 100.0, 4)
-            mtm_pos = shares * current_p
-            mtm_total += mtm_pos
-            items.append(
-                PositionSnapshotItem(
-                    ticker=ticker,
-                    shares=shares,
-                    entry_price=entry_p,
-                    current_price=current_p,
-                    alocado=alocado,
-                    pnl_monetario=pnl_mon,
-                    pnl_pct=pnl_pct,
-                    quote_observed_at=now,
-                    quote_source="market_feed",
-                )
+            reason = f"quote_evidence_required_for_{ticker}"
+        items.append(
+            PositionSnapshotItem(
+                ticker=ticker,
+                shares=shares,
+                entry_price=entry_p,
+                current_price=None,
+                alocado=None,
+                pnl_monetario=None,
+                pnl_pct=None,
+                quote_observed_at=None,
+                quote_source=None,
             )
+        )
 
     portfolio_snap = PortfolioBalanceSnapshot(
         patrimonio_total=patrimonio_tot,
