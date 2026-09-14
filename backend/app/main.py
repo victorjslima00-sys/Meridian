@@ -1,5 +1,6 @@
 import datetime
 from pathlib import Path
+import time
 from .data.feed import get_current_price
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -124,6 +125,10 @@ def get_status():
         "exit_restart_count": snap["exit_restart_count"],
         "exit_gate_sticky_block": snap["exit_gate_sticky_block"],
         "motivos_bloqueio": snap["motivos_bloqueio"],
+        "last_cycle_duration_seconds": snap.get("last_cycle_duration_seconds"),
+        "last_exit_cycle_duration_seconds": snap.get("last_exit_cycle_duration_seconds"),
+        "cycle_latency": snap.get("cycle_latency"),
+        "system_health": snap.get("system_health"),
     }
 
 
@@ -729,7 +734,10 @@ async def exit_loop():
     """
     while True:
         try:
+            t0 = time.monotonic()
             effective = await _run_exit_scan()
+            duration = time.monotonic() - t0
+            worker_state.state.mark_exit_cycle_duration(duration)
             worker_state.state.mark_exit_activity(effective=effective)
         except asyncio.CancelledError:
             raise  # cancelamento limpo (shutdown/testes) deve propagar
@@ -751,7 +759,10 @@ async def ai_committee_worker():
     """
     while True:
         try:
+            t0 = time.monotonic()
             await _run_one_scan_cycle()
+            duration = time.monotonic() - t0
+            worker_state.state.mark_scan_cycle_duration(duration)
             worker_state.state.mark_scan()
         except asyncio.CancelledError:
             raise  # cancelamento limpo (shutdown/testes) deve propagar

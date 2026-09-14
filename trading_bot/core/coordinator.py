@@ -54,7 +54,7 @@ class ManagedWorker:
     def __init__(
         self,
         name: str,
-        coro_fn: Callable[[], Coroutine[Any, Any, None]],
+        coro_fn: Callable[..., Coroutine[Any, Any, None]],
         interval_seconds: float = 60.0,
         max_restarts: int = 5,
         backoff_cap_seconds: float = 30.0,
@@ -76,25 +76,46 @@ class ManagedWorker:
         self.supervision = supervision or LoopSupervisionState()
         self.alert_fn = alert_fn
 
+        self.created_at = _now_b3()
         self.supervisor_task: Optional[asyncio.Task] = None
         self.last_activity_at: Optional[datetime.datetime] = None
         self.last_error: Optional[str] = None
         self.consecutive_stale_checks: int = 0
 
+        # Auto-vincula callback de atividade se supervision possuir o slot
+        if hasattr(self.supervision, "activity_callback"):
+            self.supervision.activity_callback = self.mark_active
+
     def mark_active(self) -> None:
+        """Registra atividade recente do worker e zera contagem de stale."""
         self.last_activity_at = _now_b3()
         self.consecutive_stale_checks = 0
 
     def is_alive(self, timeout_seconds: float = 300.0) -> bool:
-        if self.supervision.status != "running":
+        """
+        Avalia se o worker está vivo e com heartbeat recente.
+        Evita falso-negativo na inicialização utilizando timestamp de início.
+        """
+        if self.supervision.status not in ("running", "starting"):
             return False
         if self.supervisor_task is None or self.supervisor_task.done():
             return False
         if self.health_check:
             return bool(self.health_check())
-        if self.last_activity_at is None:
-            return False
-        elapsed = (_now_b3() - self.last_activity_at).total_seconds()
+
+        activity_ts = self.last_activity_at
+        if activity_ts is None:
+            # Fallback seguro para momento de início, evitando avaliar worker ativo recém-iniciado como morto
+            if hasattr(self.supervision, "last_scan_at") and self.supervision.last_scan_at:
+                activity_ts = self.supervision.last_scan_at
+            elif hasattr(self.supervision, "last_exit_activity_at") and self.supervision.last_exit_activity_at:
+                activity_ts = self.supervision.last_exit_activity_at
+            elif hasattr(self.supervision, "restart_epoch_start") and self.supervision.restart_epoch_start:
+                activity_ts = self.supervision.restart_epoch_start
+            else:
+                activity_ts = self.created_at
+
+        elapsed = (_now_b3() - activity_ts).total_seconds()
         return elapsed <= timeout_seconds
 
     def snapshot(self) -> Dict[str, Any]:
@@ -120,23 +141,39 @@ class CentralCoordinator:
         heartbeat_timeout_seconds: float = 300.0,
         watchdog_interval_seconds: float = 15.0,
         max_event_history: int = 200,
+        stale_threshold: int = 2,
     ) -> None:
         self.heartbeat_timeout_seconds = heartbeat_timeout_seconds
         self.watchdog_interval_seconds = watchdog_interval_seconds
         self.max_event_history = max_event_history
+        self.stale_threshold = stale_threshold
         self._workers: Dict[str, ManagedWorker] = {}
         self._events: List[WorkerEvent] = []
         self._is_running: bool = False
         self._watchdog_task: Optional[asyncio.Task] = None
+        self._health_monitor: Optional[Any] = None
 
     @property
     def is_running(self) -> bool:
         return self._is_running
 
+    @property
+    def health_monitor(self) -> Any:
+        if self._health_monitor is None:
+            from trading_bot.infra.health_monitor import OperationalHealthMonitor
+            self._health_monitor = OperationalHealthMonitor()
+        return self._health_monitor
+
+    def mark_active(self, name: str) -> None:
+        """Permite que chamadores externos ou workers registrem atividade por nome."""
+        worker = self._workers.get(name)
+        if worker:
+            worker.mark_active()
+
     def register_worker(
         self,
         name: str,
-        coro_fn: Callable[[], Coroutine[Any, Any, None]],
+        coro_fn: Callable[..., Coroutine[Any, Any, None]],
         interval_seconds: float = 60.0,
         max_restarts: int = 5,
         backoff_cap_seconds: float = 30.0,
@@ -185,8 +222,10 @@ class CentralCoordinator:
 
     async def _run_worker_supervisor(self, worker: ManagedWorker) -> None:
         """Loop de supervisão dedicado para um worker específico."""
+        import inspect
         while self._is_running:
             worker.supervision.on_start()
+            worker.mark_active()
             self._record_event(
                 worker.name,
                 "START",
@@ -194,8 +233,13 @@ class CentralCoordinator:
                 restart_count=worker.supervision.restart_count,
             )
             try:
-                await worker.coro_fn()
+                sig = inspect.signature(worker.coro_fn)
+                if len(sig.parameters) > 0:
+                    await worker.coro_fn(worker)
+                else:
+                    await worker.coro_fn()
                 # Saída normal (caso coroutine não seja loop infinito)
+                worker.mark_active()
                 self._record_event(worker.name, "EXIT", f"Worker '{worker.name}' completou execução normalmente.")
                 return
             except asyncio.CancelledError:
@@ -216,10 +260,11 @@ class CentralCoordinator:
 
                 if worker.alert_fn:
                     try:
-                        await asyncio.to_thread(
-                            worker.alert_fn,
-                            f"⚠️ [Meridian Coordenador] Worker '{worker.name}' caiu (restart {rc}/{worker.max_restarts}): {e}",
-                        )
+                        msg = f"⚠️ [Meridian Coordenador] Worker '{worker.name}' caiu (restart {rc}/{worker.max_restarts}): {e}"
+                        if asyncio.iscoroutinefunction(worker.alert_fn):
+                            await worker.alert_fn(msg)
+                        else:
+                            await asyncio.to_thread(worker.alert_fn, msg)
                     except Exception as alert_err:
                         logger.error("Falha ao enviar alerta de crash para %s: %s", worker.name, alert_err)
 
@@ -239,11 +284,14 @@ class CentralCoordinator:
 
                     if worker.alert_fn:
                         try:
-                            await asyncio.to_thread(
-                                worker.alert_fn,
+                            stopped_msg = (
                                 f"🛑 [Meridian Coordenador] Worker '{worker.name}' PARADO definitivamente. "
-                                "Intervenção manual necessária.",
+                                "Intervenção manual necessária."
                             )
+                            if asyncio.iscoroutinefunction(worker.alert_fn):
+                                await worker.alert_fn(stopped_msg)
+                            else:
+                                await asyncio.to_thread(worker.alert_fn, stopped_msg)
                         except Exception as alert_err:
                             logger.error("Falha no alerta de parada de %s: %s", worker.name, alert_err)
                     return
@@ -259,12 +307,14 @@ class CentralCoordinator:
                 await asyncio.sleep(delay)
 
     async def _watchdog_loop(self) -> None:
-        """Watchdog central de heartbeat e liveness de todos os workers."""
+        """Watchdog central de heartbeat, liveness e remediação ativa de workers."""
         while self._is_running:
             try:
                 await asyncio.sleep(self.watchdog_interval_seconds)
-                for worker in self._workers.values():
-                    if worker.supervision.status == "running":
+                for worker in list(self._workers.values()):
+                    if not self._is_running:
+                        break
+                    if worker.supervision.status in ("running", "starting"):
                         if not worker.is_alive(timeout_seconds=self.heartbeat_timeout_seconds):
                             worker.consecutive_stale_checks += 1
                             self._record_event(
@@ -273,6 +323,68 @@ class CentralCoordinator:
                                 f"Worker '{worker.name}' detectado com heartbeat estagnado (> {self.heartbeat_timeout_seconds}s).",
                                 consecutive_stale=worker.consecutive_stale_checks,
                             )
+                            if worker.consecutive_stale_checks >= self.stale_threshold:
+                                self._record_event(
+                                    worker.name,
+                                    "WATCHDOG_REMEDIATION",
+                                    f"Remediação ativa: cancelando task congelada de '{worker.name}' após {worker.consecutive_stale_checks} falhas de heartbeat.",
+                                    consecutive_stale=worker.consecutive_stale_checks,
+                                )
+                                if worker.alert_fn:
+                                    try:
+                                        msg = (
+                                            f"🚨 [Watchdog Remediation] Worker '{worker.name}' congelado "
+                                            f"({worker.consecutive_stale_checks} verificações consecutivas). "
+                                            "Cancelando task para auto-healing."
+                                        )
+                                        if asyncio.iscoroutinefunction(worker.alert_fn):
+                                            await worker.alert_fn(msg)
+                                        else:
+                                            await asyncio.to_thread(worker.alert_fn, msg)
+                                    except Exception as alert_err:
+                                        logger.error("Falha ao enviar alerta de watchdog remediation para %s: %s", worker.name, alert_err)
+
+                                # Cancela a task congelada
+                                stale_task = worker.supervisor_task
+                                if stale_task and not stale_task.done():
+                                    stale_task.cancel()
+                                    with suppress(asyncio.CancelledError):
+                                        await stale_task
+
+                                # Zera contagem de stale após remediação
+                                worker.consecutive_stale_checks = 0
+
+                                # Auto-healing: reinicia worker se coordenador continuar em execução
+                                if self._is_running:
+                                    worker.supervision.record_crash()
+                                    rc = worker.supervision.restart_count
+                                    if rc > worker.max_restarts:
+                                        worker.supervision.mark_stopped()
+                                        self._record_event(
+                                            worker.name,
+                                            "STOPPED",
+                                            f"Worker '{worker.name}' PARADO definitivamente após auto-healing — tentativas esgotadas.",
+                                            is_critical=worker.is_critical,
+                                        )
+                                        if worker.on_exhausted:
+                                            try:
+                                                worker.on_exhausted()
+                                            except Exception as hook_err:
+                                                logger.error("Erro no callback de exaustão de %s: %s", worker.name, hook_err)
+                                    else:
+                                        worker.supervision.mark_starting()
+                                        worker.mark_active()
+                                        new_task = asyncio.create_task(self._run_worker_supervisor(worker))
+                                        worker.supervisor_task = new_task
+                                        self._record_event(
+                                            worker.name,
+                                            "WATCHDOG_AUTOHEAL",
+                                            f"Worker '{worker.name}' reiniciado com sucesso pelo watchdog (restart {rc}/{worker.max_restarts}).",
+                                            restart_count=rc,
+                                        )
+                        else:
+                            # Worker está ativo e saudável
+                            worker.consecutive_stale_checks = 0
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -289,6 +401,7 @@ class CentralCoordinator:
 
         for worker in self._workers.values():
             worker.supervision.mark_starting()
+            worker.mark_active()
             task = asyncio.create_task(self._run_worker_supervisor(worker))
             worker.supervisor_task = task
 
@@ -336,11 +449,20 @@ class CentralCoordinator:
         else:
             global_status = "starting" if self._is_running else "stopped"
 
+        system_metrics = None
+        try:
+            system_metrics = self.health_monitor.collect_system_metrics()
+            if system_metrics.get("system_status") == "CRITICAL_LOW_MEMORY" and global_status == "online":
+                global_status = "degraded"
+        except Exception as exc:
+            logger.warning("Falha ao coletar métricas do OperationalHealthMonitor: %s", exc)
+
         return {
             "coordinator_running": self._is_running,
             "global_status": global_status,
             "registered_workers_count": len(self._workers),
             "workers": worker_snaps,
+            "system_health": system_metrics,
             "recent_events": [e.to_dict() for e in self._events[-10:]],
             "fail_closed_guarantee": True,
             "real_broker_calls": 0,

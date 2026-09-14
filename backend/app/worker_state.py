@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .data.database import now_b3
 
@@ -85,6 +85,7 @@ class LoopSupervisionState:
         self.cycles_since_restart: int = 0
         self.restart_epoch_start: datetime.datetime = now_b3()
         self.use_cycles_for_stability = use_cycles_for_stability
+        self.activity_callback: Optional[Callable[[], None]] = None
 
     def mark_starting(self) -> None:
         self.status = "starting"
@@ -101,6 +102,11 @@ class LoopSupervisionState:
         self.status = "running"
         self.cycles_since_restart += 1
         self._maybe_reset_restart_count()
+        if self.activity_callback:
+            try:
+                self.activity_callback()
+            except Exception as e:
+                logger.error("Erro no activity_callback de LoopSupervisionState: %s", e)
 
     def record_crash(self) -> None:
         self.restart_count += 1
@@ -163,6 +169,12 @@ class WorkerState:
         # precisar recalcular nada. Antes deste campo, _avaliar_portao_de_
         # entradas calculava os motivos e descartava no fim do próprio ciclo.
         self.last_gate_motivos: list = []
+        self.activity_callback: Optional[Callable[[], None]] = None
+        self.last_cycle_duration_seconds: Optional[float] = None
+        self.last_exit_cycle_duration_seconds: Optional[float] = None
+        from trading_bot.infra.cycle_tracker import CycleLatencyTracker
+        self.scan_cycle_tracker = CycleLatencyTracker(name="ai_committee", warn_threshold_seconds=120.0)
+        self.exit_cycle_tracker = CycleLatencyTracker(name="exit_loop", warn_threshold_seconds=10.0)
 
     # -- Transições ---------------------------------------------------------
     def mark_starting(self) -> None:
@@ -184,6 +196,11 @@ class WorkerState:
         self.status = "running"
         self.cycles_since_restart += 1
         self._maybe_reset_restart_count()
+        if self.activity_callback:
+            try:
+                self.activity_callback()
+            except Exception as e:
+                logger.error("Erro no activity_callback de WorkerState.mark_scan: %s", e)
 
     def record_crash(self) -> None:
         self.restart_count += 1
@@ -202,6 +219,21 @@ class WorkerState:
         self.last_exit_activity_at = now
         if effective:
             self.last_effective_exit_scan_at = now
+        if self.activity_callback:
+            try:
+                self.activity_callback()
+            except Exception as e:
+                logger.error("Erro no activity_callback de WorkerState.mark_exit_activity: %s", e)
+
+    def mark_scan_cycle_duration(self, duration_seconds: float) -> None:
+        """Registra latência do ciclo lento de entradas."""
+        self.last_cycle_duration_seconds = round(duration_seconds, 4)
+        self.scan_cycle_tracker.record_cycle(duration_seconds)
+
+    def mark_exit_cycle_duration(self, duration_seconds: float) -> None:
+        """Registra latência do ciclo rápido de saídas."""
+        self.last_exit_cycle_duration_seconds = round(duration_seconds, 4)
+        self.exit_cycle_tracker.record_cycle(duration_seconds)
 
     def mark_gate_evaluated(self, motivos: list) -> None:
         """Chamado por _avaliar_portao_de_entradas ao fim de cada avaliação
@@ -289,6 +321,13 @@ class WorkerState:
 
     def snapshot(self) -> Dict[str, Any]:
         status = self._compute_status()
+        system_health = None
+        try:
+            from trading_bot.infra.health_monitor import OperationalHealthMonitor
+            system_health = OperationalHealthMonitor().collect_system_metrics()
+        except Exception:
+            pass
+
         return {
             "status": status,
             "worker_alive": status == "online",
@@ -306,6 +345,13 @@ class WorkerState:
             "exit_restart_count": self.exit_supervision.restart_count,
             "exit_gate_sticky_block": self.exit_gate_sticky_block,
             "motivos_bloqueio": list(self.last_gate_motivos),
+            "last_cycle_duration_seconds": self.last_cycle_duration_seconds,
+            "last_exit_cycle_duration_seconds": self.last_exit_cycle_duration_seconds,
+            "cycle_latency": {
+                "scan": self.scan_cycle_tracker.snapshot(),
+                "exit": self.exit_cycle_tracker.snapshot(),
+            },
+            "system_health": system_health,
         }
 
     def reset(self) -> None:
