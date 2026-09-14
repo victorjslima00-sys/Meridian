@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Indice de RAG Semantico Financeiro — Orion Quant
 Baseado no Stanford CS229 (Capitulo 16.3 e 16.4 — Semantic Retrieval & RAG)
 """

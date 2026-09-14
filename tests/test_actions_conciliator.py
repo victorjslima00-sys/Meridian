@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Conciliador de Proventos CVM vs Precos XP
 """
 import pytest

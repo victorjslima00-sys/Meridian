@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Otimizacao de Portfolios de Markowitz — Atlas Analytics
 """
 import numpy as np

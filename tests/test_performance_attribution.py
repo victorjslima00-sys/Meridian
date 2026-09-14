@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Relatorios de Atribuicao de Performance (Atlas Analytics)
 """
 import pytest

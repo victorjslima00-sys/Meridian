@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Otimizacao e Geracao de Sinais de Pares — Orion Quant
 Baseado no Stanford CS229 (Capitulo 1 — Linear Regression & Normal Equations)
 """

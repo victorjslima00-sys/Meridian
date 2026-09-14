@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Agregador CVM de Fatos Relevantes — Orion Data Engineering
 """
 import pytest

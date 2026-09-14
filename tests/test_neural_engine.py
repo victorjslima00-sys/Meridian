@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Deep Learning do Zero — Orion Quant
 Baseado no Stanford CS229 (Capitulo 7 — Deep Learning & Backpropagation)
 """

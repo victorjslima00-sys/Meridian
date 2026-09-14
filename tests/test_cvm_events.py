@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Minerador CVM Dados Abertos — Orion Data Engineering
 """
 import pytest

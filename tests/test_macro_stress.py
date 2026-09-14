@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Simulador de Estresse Macro & Monte Carlo — Orion Quant
 """
 import numpy as np

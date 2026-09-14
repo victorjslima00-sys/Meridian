@@ -1,4 +1,4 @@
-﻿"""Download direto do COTAHIST oficial da B3 via CDN historico (sem CAPTCHA).
+"""Download direto do COTAHIST oficial da B3 via CDN historico (sem CAPTCHA).
 
 Permite baixar arquivos anuais, mensais ou diarios com validacao estrita de SHA-256
 e geracao de manifesto para pesquisa quantitativa no Meridian.

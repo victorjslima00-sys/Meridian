@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Sanitizador e Lakehouse Storage Manager — Orion Data Engineering
 """
 import json

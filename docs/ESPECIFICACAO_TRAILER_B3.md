@@ -1,4 +1,4 @@
-﻿# Especificação Técnica de Layout e Convenção de Trailer — B3 COTAHIST
+# Especificação Técnica de Layout e Convenção de Trailer — B3 COTAHIST
 **Documento Técnico Meridian: DOC-B3-LAYOUT-001**  
 **Origem:** Bolsa do Brasil (B3 S.A. - Brasil, Bolsa, Balcão)  
 **Referência Oficial:** `SeriesHistoricas_Layout.pdf` (B3)  

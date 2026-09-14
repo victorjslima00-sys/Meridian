@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Agente Sentinel de Risco e Integridade — Orion Governance
 """
 import pytest

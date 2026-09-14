@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Sincronizador Google Drive — Orion Data Engineering
 """
 import os

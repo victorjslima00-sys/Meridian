@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Detecao de Anomalias e Qualidade de Dados (Great Expectations Light)
 """
 import pandas as pd

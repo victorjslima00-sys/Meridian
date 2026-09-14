@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Sistema de Gestao de Ordens e Reconciliacao (OMS) — Orion Execution
 """
 import pytest

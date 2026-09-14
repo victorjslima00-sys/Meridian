@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para a Regressao Logistica com Regularizacao L1/L2 — Orion Quant
 Baseado no Stanford CS229 (Capitulos 2 e 9 — Logistic Regression & Regularization)
 """

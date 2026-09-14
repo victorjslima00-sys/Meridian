@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor Dinamico de Kelly e Multimercado — Atlas Alpha
 """
 import pytest

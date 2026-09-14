@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Algoritmo K-Means de Regimes de Volatilidade do Zero — Orion Quant
 Baseado no Stanford CS229 (Capitulo 10 — Clustering and the k-means algorithm)
 """

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Backtest Vetorizado Rapido — Orion Quant
 """
 import numpy as np

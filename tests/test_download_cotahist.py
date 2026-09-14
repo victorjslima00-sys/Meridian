@@ -1,4 +1,4 @@
-﻿from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch
 import zipfile, io, json
 from pathlib import Path
 import pytest

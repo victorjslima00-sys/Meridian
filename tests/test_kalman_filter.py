@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Filtro de Kalman de Tendencia e Ruido de Mercado — Orion Quant
 Baseado no Stanford CS229 (Capitulo 20.4 — Linear Quadratic Gaussian & Kalman Filter)
 """

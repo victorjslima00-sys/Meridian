@@ -1,10 +1,11 @@
-﻿"""
+"""
 Testes unitarios para o Exportador de Planilhas Executivas — Orion Data Engineering
 """
 import os
-import openpyxl
 import pandas as pd
 import pytest
+
+openpyxl = pytest.importorskip("openpyxl")
 from trading_bot.data.exporters.excel_exporter import ExecutiveWorkbookExporter
 
 

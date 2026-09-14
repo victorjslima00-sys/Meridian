@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Minerador Bacen SGS — Orion Data Engineering
 """
 import json

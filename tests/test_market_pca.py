@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de PCA e Rastreamento de Fatores de Mercado — Orion Quant
 Baseado no Stanford CS229 (Capitulo 12 — Principal Components Analysis)
 """

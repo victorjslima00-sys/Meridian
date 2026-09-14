@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Minador de Noticias e LLM Sentiment Extractor
 """
 import pytest

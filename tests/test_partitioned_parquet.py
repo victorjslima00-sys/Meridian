@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Particionamento Parquet do Lakehouse — Orion Big Data
 """
 import os

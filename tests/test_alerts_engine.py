@@ -1,4 +1,4 @@
-﻿"""
+"""
 Testes unitarios para o Motor de Gerenciamento de Alertas e Notificacoes (Vulcan DevOps)
 """
 import pytest
