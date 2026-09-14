@@ -1,87 +1,291 @@
 name: Deploy Meridian Bot to AWS
 
-# Só roda depois que o workflow "CI" terminar com sucesso no branch main.
-# Isso garante que código quebrado nunca chega ao servidor.
+# =====================================================================
+# MERIDIAN INSTITUTIONAL GOVERNANCE — NEXUS-000D DEPLOYMENT INTERLOCK
+# =====================================================================
+# REGRA VITAL: CI VERDE != AUTORIZACAO DE PRODUCAO
+# CI VERDE DO MESMO SHA E PRE-REQUISITO NECESSARIO, MAS NAO SUFICIENTE.
 #
-# Gate extra: sem os secrets de deploy configurados no repositório,
-# SSH_PRIVATE_KEY/SERVER_IP chegam vazios no job e o primeiro passo
-# (ssh-keyscan) falha na hora — toda merge em main disparava uma
-# tentativa de deploy fadada a falhar, virando ruído em vez de sinal.
-# O gate fica dentro do primeiro step (não na condição `if:` do job —
-# referenciar `secrets` ali faz o GitHub rejeitar o workflow inteiro na
-# validação, confirmado no run 29720950364), via step de checagem +
-# `if:` nos steps seguintes lendo o output dele. Sem os secrets
-# configurados, os steps de deploy ficam "skipped", não "failed", até
-# alguém configurar Settings → Secrets and variables → Actions:
-# SSH_PRIVATE_KEY, SERVER_IP, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-# EMERGENCY_PASSWORD, API_KEY, ALLOWED_ORIGINS (ver README.md).
-# workflow_dispatch permite disparar manualmente depois de configurar,
-# sem esperar o próximo push em main.
-on:
-  workflow_run:
-    workflows: ["CI"]
-    types:
-      - completed
-    branches:
-      - main
-  workflow_dispatch: {}
+# CONTRATO DE DEPLOY:
+# SHA candidato (branch main)
+#     ↓
+# CI desse MESMO SHA na branch main com evento push = SUCCESS
+#     ↓
+# Autorizacao executiva independente (Victor human gate + Astra audit ref)
+#     ↓
+# Validacao exaustiva de TODOS os secrets requeridos (fail-closed)
+#     ↓
+# Conexao SSH autenticada por SSH_KNOWN_HOSTS fixado (sem TOFU)
+#     ↓
+# Injecao segura de segredos via stdin pipe (zero secrets em ssh argv)
+#     ↓
+# Deploy em Producao
+#
+# MECANISMO DE AUTORIZACAO:
+# 1. Victor (Required Reviewer): Gate humano efetivamente imposto pela
+#    plataforma GitHub no Environment 'production'.
+# 2. Astra (Referencia Executiva): Identificador institucional informado
+#    em astra_authorization_ref (registro/auditoria formal, sem verificacao
+#    criptografica nesta versao - AUDIT-ONLY).
+# 3. Nexus (Referencia Tecnica): Rastreabilidade operacional da mudanca
+#    em nexus_directive_ref. NUNCA substitui autorizacao executiva.
+#
+# SEGURANCA DE EXECUCAO:
+# - Zero interpolacao de inputs de usuario diretamente dentro de scripts shell.
+# - Todos os inputs e secrets transitam estritamente atraves de env:.
+# - Safe quoting com printf '%s\n', proibicao total de eval.
+# - Host key fixada via SSH_KNOWN_HOSTS (zero TOFU dinamico).
+# - Segredos transmitidos via stdin com umask 077 e chmod 600 (zero secrets em argv).
+# =====================================================================
+
+"on":
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Confirmacao mandatoria de producao:"
+        required: true
+        type: choice
+        options:
+          - CANCEL
+          - DEPLOY-TO-PRODUCTION
+        default: CANCEL
+      nexus_directive_ref:
+        description: "Referencia tecnica da mudanca (ex: NEXUS-000D):"
+        required: true
+        type: string
+      astra_authorization_ref:
+        description: "Referencia formal da autorizacao executiva Astra (ex: ASTRA-AUTH-2026-001):"
+        required: true
+        type: string
+      environment:
+        description: "Ambiente de destino:"
+        required: true
+        type: choice
+        options:
+          - production
+        default: production
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    name: Deploy to AWS Production
     runs-on: ubuntu-latest
+    environment: production
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.confirmation == 'DEPLOY-TO-PRODUCTION' }}
 
     steps:
-    - name: Check deploy secrets configured
-      id: check
-      run: |
-        if [ -n "$SERVER_IP" ]; then
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "ready=false" >> "$GITHUB_OUTPUT"
-          echo "::warning::SERVER_IP não configurado em Settings > Secrets and variables > Actions — deploy pulado (não é falha, é configuração pendente)."
-        fi
-      env:
-        SERVER_IP: ${{ secrets.SERVER_IP }}
+      - name: Validate technical directive and executive authorization references
+        id: auth_gate
+        env:
+          CONFIRMATION: ${{ github.event.inputs.confirmation }}
+          NEXUS_REF: ${{ github.event.inputs.nexus_directive_ref }}
+          ASTRA_REF: ${{ github.event.inputs.astra_authorization_ref }}
+          TARGET_ENV: ${{ github.event.inputs.environment }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '=== MERIDIAN DEPLOYMENT INTERLOCK GATE ===\n'
+          printf 'Invocado por: %s\n' "$ACTOR"
+          printf 'Referencia Tecnica Nexus: %s\n' "$NEXUS_REF"
+          printf 'Referencia Executiva Astra (Audit-Only): %s\n' "$ASTRA_REF"
+          printf 'Ambiente Alvo: %s\n' "$TARGET_ENV"
 
-    - name: Checkout code
-      if: steps.check.outputs.ready == 'true'
-      uses: actions/checkout@v4
+          if [ "$CONFIRMATION" != "DEPLOY-TO-PRODUCTION" ]; then
+            printf '::error::Confirmacao de producao invalida. Esperado: DEPLOY-TO-PRODUCTION\n'
+            exit 1
+          fi
 
-    - name: Setup SSH Key
-      if: steps.check.outputs.ready == 'true'
-      run: |
-        mkdir -p ~/.ssh/
-        echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key.pem
-        chmod 600 ~/.ssh/deploy_key.pem
-        ssh-keyscan -H "$SERVER_IP" >> ~/.ssh/known_hosts
-      env:
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        SERVER_IP: ${{ secrets.SERVER_IP }}
+          if [ -z "$NEXUS_REF" ]; then
+            printf '::error::Referencia tecnica Nexus obrigatoria ausente.\n'
+            exit 1
+          fi
 
-    - name: Copy files to AWS
-      if: steps.check.outputs.ready == 'true'
-      run: |
-        rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'infra' --exclude '.env' --exclude '.agents' --exclude '.pytest_cache' --exclude '__pycache__' --exclude 'node_modules' --exclude 'data/*.db*' --exclude 'logs' -e "ssh -i ~/.ssh/deploy_key.pem" ./ ubuntu@$SERVER_IP:/app/Meridian/
-      env:
-        SERVER_IP: ${{ secrets.SERVER_IP }}
+          if [ -z "$ASTRA_REF" ]; then
+            printf '::error::Referencia da autorizacao executiva Astra obrigatoria ausente.\n'
+            exit 1
+          fi
 
-    - name: Inject Secrets & Restart Docker
-      if: steps.check.outputs.ready == 'true'
-      run: |
-        ssh -i ~/.ssh/deploy_key.pem ubuntu@$SERVER_IP << 'EOF'
-          cd /app/Meridian
-          echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" > .env
-          echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
-          echo "EMERGENCY_PASSWORD=${{ secrets.EMERGENCY_PASSWORD }}" >> .env
-          echo "API_KEY=${{ secrets.API_KEY }}" >> .env
-          echo "ALLOWED_ORIGINS=${{ secrets.ALLOWED_ORIGINS }}" >> .env
-          sudo docker-compose down
-          sudo docker-compose build
-          sudo docker-compose up -d
-        EOF
-      env:
-        SERVER_IP: ${{ secrets.SERVER_IP }}
+          printf 'Referencias de governanca tecnica e executiva validadas com sucesso.\n'
+
+      - name: Verify candidate commit and Main CI prerequisite
+        id: verify_ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          printf '=== MERIDIAN MAIN CI PREREQUISITE GATE ===\n'
+          printf 'Target Repository: %s\n' "$REPOSITORY"
+          printf 'Target Ref: %s\n' "$DEPLOY_REF"
+          printf 'Target SHA: %s\n' "$DEPLOY_SHA"
+
+          # 1. Enforce that deployment source is strictly the main branch
+          if [ "$DEPLOY_REF" != "refs/heads/main" ] && [ "$DEPLOY_REF" != "main" ]; then
+            printf '::error::Deploy permitido exclusivamente a partir da branch main. Ref atual: %s\n' "$DEPLOY_REF"
+            exit 1
+          fi
+
+          # 2. Query GitHub Actions API for CI runs for this candidate SHA
+          RUNS_JSON=$(gh api "repos/${REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${DEPLOY_SHA}" 2>/dev/null || echo '{"workflow_runs":[]}')
+
+          # 3. Deterministically inspect successful conclusion for the SAME SHA on MAIN branch via PUSH event (fail-closed)
+          CI_CHECK=$(python3 -c 'import sys, textwrap; exec(textwrap.dedent("""
+            import json, sys
+            raw = sys.argv[1]
+            target_sha = sys.argv[2].strip()
+            try:
+                data = json.loads(raw)
+                runs = data.get("workflow_runs", [])
+                if not runs:
+                    print("NO_RUNS")
+                    sys.exit(0)
+                matching_success = [
+                    r for r in runs
+                    if r.get("head_sha") == target_sha
+                    and r.get("head_branch") == "main"
+                    and r.get("event") == "push"
+                    and r.get("status") == "completed"
+                    and r.get("conclusion") == "success"
+                ]
+                if matching_success:
+                    print("SUCCESS:" + str(matching_success[0].get("id", "")))
+                else:
+                    non_main = [r for r in runs if r.get("head_sha") == target_sha and r.get("head_branch") != "main"]
+                    non_push = [r for r in runs if r.get("head_sha") == target_sha and r.get("event") != "push"]
+                    non_success = [r for r in runs if r.get("head_sha") == target_sha and r.get("conclusion") != "success"]
+                    if non_main:
+                        print("REJECTED_BRANCH_NOT_MAIN")
+                    elif non_push:
+                        print("REJECTED_EVENT_NOT_PUSH")
+                    elif non_success:
+                        print("REJECTED_CONCLUSION_NOT_SUCCESS")
+                    else:
+                        print("NO_SUCCESS")
+            except Exception as e:
+                print("ERROR:" + str(e))
+          """))' "$RUNS_JSON" "$DEPLOY_SHA")
+
+          case "$CI_CHECK" in
+            SUCCESS:*)
+              RUN_ID="${CI_CHECK#SUCCESS:}"
+              printf 'Main CI prerequisite verified for SHA %s (CI Run ID: %s, Branch: main, Event: push, Conclusion: success).\n' "$DEPLOY_SHA" "$RUN_ID"
+              ;;
+            NO_RUNS)
+              printf '::error::Nenhuma execucao do CI encontrada para o SHA exato %s. Ausencia de evidencia = FAIL-CLOSED.\n' "$DEPLOY_SHA"
+              exit 1
+              ;;
+            REJECTED_BRANCH_NOT_MAIN)
+              printf '::error::Execucoes de CI encontradas para o SHA %s pertencem a branches secundarias, nao a main. Requisito Main-CI nao atendido (FAIL-CLOSED).\n' "$DEPLOY_SHA"
+              exit 1
+              ;;
+            REJECTED_EVENT_NOT_PUSH)
+              printf '::error::Execucoes de CI para o SHA %s nao foram disparadas pelo evento push em main (ex: pull_request). Requisito Main-CI nao atendido (FAIL-CLOSED).\n' "$DEPLOY_SHA"
+              exit 1
+              ;;
+            REJECTED_CONCLUSION_NOT_SUCCESS|NO_SUCCESS)
+              printf '::error::Execucao do CI para o SHA exato %s nao concluida com sucesso. Requisito Same-SHA Main-CI nao atendido (FAIL-CLOSED).\n' "$DEPLOY_SHA"
+              exit 1
+              ;;
+            *)
+              printf '::error::Falha ao verificar status de CI para o SHA %s: %s (FAIL-CLOSED)\n' "$DEPLOY_SHA" "$CI_CHECK"
+              exit 1
+              ;;
+          esac
+
+      - name: Validate all required deployment secrets (exhaustive fail-closed)
+        id: validate_secrets
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMERGENCY_PASSWORD: ${{ secrets.EMERGENCY_PASSWORD }}
+          API_KEY: ${{ secrets.API_KEY }}
+          ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
+        run: |
+          printf '=== MERIDIAN SECRETS PRE-FLIGHT CHECK ===\n'
+          MISSING=0
+
+          # All 8 secrets are REQUIRED for production deployment
+          check_required() {
+            local name="$1"
+            local val="$2"
+            if [ -z "$val" ]; then
+              printf '::error::Required secret "%s" is missing or empty (FAIL-CLOSED).\n' "$name"
+              MISSING=$((MISSING + 1))
+            else
+              printf 'Required secret "%s" is present.\n' "$name"
+            fi
+          }
+
+          check_required "SERVER_IP" "$SERVER_IP"
+          check_required "SSH_PRIVATE_KEY" "$SSH_PRIVATE_KEY"
+          check_required "SSH_KNOWN_HOSTS" "$SSH_KNOWN_HOSTS"
+          check_required "TELEGRAM_BOT_TOKEN" "$TELEGRAM_BOT_TOKEN"
+          check_required "TELEGRAM_CHAT_ID" "$TELEGRAM_CHAT_ID"
+          check_required "EMERGENCY_PASSWORD" "$EMERGENCY_PASSWORD"
+          check_required "API_KEY" "$API_KEY"
+          check_required "ALLOWED_ORIGINS" "$ALLOWED_ORIGINS"
+
+          if [ "$MISSING" -gt 0 ]; then
+            printf '::error::%d required secret(s) missing. Aborting deploy before any SSH/network connection.\n' "$MISSING"
+            exit 1
+          fi
+
+          printf 'All 8 required secrets validated successfully. Zero secrets echoed.\n'
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH Key & Pinned Host Authenticity (Zero TOFU)
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
+          # Pinned known_hosts strictly from secret — zero dynamic scanning
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          printf 'SSH key and pinned known_hosts configured. Zero TOFU.\n'
+
+      - name: Copy files to AWS
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          rsync -avz --delete --exclude '.git' --exclude '.github' --exclude 'infra' --exclude '.env' --exclude '.agents' --exclude '.pytest_cache' --exclude '__pycache__' --exclude 'node_modules' --exclude 'data/*.db*' --exclude 'logs' -e "ssh -i ~/.ssh/deploy_key.pem" ./ ubuntu@"$SERVER_IP":/app/Meridian/
+
+      - name: Transmit Secrets via Stdin Pipe (Zero secrets in SSH argv)
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          EMERGENCY_PASSWORD: ${{ secrets.EMERGENCY_PASSWORD }}
+          API_KEY: ${{ secrets.API_KEY }}
+          ALLOWED_ORIGINS: ${{ secrets.ALLOWED_ORIGINS }}
+        run: |
+          set -euo pipefail
+          # Transmit .env strictly through SSH stdin pipe; zero secrets in command-line arguments (argv)
+          {
+            printf 'TELEGRAM_BOT_TOKEN=%s\n' "$TELEGRAM_BOT_TOKEN"
+            printf 'TELEGRAM_CHAT_ID=%s\n' "$TELEGRAM_CHAT_ID"
+            printf 'EMERGENCY_PASSWORD=%s\n' "$EMERGENCY_PASSWORD"
+            printf 'API_KEY=%s\n' "$API_KEY"
+            printf 'ALLOWED_ORIGINS=%s\n' "$ALLOWED_ORIGINS"
+          } | ssh -i ~/.ssh/deploy_key.pem ubuntu@"$SERVER_IP" 'umask 077; cat > /app/Meridian/.env && chmod 600 /app/Meridian/.env'
+          printf 'Secrets securely transmitted to remote .env via stdin pipe with chmod 600.\n'
+
+      - name: Restart Docker Services Remotely
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          set -euo pipefail
+          # Restart executed in separate call without secrets in argv
+          ssh -i ~/.ssh/deploy_key.pem ubuntu@"$SERVER_IP" 'set -euo pipefail; cd /app/Meridian && sudo docker-compose down && sudo docker-compose build && sudo docker-compose up -d'
+          printf 'Remote services restarted successfully.\n'

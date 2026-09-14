@@ -19,9 +19,15 @@ node_modules/
 *.sqlite
 *.sqlite3
 
-# --- Logs ---
+# --- Logs e Artefatos Temporarios ---
 logs/
-.agents/
+.agents/*
+!.agents/rules/
+!.agents/skills/
+!.agents/hooks.json
+!.agents/scripts/
+!.agents/AGENTS.md
+frontend/.agents/
 .todo.json
 todo.md
 terminal_logs/
