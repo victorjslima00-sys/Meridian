@@ -1,22 +1,4 @@
-"""
-honest-dashboard Bloco 2: /api/positions devolve PnL em R$, capital
-alocado e preço atual JA CALCULADOS pelo backend. Antes, o frontend
-recalculava tudo isso sozinho a partir de entry_price/shares/pnl_pct —
-contra a regra do CLAUDE.md ("no frontend, tudo que parece dado É dado
-vindo da API, ou não existe"). O banco/schema real é usado (não mock),
-mesmo padrão de tests/test_exit_loop.py.
-
-dashboard-depth (2026-07-20): "Patrimônio Total" estava igual a
-"Caixa Disponível" e não reagia a ganho/perda das posições abertas —
-bug real de cálculo, não só de exibição, achado pelo usuário. Causa
-raiz: get_portfolio() sobrescrevia a coluna real `patrimonio_total`
-(o "cofre" fora do alcance do bot, movimentado por
-depositar_no_disponivel/retirar_do_disponivel) com o valor de
-`saldo_disponivel`. O "Patrimônio Total" exibido precisa ser
-patrimonio_total (cofre) + compute_current_equity() (caixa livre +
-mark-to-market das posições ativas) — só assim ele sobe quando um
-trade ganha e desce quando perde.
-"""
+"""Publication requires evidence; synthetic arithmetic tests remain internal only."""
 import datetime
 import os
 import sqlite3
@@ -26,6 +8,12 @@ from unittest.mock import patch
 import pytest
 
 from backend.app.data import database as database_module
+
+
+@pytest.fixture(autouse=True)
+def no_external_prices():
+    with patch("backend.app.data.feed.get_current_price", return_value=None):
+        yield
 
 
 @pytest.fixture
@@ -103,9 +91,9 @@ class TestPosicaoAtivaTrazCalculosProntos:
         resp = _get_positions(temp_db_path)
 
         pos = resp["active_positions"][0]
-        assert pos["alocado"] == pytest.approx(300.0)
-        assert pos["current_price"] == pytest.approx(33.0)
-        assert pos["pnl_monetario"] == pytest.approx(30.0)
+        assert pos["alocado"] is None
+        assert pos["current_price"] is None
+        assert pos["pnl_monetario"] is None
 
     def test_current_price_deriva_na_direcao_certa_para_sell(self, temp_db_path):
         _insert_trade(
@@ -117,8 +105,8 @@ class TestPosicaoAtivaTrazCalculosProntos:
 
         pos = resp["active_positions"][0]
         # SELL com PnL positivo = preço caiu em relação à entrada.
-        assert pos["current_price"] == pytest.approx(57.0)
-        assert pos["pnl_monetario"] == pytest.approx(15.0)
+        assert pos["current_price"] is None
+        assert pos["pnl_monetario"] is None
 
 
 class TestPosicaoFechadaTrazExitReasonECalculos:
@@ -136,9 +124,9 @@ class TestPosicaoFechadaTrazExitReasonECalculos:
 
         pos = resp["closed_positions"][0]
         assert pos["exit_reason"] == "Take Profit hit at 27.5"
-        assert pos["alocado"] == pytest.approx(500.0)
-        assert pos["pnl_monetario"] == pytest.approx(50.0)
-        assert pos["current_price"] == pytest.approx(27.5)
+        assert pos["alocado"] is None
+        assert pos["pnl_monetario"] is None
+        assert pos["current_price"] is None
 
 
 class TestGetPortfolioPreservaPatrimonioReal:
@@ -188,8 +176,9 @@ class TestCapitalNaRotaDePosicoesReflexteGanhoEPerda:
         # mtm = 10 ações * 33.0 = 330
         # equity_sob_gestao = 60 + 330 = 390
         # patrimonio_total exibido = cofre(30) + equity_sob_gestao(390) = 420
-        assert resp["capital"]["patrimonio_total"] == pytest.approx(420.0)
-        assert resp["capital"]["patrimonio_reservado"] == pytest.approx(30.0)
+        assert resp["capital"]["patrimonio_total"] is None
+        assert resp["capital"]["reason"] in ("immutable_valuation_evidence_required", "feed_price_unavailable")
+        assert resp["capital"]["patrimonio_reservado"] is None
 
     def test_patrimonio_total_sobe_com_ganho_e_desce_com_perda(self, temp_db_path):
         _set_portfolio(
@@ -209,8 +198,9 @@ class TestCapitalNaRotaDePosicoesReflexteGanhoEPerda:
 
         # Preço subiu (66 > entrada 60) -> patrimônio maior que no preço de entrada.
         # Preço caiu (54 < entrada 60) -> patrimônio menor que no preço de entrada.
-        assert resp_ganho["capital"]["patrimonio_total"] > resp_neutro["capital"]["patrimonio_total"]
-        assert resp_perda["capital"]["patrimonio_total"] < resp_neutro["capital"]["patrimonio_total"]
+        assert resp_ganho["capital"]["patrimonio_total"] is None
+        assert resp_neutro["capital"]["patrimonio_total"] is None
+        assert resp_perda["capital"]["patrimonio_total"] is None
 
 
 class TestGetPortfolioRouteConsistenteComPositions:
@@ -249,4 +239,26 @@ class TestGetPortfolioRouteConsistenteComPositions:
         )
         # Mesma conta de test_patrimonio_total_soma_cofre_com_equity_ao_vivo_do_bot:
         # cofre(30) + [caixa_livre(60) + mtm(330)] = 420.
-        assert resp_portfolio["patrimonio_total"] == pytest.approx(420.0)
+        assert resp_portfolio["patrimonio_total"] is None
+
+
+@pytest.mark.parametrize("price,expected_equity", [(33.0,390.0),(30.0,360.0),(27.0,330.0)])
+def test_internal_equity_math_preserved_without_publication(temp_db_path, price, expected_equity):
+    """Synthetic unit scenario: preserve valuation arithmetic behind publication gate."""
+    _set_portfolio(temp_db_path, patrimonio_total=30.0, saldo_disponivel=100.0, em_posicoes=40.0)
+    _insert_trade(temp_db_path, shares=10.0, entry_price=30.0, status="active")
+    with patch.object(database_module, "DB_PATH", temp_db_path), patch(
+        "backend.app.data.feed.get_current_price", return_value=price
+    ):
+        assert database_module.compute_current_equity() == pytest.approx(expected_equity)
+
+
+@pytest.mark.parametrize("trade,expected", [
+    ({"side":"BUY","shares":10.0,"entry_price":30.0,"pnl_pct":10.0,"status":"active"}, (300.0,33.0,30.0)),
+    ({"side":"SELL","shares":5.0,"entry_price":60.0,"pnl_pct":5.0,"status":"active"}, (300.0,57.0,15.0)),
+    ({"side":"BUY","shares":20.0,"entry_price":25.0,"exit_price":27.5,"pnl_pct":10.0,"status":"closed"}, (500.0,27.5,50.0)),
+])
+def test_internal_legacy_calculation_is_not_publication_approval(trade, expected):
+    from backend.app.main import _enrich_trade_com_calculos
+    result = _enrich_trade_com_calculos(trade)
+    assert (result["alocado"], result["current_price"], result["pnl_monetario"]) == pytest.approx(expected)

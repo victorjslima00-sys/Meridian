@@ -156,6 +156,20 @@ trading_bot.broker.cedro.Cedro = MockCedroClient
 # Pytest Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def bypass_data_approval_for_synthetic_e2e(monkeypatch):
+    """Bypass require_data_approval for all e2e tests using synthetic data.
+
+    E2E tests generate in-memory synthetic DataFrames via _generate_synthetic_data()
+    which have no corresponding entries in config/data_approvals.json. The approval
+    gate is exercised independently in tests/test_data_approval.py against real
+    registry behaviour. Silencing it here prevents false negatives from the
+    administrative review gate while preserving all other signal-engine validations
+    (validate_signal_input, RSI, SMA, etc.).
+    """
+    from trading_bot.signals import engine
+    monkeypatch.setattr(engine, 'require_data_approval', lambda df, ticker: None)
+
 @pytest.fixture
 def sandbox_config(tmp_path, monkeypatch):
     """Automatically overrides AppConfig.load to point to sandboxed config and temp db."""

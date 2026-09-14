@@ -90,16 +90,15 @@ class TestMarketAnalyst:
     teste do sinal do filtro macro."""
 
     @pytest.mark.asyncio
-    async def test_buy_no_rompimento_donchian(self):
+    async def test_hold_no_rompimento_sem_aprovacao_dos_dados(self):
         from backend.app.agents.market_analyst import MarketAnalyst
         with patch("backend.app.data.feed.fetch_recent_data",
                    return_value=_daily_breakout_df(breakout=1.02)), \
              patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
             result = await MarketAnalyst("PETR4.SA").analyze()
-        assert result["signal"] == "BUY"
+        assert result["signal"] == "HOLD"
         assert result["last_price"] > 0
-        # Invariante do breakout de compra: stop < preço < alvo.
-        assert result["stop_loss"] < result["last_price"] < result["target_price"]
+        # Rompimento técnico não autoriza dados sem evidências revisadas.
 
     @pytest.mark.asyncio
     async def test_hold_sem_rompimento(self):

@@ -26,7 +26,7 @@ def test_load_universe(tmp_path):
 def test_normalize():
     # Test _normalize with standard columns
     raw_data = pd.DataFrame([
-        {"Date": "2023-01-01", "Open": 100, "High": 105, "Low": 95, "Close": 100, "Volume": 1000}
+        {"Date": "2023-01-01", "Open": 100, "High": 105, "Low": 95, "Close": 100, "Adj Close": 98, "Volume": 1000}
     ])
     
     normalized = _normalize(raw_data, "TEST3")
@@ -34,7 +34,7 @@ def test_normalize():
     assert list(normalized.columns) == ["ticker", "ts", "o", "h", "l", "c", "v", "adj_close"]
     assert normalized["ticker"].iloc[0] == "TEST3"
     assert normalized["o"].iloc[0] == 100
-    assert normalized["adj_close"].iloc[0] == 100 # Default fallback
+    assert normalized["adj_close"].iloc[0] == 98  # Valor explícito da fonte de teste
     assert normalized["ts"].iloc[0] == date(2023, 1, 1)
 
 def test_normalize_missing_date():

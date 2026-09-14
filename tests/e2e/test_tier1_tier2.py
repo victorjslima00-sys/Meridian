@@ -156,14 +156,22 @@ def test_A4_delta_start(sandbox_config, mock_b3_clock):
     assert start_pop == date(2024, 6, 21)
 
 def test_A5_yf_index_flattening(sandbox_config):
-    multi_cols = pd.MultiIndex.from_tuples([("Close", "PETR4"), ("Open", "PETR4")])
-    mock_df = pd.DataFrame([[30.0, 29.0]], columns=multi_cols, index=pd.to_datetime([date(2024, 6, 20)]))
+    multi_cols = pd.MultiIndex.from_tuples([
+        ("Close", "PETR4"), ("Open", "PETR4"),
+        ("High", "PETR4"), ("Low", "PETR4"), ("Volume", "PETR4"),
+    ])
+    mock_df = pd.DataFrame(
+        [[30.0, 29.0, 31.0, 28.5, 1000]],
+        columns=multi_cols, index=pd.to_datetime([date(2024, 6, 20)]),
+    )
     mock_df.index.name = "Date"
     
     with patch("yfinance.download", return_value=mock_df):
-        res = fetch_yfinance("PETR4", start=date(2024, 6, 20), end=date(2024, 6, 20))
+        res = fetch_yfinance("PETR4", start=date(2024, 6, 20), end=date(2024, 6, 20), sanitize=False)
         assert "c" in res.columns
         assert "o" in res.columns
+        assert "h" in res.columns
+        assert "l" in res.columns
 
 def test_A6_delisted_empty_response(sandbox_config):
     with patch("yfinance.download", return_value=pd.DataFrame()):
@@ -181,12 +189,17 @@ def test_A7_malformed_input_schema():
 def test_A8_missing_adj_close():
     df = pd.DataFrame({
         "Close": [30.0],
-        "Open": [29.0]
+        "Open": [29.0],
+        "High": [31.0],
+        "Low": [28.5],
+        "Volume": [1000],
     }, index=pd.to_datetime([date(2024, 6, 20)]))
     df.index.name = "Date"
-    normalized = _normalize(df, "PETR4")
-    assert "adj_close" in normalized.columns
-    assert normalized["adj_close"].iloc[0] == 30.0
+
+    with patch("yfinance.download", return_value=df):
+        res = fetch_yfinance("PETR4", start=date(2024, 6, 20), end=date(2024, 6, 20), sanitize=False)
+        assert "adj_close" in res.columns
+        assert res["adj_close"].iloc[0] == 30.0
 
 def test_A9_negative_years(sandbox_config):
     with patch("yfinance.download", return_value=pd.DataFrame()):

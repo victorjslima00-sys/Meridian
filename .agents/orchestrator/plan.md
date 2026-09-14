@@ -1,34 +1,33 @@
-# Meridian Swing Trading System Implementation Plan
+# Meridian P0 Data & Backend Roadmap Plan
 
 ## Overview
-This plan orchestrates the implementation, testing, and consolidation of the Meridian Swing Trading System on B3 with execution via the Cedro broker.
+Orchestration plan to execute the P0 Data & Backend Roadmap from the Meridian Executive Audit:
+- R1: Backend API Metric Provenance Integration & Candle Integrity
+- R2: Deterministic Multi-Source Data Reconciliation Pipeline
+- R3: Walk-Forward Quantitative Model Evaluation Rigor
 
-## Milestones
+## Phase 0: Survey & Specification Mapping
+- Deploy 3 parallel Explorers / Spec Miners:
+  - Explorer 1: Focus on R1 (Backend API Metric Provenance Integration, `MetricProvenanceAgent`, `config/metric_approvals.json`, risk/equity endpoints, HTTP 502/503 for candle history, removal of synthetic balances).
+  - Explorer 2: Focus on R2 (Deterministic Multi-Source Data Reconciliation, `DataReconciliationAgent`, B3 COTAHIST vs bar feeds, cent residuals, SHA-256 corporate actions, `MISSING_DATA`, unit/ticker validation).
+  - Explorer 3: Focus on R3 (Walk-Forward Quantitative Model Evaluation, `ModelEvaluationAgent`, temporal ordering, leakage detection, cost/slippage, benchmark comparison, `is_approved_for_signals=False`, test suites).
+- Consolidate findings into `PROJECT.md` Feature Inventory and Architecture.
 
-### Milestone 1: Exploration & Project Setup (PROJECT.md and initial analysis)
-- **Objective**: Explore the codebase, determine structure, runs tests (via Explorer), and create the global project scope document (`PROJECT.md`).
-- **Input**: Workspace codebase, user requirements.
-- **Output**: Initial analysis report from Explorer, `PROJECT.md` created.
+## Phase 1: Decomposition into Milestones & Interface Contracts
+- Define precise interface contracts between components in `PROJECT.md`.
+- Milestone R1: Backend API Metric Provenance Integration
+- Milestone R2: Deterministic Multi-Source Data Reconciliation
+- Milestone R3: Walk-Forward Quantitative Model Evaluation
+- Parallel E2E Testing Track: Design & verify test infrastructure and test suites.
 
-### Milestone 2: Task A (R1) - Critical Corrections & CI Setup
-- **Objective**: Fix backtest engine bugs (specifically the `ROUND_TRIP` bug), configure `.github/workflows/ci.yml` with Python 3.11/3.12, `flake8` and `pytest` with coverage.
-- **Verification**: Run pytest and flake8 locally via subagents.
+## Phase 2: Implementation Track & Dual Track
+- Dispatch sub-orchestrators for milestones.
+- Ensure strict adherence to non-cheating, deterministic requirements, fail-closed configs, and no synthetic fallbacks.
 
-### Milestone 3: Task B (R2) - Test Coverage Expansion (to >= 70%)
-- **Objective**: Raise test coverage to at least 70% in main modules (`tests/test_engine.py`, `data/validator.py`, `data/cross_validation.py`, `data/ingestion.py`, `backtest/metrics.py`, `core/config.py`, `core/clock.py`). No empty test stubs.
-- **Verification**: `pytest tests/ --cov=trading_bot --cov-report=term-missing` showing >= 70% coverage.
+## Phase 3: Final Acceptance & Adversarial Hardening
+- Run `pytest --basetemp=reports/pytest-test-temp -p no:cacheprovider` to verify all unit and integration tests pass with exit code 0.
+- Dispatch Challenger for adversarial testing.
+- Dispatch Forensic Auditor for integrity check (binary veto).
 
-### Milestone 4: Task D (R4) - Risk Management & Live Readiness
-- **Objective**: Isolate Kelly position sizing in `risk/` or `execution/` for live use. Verify return matrix generator for correlation checks. Implement logger, Telegram, and scheduler in `core/` if missing. Ensure security invariants (Telegram confirmation, timeout, circuit breaker, paper trading mode).
-- **Verification**: Tests checking live execution rules, Telegram confirmation mock flow, circuit breaker activation.
-
-### Milestone 5: Task E (R5) - Code Cleanup & Warning Resolution
-- **Objective**: Resolve minor warnings (SQLite3 deprecation, unused imports, global keyword in IBOV cache).
-- **Verification**: Run flake8 and check warnings.
-
-### Milestone 6: Task C (R3) - Documentation Sync
-- **Objective**: Sync README with real project state, remove outdated elements, document test coverage per module.
-
-### Milestone 7: Final Verification & Adversarial Hardening
-- **Objective**: End-to-end backtest runs (`fase1_backtest.py`), and run Challenger agent to perform adversarial hardening. Run Forensic Auditor to verify integrity.
-- **Verification**: Clean audit report and all tests passing.
+## Phase 4: Final Victory Report
+- Deliver comprehensive completion report and claim victory to Sentinel.

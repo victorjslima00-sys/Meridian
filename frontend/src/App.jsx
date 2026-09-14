@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import api from './api';
+import { formatCurrency, isValidNumber } from './utils/formatters';
 import ActiveTradeDetails from './ActiveTradeDetails';
 import PositionNarrative, { ClosedPositionsNarrative } from './PositionNarrative';
 import CapitalVault from './CapitalVault';
 import DecisionLog from './DecisionLog';
+import FailClosedBanner from './components/FailClosedBanner';
 import {
   Activity, ShieldAlert, Cpu,
-  BarChart2, Briefcase, X,
+  BarChart2, Briefcase,
   WifiOff, TrendingUp, TrendingDown,
   Settings,
   DollarSign, BookOpen,
@@ -327,15 +329,16 @@ export default function App() {
   }
 
   const cap = positions.capital || {};
-  const patTotal = cap.patrimonio_total || 0;
-  const patReservado = cap.patrimonio_reservado || 0;
-  const saldoLivre = cap.saldo_livre || 0;
-  const saldoDisponivel = cap.saldo_disponivel || 0;
-  const emPosicoes = cap.em_posicoes || 0;
+  const patTotal = connected ? cap.patrimonio_total : null;
+  const patReservado = connected ? cap.patrimonio_reservado : null;
+  const saldoLivre = connected ? cap.saldo_livre : null;
+  const saldoDisponivel = connected ? cap.saldo_disponivel : null;
+  const emPosicoes = connected ? cap.em_posicoes : null;
   // Soma direta do pnl_monetario que a API entrega por posição (2c:
   // substitui o array livePnlHistory acumulado client-side, que existia
   // só para alimentar o gráfico "Evolução MTM" removido).
-  const pnlFlutuante = (positions.active_positions || []).reduce((s, p) => s + (p.pnl_monetario || 0), 0);
+  const pnlFlutuante = connected && Array.isArray(positions.active_positions) && positions.active_positions.every(p => isValidNumber(p.pnl_monetario))
+    ? positions.active_positions.reduce((s, p) => s + p.pnl_monetario, 0) : null;
 
   return (
     <div className="shell">
@@ -402,6 +405,7 @@ export default function App() {
 
         {/* ── PAGE CONTENT ── */}
         <div className="page-content">
+          <FailClosedBanner connected={connected} apiError={apiError} />
 
           {/* DETALHE DE TRADE (ativo ou fechado) OU CONTEÚDO DA ABA —
               selectedTrade é setado por qualquer linha clicável (posição
@@ -421,20 +425,20 @@ export default function App() {
               </div>
               {/* HEADER DE KPIS UNIFICADO */}
               <div className="kpi-row" style={{ marginBottom: '0.75rem' }}>
-                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={`R$ ${patTotal.toFixed(2)}`} sub="Reservado + gerido pelo bot (ao vivo)" />
-                <KpiCard title="Reservado" icon={Lock} color="#8b9bb4" value={`R$ ${patReservado.toFixed(2)}`} sub="Fora do alcance do bot" />
-                <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={`R$ ${saldoDisponivel.toFixed(2)}`} sub="Entregue ao bot, antes de posições" />
-                <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={`R$ ${emPosicoes.toFixed(2)}`} sub="Alocado no preço de entrada" />
+                <KpiCard title="Patrimônio Total" icon={DollarSign} color="#00f3ff" value={formatCurrency(patTotal)} sub="Reservado + gerido pelo bot (ao vivo)" />
+                <KpiCard title="Reservado" icon={Lock} color="#8b9bb4" value={formatCurrency(patReservado)} sub="Fora do alcance do bot" />
+                <KpiCard title="Caixa Disponível" icon={Wallet} color="#3b82f6" value={formatCurrency(saldoDisponivel)} sub="Entregue ao bot, antes de posições" />
+                <KpiCard title="Em Posições" icon={Lock} color="#f59e0b" value={formatCurrency(emPosicoes)} sub="Alocado no preço de entrada" />
                 {/* 2e: sub-rótulo corrigido — com margem operável definida,
                     o que o bot pode usar é saldo_operavel (Gestão de
                     Capital), não o livre bruto; "Margem livre p/ operar"
                     viraria mentira. */}
-                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={`R$ ${saldoLivre.toFixed(2)}`} sub="Não alocado em posições" />
+                <KpiCard title="Caixa Livre" icon={Briefcase} color="#10b981" value={formatCurrency(saldoLivre)} sub="Não alocado em posições" />
                 <KpiCard
                   title="PnL Flutuante (MTM)"
                   icon={Activity}
-                  color={pnlFlutuante >= 0 ? '#10b981' : '#f43f5e'}
-                  value={`R$ ${pnlFlutuante.toFixed(2)}`}
+                  color={!isValidNumber(pnlFlutuante) ? '#8b9bb4' : pnlFlutuante >= 0 ? '#10b981' : '#f43f5e'}
+                  value={formatCurrency(pnlFlutuante)}
                   sub={`Resultado não realizado de ${positions?.active_positions?.length || 0} posições`}
                 />
               </div>
@@ -478,7 +482,7 @@ export default function App() {
                       <h3>Gestão de Capital</h3>
                     </div>
                     <div style={{ padding: '0.75rem' }}>
-                      <CapitalVault capital={cap} onChanged={refreshCapital} />
+                      <CapitalVault capital={cap} onChanged={refreshCapital} connected={connected} />
                     </div>
                   </div>
 
@@ -573,9 +577,9 @@ export default function App() {
                   <div className="kpi-card" style={{ flex: 1, borderTop: '2px solid var(--primary)' }}>
                     <div className="kpi-title">Winning / Losing</div>
                     <div className="kpi-value" style={{ color: 'var(--green)' }}>
-                      {positions.closed_positions.filter(t => t.pnl_pct >= 0).length}
+                      {positions.closed_positions.filter(t => isValidNumber(t.pnl_pct) && t.pnl_pct >= 0).length}
                       {' '}<span style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>
-                        / {positions.closed_positions.filter(t => t.pnl_pct < 0).length}
+                        / {positions.closed_positions.filter(t => isValidNumber(t.pnl_pct) && t.pnl_pct < 0).length}
                       </span>
                     </div>
                   </div>
@@ -584,12 +588,11 @@ export default function App() {
                     {(() => {
                       {/* Soma simples de pnl_monetario, que já vem pronto por trade
                           da API — nenhum novo cálculo de risco/negócio aqui. */}
-                      const total = positions.closed_positions.reduce(
-                        (sum, t) => sum + (t.pnl_monetario || 0), 0
-                      );
+                      const total = connected && positions.closed_positions.every(t => isValidNumber(t.pnl_monetario))
+                        ? positions.closed_positions.reduce((sum, t) => sum + t.pnl_monetario, 0) : null;
                       return (
-                        <div className="kpi-value" style={{ color: total >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                          R$ {total.toFixed(2)}
+                        <div className="kpi-value" style={{ color: !isValidNumber(total) ? 'var(--text-muted)' : total >= 0 ? 'var(--green)' : 'var(--red)' }}>
+                          {formatCurrency(total)}
                         </div>
                       );
                     })()}

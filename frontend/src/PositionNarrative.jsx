@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatCurrency as formatMoeda, formatPercent, formatShares, isValidNumber } from './utils/formatters';
 import { TrendingUp, TrendingDown, ChevronRight, X } from 'lucide-react';
 import { FreshnessTag } from './Freshness';
 
@@ -8,7 +9,7 @@ import { FreshnessTag } from './Freshness';
 // número novo é calculado aqui — é formatação de exibição, igual ao
 // toLocaleString() já usado em ActiveTradeDetails.jsx.
 
-const formatMoeda = (v) => `R$ ${(v ?? 0).toFixed(2)}`;
+
 const formatData = (iso) => {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' });
@@ -38,8 +39,8 @@ const descreverMotivoSaida = (reason) => {
 const PositionNarrativeCard = ({ pos, onClick, onClose }) => {
   const isLong = pos.side === 'BUY';
   const isClosed = pos.status === 'closed';
-  const isGain = (pos.pnl_pct || 0) >= 0;
-  const cor = isGain ? '#10b981' : '#f43f5e';
+  const isGain = isValidNumber(pos.pnl_pct) ? pos.pnl_pct >= 0 : null;
+  const cor = isGain === null ? '#8b9bb4' : isGain ? '#10b981' : '#f43f5e';
   const tese = extrairTese(pos.ai_rationale);
 
   const acaoEntrada = isLong ? 'comprada' : 'vendida (a descoberto)';
@@ -88,11 +89,11 @@ const PositionNarrativeCard = ({ pos, onClick, onClose }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontWeight: 800, fontSize: '1.1rem', color: cor, display: 'flex', alignItems: 'center', gap: '0.3rem', justifyContent: 'flex-end' }}>
-              {isGain ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-              {isGain ? '+' : ''}{formatMoeda(pos.pnl_monetario)}
+              {isGain === null ? null : isGain ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+              {formatMoeda(pos.pnl_monetario, { showSign: true })}
             </div>
             <div style={{ fontSize: '0.72rem', color: cor }}>
-              ({isGain ? '+' : ''}{(pos.pnl_pct || 0).toFixed(2)}%)
+              ({formatPercent(pos.pnl_pct)})
             </div>
           </div>
           {!isClosed && onClose && (
@@ -112,19 +113,32 @@ const PositionNarrativeCard = ({ pos, onClick, onClose }) => {
         <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.6, color: '#cbd5e1' }}>
           Posição {acaoEntrada} em <strong>{pos.ticker}</strong>, aberta em {formatData(pos.entry_date)} a{' '}
           <strong>{formatMoeda(pos.entry_price)}</strong> e fechada em {formatData(pos.exit_date)} a{' '}
-          <strong>{formatMoeda(pos.exit_price)}</strong>, porque {descreverMotivoSaida(pos.exit_reason)}. Resultado:{' '}
-          {isGain ? 'ganho' : 'perda'} de{' '}
-          <strong style={{ color: cor }}>{formatMoeda(Math.abs(pos.pnl_monetario || 0))}</strong> sobre os{' '}
-          {formatMoeda((pos.shares || 0) * (pos.entry_price || 0))} alocados.
+          <strong>{formatMoeda(pos.exit_price)}</strong>, porque {descreverMotivoSaida(pos.exit_reason)}.{' '}
+          {isGain === null ? (
+            <span style={{ color: '#8b9bb4' }}>Resultado financeiro não publicado (evidência imutável pendente).</span>
+          ) : (
+            <>
+              Resultado: {isGain ? 'ganho' : 'perda'} de{' '}
+              <strong style={{ color: cor }}>{formatMoeda(Math.abs(pos.pnl_monetario))}</strong> sobre os{' '}
+              {formatMoeda(pos.alocado)} alocados.
+            </>
+          )}
         </p>
       ) : (
         <p style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.6, color: '#cbd5e1' }}>
           Posição {acaoEntrada} em <strong>{pos.ticker}</strong>, aberta em {formatData(pos.entry_date)} a{' '}
           <strong>{formatMoeda(pos.entry_price)}</strong>, com <strong>{formatMoeda(pos.alocado)}</strong> alocados
-          ({(pos.shares || 0).toFixed(5)} ações). A meta é o preço {alvoDesc} <strong>{formatMoeda(pos.target_price)}</strong>;
-          o stop protege caso o preço {stopDesc} <strong>{formatMoeda(pos.stop_loss)}</strong>. Cotação atual:{' '}
-          <strong>{formatMoeda(pos.current_price)}</strong> — {isGain ? 'ganho' : 'perda'} de{' '}
-          <strong style={{ color: cor }}>{formatMoeda(Math.abs(pos.pnl_monetario || 0))}</strong> até aqui.
+          {isValidNumber(pos.shares) ? ` (${formatShares(pos.shares)} ações)` : ''}. A meta é o preço {alvoDesc}{' '}
+          <strong>{formatMoeda(pos.target_price)}</strong>; o stop protege caso o preço {stopDesc}{' '}
+          <strong>{formatMoeda(pos.stop_loss)}</strong>.{' '}
+          {isGain === null || !isValidNumber(pos.current_price) ? (
+            <span style={{ color: '#8b9bb4' }}>Cotação e PnL ao vivo não publicados (feed/evidência pendente).</span>
+          ) : (
+            <>
+              Cotação atual: <strong>{formatMoeda(pos.current_price)}</strong> — {isGain ? 'ganho' : 'perda'} de{' '}
+              <strong style={{ color: cor }}>{formatMoeda(Math.abs(pos.pnl_monetario))}</strong> até aqui.
+            </>
+          )}
         </p>
       )}
 

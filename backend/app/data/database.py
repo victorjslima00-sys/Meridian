@@ -61,7 +61,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS portfolio (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
             patrimonio_total  REAL DEFAULT 0.0,
-            saldo_disponivel  REAL DEFAULT 100.0,
+            saldo_disponivel  REAL DEFAULT 0.0,
             em_posicoes       REAL DEFAULT 0.0,
             margem_operavel   REAL,
             updated_at        TIMESTAMP
@@ -78,7 +78,7 @@ def init_db():
                 "ALTER TABLE portfolio ADD COLUMN patrimonio_total REAL DEFAULT 0.0"
             )
             cursor.execute(
-                "ALTER TABLE portfolio ADD COLUMN saldo_disponivel REAL DEFAULT 100.0"
+                "ALTER TABLE portfolio ADD COLUMN saldo_disponivel REAL DEFAULT 0.0"
             )
             cursor.execute(
                 "ALTER TABLE portfolio ADD COLUMN em_posicoes REAL DEFAULT 0.0"
@@ -86,7 +86,7 @@ def init_db():
             cursor.execute(
                 """
                 UPDATE portfolio SET
-                    saldo_disponivel = COALESCE(current_capital, 100.0),
+                    saldo_disponivel = COALESCE(current_capital, 0.0),
                     em_posicoes      = COALESCE(invested_capital, 0.0),
                     patrimonio_total = 0.0
             """
@@ -178,11 +178,28 @@ def init_db():
         """
         )
 
+        # Valuation Snapshots — registros imutáveis com proveniência e hash
+        cursor.execute(
+            """
+        CREATE TABLE IF NOT EXISTS valuation_snapshots (
+            snapshot_id  TEXT PRIMARY KEY,
+            observed_at  TIMESTAMP,
+            collected_at TIMESTAMP,
+            computed_at  TIMESTAMP,
+            equity       REAL,
+            is_valid     INTEGER NOT NULL,
+            reason       TEXT,
+            payload_json TEXT NOT NULL,
+            sha256       TEXT NOT NULL
+        )
+        """
+        )
+
         # Inicializar portfolio se vazio
         cursor.execute("SELECT COUNT(*) FROM portfolio")
         if cursor.fetchone()[0] == 0:
             cursor.execute(
-                "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (0.0, 100.0, 0.0, ?)",
+                "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (0.0, 0.0, 0.0, ?)",
                 (datetime.datetime.now(),),
             )
 
@@ -204,11 +221,11 @@ def get_portfolio() -> Dict[str, Any]:
     if not row:
         return {
             "patrimonio_total": 0.0,
-            "saldo_disponivel": 100.0,
+            "saldo_disponivel": 0.0,
             "em_posicoes": 0.0,
-            "saldo_livre": 100.0,
+            "saldo_livre": 0.0,
             "margem_operavel": None,
-            "saldo_operavel": 100.0,
+            "saldo_operavel": 0.0,
         }
 
     d = dict(row)
@@ -390,69 +407,164 @@ def get_trade_by_id(trade_id: int) -> Dict[str, Any]:
     finally:
         conn.close()
     return dict(row) if row else None
-def get_risk_metrics() -> Dict[str, float]:
+def get_metric_provenance_agent(registry_path: Optional[Path] = None) -> Any:
+    from trading_bot.data.metric_provenance import MetricProvenanceAgent
+    import os
+    env_reg = os.environ.get("METRIC_APPROVALS_PATH")
+    reg = Path(registry_path) if registry_path is not None else (Path(env_reg) if env_reg else PROJECT_ROOT / "config" / "metric_approvals.json")
+    return MetricProvenanceAgent(PROJECT_ROOT, registry_path=reg)
+
+
+def _parse_evidence_datetime(dt_val: Any) -> Optional[datetime.datetime]:
+    if dt_val is None:
+        return None
+    if isinstance(dt_val, datetime.datetime):
+        if dt_val.tzinfo is None or dt_val.utcoffset() is None:
+            return dt_val.replace(tzinfo=datetime.timezone.utc)
+        return dt_val.astimezone(datetime.timezone.utc)
+    if isinstance(dt_val, str):
+        cleaned = dt_val.strip()
+        if not cleaned:
+            return None
+        try:
+            parsed = datetime.datetime.fromisoformat(cleaned)
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+            return parsed.astimezone(datetime.timezone.utc)
+        except Exception:
+            return None
+    return None
+
+
+def get_risk_metrics(verify_provenance: bool = False, agent: Optional[Any] = None) -> Dict[str, Any]:
+    """Descriptive closed-trade statistics; unavailable portfolio risk stays null.
+
+    Database provenance is not proof that upstream prices or fills were verified.
+    Generation time below is bound strictly to the real evidence timestamp.
+    """
+    import math
+
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT pnl_pct FROM trades WHERE status = 'closed'")
-        rows = cursor.fetchall()
-        
-        pnls = [r[0] for r in rows if r[0] is not None]
-        
-        if not pnls:
-            return {
-                "sharpe": 0.0, "sortino": 0.0, "calmar": 0.0,
-                "max_drawdown_pct": 0.0, "var_95_daily": 0.0,
-                "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0
-            }
-            
-        wins = [p for p in pnls if p > 0]
-        losses = [p for p in pnls if p <= 0]
-        
-        win_rate = len(wins) / len(pnls) if pnls else 0.0
-        avg_win = sum(wins) / len(wins) if wins else 0.0
-        avg_loss = sum(losses) / len(losses) if losses else 0.0
-        
-        import math
-        mean_pnl = sum(pnls) / len(pnls)
-        variance = sum((p - mean_pnl) ** 2 for p in pnls) / len(pnls) if len(pnls) > 1 else 0.0
-        std_dev = math.sqrt(variance)
-        
-        # Simple approximations for dashboard display based on trade returns
-        sharpe = (mean_pnl / std_dev) if std_dev > 0 else 0.0
-        
-        downside_variance = sum(p**2 for p in losses) / len(pnls) if len(pnls) > 0 else 0.0
-        downside_std = math.sqrt(downside_variance)
-        sortino = (mean_pnl / downside_std) if downside_std > 0 else 0.0
-        
-        # Max drawdown approx: largest single loss or accumulated loss
-        max_drawdown = min(losses) if losses else 0.0
-        var_95 = sorted(pnls)[int(len(pnls) * 0.05)] if len(pnls) >= 20 else max_drawdown
-        
-        return {
-            "sharpe": round(sharpe, 2),
-            "sortino": round(sortino, 2),
-            "calmar": round(sharpe * 0.8, 2), # Approximated
-            "max_drawdown_pct": round(max_drawdown, 2),
-            "var_95_daily": round(var_95, 2),
-            "win_rate": round(win_rate, 2),
-            "avg_win": round(avg_win, 2),
-            "avg_loss": round(avg_loss, 2),
-        }
+        columns = {col[1] for col in cursor.execute("PRAGMA table_info(trades)").fetchall()}
+        if "exit_date" in columns:
+            rows = cursor.execute("SELECT pnl_pct, exit_date FROM trades WHERE status = 'closed'").fetchall()
+        else:
+            rows = [(r[0], None) for r in cursor.execute("SELECT pnl_pct FROM trades WHERE status = 'closed'").fetchall()]
     finally:
         conn.close()
+
+    values = [row[0] for row in rows]
+    parsed_dates = [_parse_evidence_datetime(row[1]) for row in rows]
+    valid_dates = [d for d in parsed_dates if d is not None]
+
+    source_path = Path(DB_PATH).resolve()
+    if valid_dates:
+        evidence_time = max(valid_dates)
+    elif source_path.exists():
+        evidence_time = datetime.datetime.fromtimestamp(source_path.stat().st_mtime, tz=datetime.timezone.utc)
+    else:
+        evidence_time = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+    invalid_count = sum(
+        not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+        for value in values
+    )
+    risk_keys = ("sharpe", "sortino", "calmar", "max_drawdown_pct", "var_95_daily")
+    result = {key: None for key in (*risk_keys, "win_rate", "avg_win", "avg_loss")}
+    unavailable = {key: "validated_portfolio_return_series_required" for key in risk_keys}
+    if invalid_count or not values:
+        reason = "invalid_closed_trade_returns" if invalid_count else "no_closed_trades"
+        unavailable.update({key: reason for key in ("win_rate", "avg_win", "avg_loss")})
+    else:
+        wins = [value for value in values if value > 0]
+        losses = [value for value in values if value < 0]
+        result["win_rate"] = len(wins) / len(values)
+        # Divide before summing to avoid overflow for finite large observations.
+        result["avg_win"] = round(sum(value / len(wins) for value in wins), 2) if wins else None
+        result["avg_loss"] = round(sum(value / len(losses) for value in losses), 2) if losses else None
+        if not wins:
+            unavailable["avg_win"] = "no_winning_trades"
+        if not losses:
+            unavailable["avg_loss"] = "no_losing_trades"
+    result["_metadata"] = {
+        "source": "sqlite:trades/status=closed/pnl_pct",
+        "generated_at_utc": evidence_time.isoformat() if values else None,
+        "owner": "backend.app.data.database.get_risk_metrics",
+        "sample_count": len(values),
+        "invalid_count": invalid_count,
+        "status": "partial" if values and not invalid_count else "unavailable",
+        "verification_status": "database_records_not_independently_verified",
+        "observation_timestamp": evidence_time.isoformat() if values else None,
+        "units": {"win_rate": "fraction", "avg_win": "percent_per_closed_trade", "avg_loss": "percent_per_closed_trade"},
+        "definitions": {"win_rate": "positive_returns_divided_by_all_closed_trades", "avg_win": "mean_positive_pnl_pct", "avg_loss": "mean_negative_pnl_pct_excluding_zero"},
+        "unavailable_reasons": unavailable,
+    }
+
+    if verify_provenance:
+        import hashlib
+        prov_agent = agent or get_metric_provenance_agent()
+        if source_path.exists() and source_path.is_relative_to(PROJECT_ROOT.resolve()):
+            source_ref = str(source_path.relative_to(PROJECT_ROOT.resolve())).replace("\\", "/")
+            source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        else:
+            source_ref = "data/trading_bot.db"
+            source_sha256 = "0" * 64
+
+        units = {
+            "win_rate": "fraction",
+            "avg_win": "percent_per_closed_trade",
+            "avg_loss": "percent_per_closed_trade",
+            "sharpe": "ratio",
+            "sortino": "ratio",
+            "calmar": "ratio",
+            "max_drawdown_pct": "percent",
+            "var_95_daily": "currency_brl",
+        }
+        metrics_provenance = {}
+        all_verified = True if values and not invalid_count else False
+        for k in (*risk_keys, "win_rate", "avg_win", "avg_loss"):
+            val = result[k]
+            payload = {
+                "metric_name": k,
+                "value": float(val) if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val) else None,
+                "unit": units.get(k, "unit"),
+                "source_ref": source_ref,
+                "source_sha256": source_sha256,
+                "observed_at": evidence_time,
+                "collected_at": evidence_time,
+                "computed_at": evidence_time,
+                "owner": "backend.app.data.database.get_risk_metrics",
+                "method_version": "1.0",
+            }
+            eval_res = prov_agent.evaluate(payload)
+            result[k] = eval_res["value"]
+            metrics_provenance[k] = eval_res
+            if eval_res["verification_status"] != "verified":
+                all_verified = False
+
+        status_str = "verified" if all_verified and values else "unavailable"
+        result["metrics_provenance"] = metrics_provenance
+        result["verification_status"] = status_str
+        result["value"] = 1.0 if status_str == "verified" else None
+        result["_metadata"]["verification_status"] = status_str
+        if status_str == "unavailable":
+            result["_metadata"]["status"] = "unavailable"
+
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Equity Snapshots — base do Circuit Breaker (drawdowns reais)
 # ---------------------------------------------------------------------------
 
-def compute_current_equity() -> float:
+def compute_current_equity() -> Optional[float]:
     """
     Equity real = caixa livre (saldo_disponivel - em_posicoes)
                 + valor mark-to-market das posições ativas (shares × preço atual).
-    Se o feed falhar para um ticker (preço 0.0), usa entry_price como fallback —
-    nesse caso a parcela degrada para o capital alocado na entrada.
+    Se o feed falhar para um ticker (preço <= 0 ou None), não há fallback para
+    entry_price — retorna None para indicar indisponibilidade real.
     """
     from .feed import get_current_price
 
@@ -478,8 +590,9 @@ def compute_current_equity() -> float:
     mtm = 0.0
     for pos in posicoes:
         price = get_current_price(pos["ticker"])
-        if price <= 0:
-            price = pos["entry_price"] or 0.0
+        if price is None or price <= 0:
+            # Eliminado fallback para entry_price: nunca imputar ou fabricar valor default.
+            return None
         mtm += (pos["shares"] or 0.0) * price
 
     return round(caixa_livre + mtm, 4)

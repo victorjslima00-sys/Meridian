@@ -29,6 +29,20 @@ próximo teste do arquivo, ou de outro arquivo, que não esperava por isso.
 """
 import pytest
 
+
+@pytest.fixture
+def synthetic_backtest_approval(monkeypatch):
+    """Isolate cost/warmup unit tests from administrative review.
+
+    Explicit opt-in for synthetic TESTE3.SA fixtures only. Real approval
+    behavior is exercised separately in test_data_approval.py.
+    """
+    from trading_bot.signals import engine
+    def synthetic_only(df, ticker):
+        if ticker != 'TESTE3.SA':
+            raise ValueError('synthetic_fixture_only')
+    monkeypatch.setattr(engine, 'require_data_approval', synthetic_only)
+
 from backend.app.data import feed
 
 

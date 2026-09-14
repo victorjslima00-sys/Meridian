@@ -1,3 +1,5 @@
+import datetime
+from pathlib import Path
 from .data.feed import get_current_price
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +30,31 @@ async def lifespan(app: FastAPI):
     from trading_bot.risk.circuit_breaker import CircuitBreaker
     CircuitBreaker.from_config()
 
+    from trading_bot.core.coordinator import CentralCoordinator
+    coord = CentralCoordinator()
+    coord.register_worker(
+        name="ai_committee_worker",
+        coro_fn=ai_committee_worker,
+        interval_seconds=worker_state.SCAN_INTERVAL_SECONDS,
+        max_restarts=worker_state.MAX_RESTARTS,
+        backoff_cap_seconds=worker_state.BACKOFF_CAP_SECONDS,
+        is_critical=False,
+        supervision=worker_state.state,
+        alert_fn=_alerta_telegram,
+    )
+    coord.register_worker(
+        name="exit_loop",
+        coro_fn=exit_loop,
+        interval_seconds=worker_state.EXIT_INTERVAL_SECONDS,
+        max_restarts=worker_state.MAX_RESTARTS,
+        backoff_cap_seconds=worker_state.BACKOFF_CAP_SECONDS,
+        is_critical=True,
+        on_exhausted=worker_state.state.set_exit_gate_sticky_block,
+        supervision=worker_state.state.exit_supervision,
+        alert_fn=_alerta_telegram,
+    )
+    app.state.coordinator = coord
+
     worker_state.state.mark_starting()
     task = asyncio.create_task(worker_supervisor())
     task.add_done_callback(_log_if_supervisor_died)
@@ -47,6 +74,8 @@ async def lifespan(app: FastAPI):
             await task
         with suppress(asyncio.CancelledError):
             await exit_task
+        with suppress(Exception):
+            await coord.stop()
 
 
 app = FastAPI(title="Meridian AI Core", lifespan=lifespan)
@@ -540,10 +569,13 @@ async def _run_one_scan_cycle():
         hoje = get_market().today()
         if not has_snapshot_for(hoje):
             equity = await asyncio.to_thread(compute_current_equity)
-            save_equity_snapshot(hoje, equity)
-            await broadcast_log(
-                "System", f"Equity snapshot {hoje}: R$ {equity:.2f}", "info"
-            )
+            if equity is not None:
+                save_equity_snapshot(hoje, equity)
+                await broadcast_log(
+                    "System", f"Equity snapshot {hoje}: R$ {equity:.2f}", "info"
+                )
+            else:
+                logger.warning(f"Equity snapshot {hoje} suspenso: cotação indisponível no feed.")
     except Exception as e:
         logger.error(f"Falha no snapshot diário de equity: {e}")
         await broadcast_log(
@@ -557,6 +589,8 @@ async def _run_one_scan_cycle():
     # A gestão de saídas (exit_loop, independente deste laço) roda sempre,
     # mesmo com entradas bloqueadas por qualquer motivo.
     entradas_liberadas, motivos_bloqueio = await _avaliar_portao_de_entradas()
+    from .runtime_config import RuntimeConfig
+    runtime = RuntimeConfig.load()
     if not entradas_liberadas:
         await broadcast_log(
             "System",
@@ -603,8 +637,6 @@ async def _run_one_scan_cycle():
             continue
 
         # --- ENTRY LOOP (Find New Opportunities) ---
-        from .runtime_config import RuntimeConfig
-        runtime = RuntimeConfig.load()
         if not entradas_liberadas or not runtime.autonomous_entries_enabled:
             continue
         await broadcast_log("System", f"Scanning {ticker} for entry...", "info")
@@ -885,39 +917,72 @@ def _enrich_trade_com_calculos(trade: dict) -> dict:
     }
 
 
+def _unavailable_portfolio_publication(pf: dict, reason: str, snapshot_id: Optional[str] = None) -> dict:
+    """Publish no monetary field until immutable source evidence is available."""
+    monetary_keys = (
+        "patrimonio_total", "patrimonio_reservado", "saldo_disponivel",
+        "em_posicoes", "saldo_livre", "margem_operavel", "saldo_operavel",
+        "current_capital", "invested_capital", "initial_capital",
+    )
+    evidence = {
+        "value": None, "verification_status": "unavailable", "reason": reason,
+        "observed_at": None, "collected_at": None, "computed_at": None,
+        "snapshot_id": snapshot_id,
+    }
+    return {
+        **pf, **{key: None for key in monetary_keys}, **evidence,
+        "metrics_provenance": {key: dict(evidence) for key in monetary_keys},
+    }
+
+
 @app.get("/api/positions")
 def get_positions_route():
-    pf = get_portfolio()
+    from .data import database as db
+    get_active_trades = db.get_active_trades
+    get_closed_trades = db.get_closed_trades
+    from trading_bot.data.valuation_snapshot import get_latest_valuation_snapshot
 
-    from .data.database import get_active_trades, get_closed_trades, compute_current_equity
+    def unpublished_trade(trade):
+        # Identity/status remain visible; unverified financial values do not.
+        fields = ("shares", "entry_price", "exit_price", "target_price", "stop_loss",
+                  "current_price", "alocado", "pnl_monetario", "pnl_pct")
+        return {**trade, **{key: None for key in fields},
+                "verification_status": "unavailable",
+                "reason": "immutable_trade_evidence_required"}
 
-    active_positions = [_enrich_trade_com_calculos(t) for t in get_active_trades()]
-    closed_positions = [_enrich_trade_com_calculos(t) for t in get_closed_trades()]
+    capital = api_get_portfolio()
+    snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
 
-    # "Patrimônio Total" precisa refletir ganho/perda das posições abertas
-    # em tempo real (bug real encontrado pelo usuário: antes era só um
-    # alias de saldo_disponivel, nunca se movia com o mercado). É a soma
-    # do cofre (patrimonio_total, fora do alcance do bot) com a equity ao
-    # vivo do que foi entregue ao bot (compute_current_equity: caixa livre
-    # + mark-to-market das posições ativas) — mesma fórmula usada nos
-    # snapshots diários de equity, para as duas visões nunca divergirem.
-    patrimonio_reservado = pf.get("patrimonio_total", 0.0)
-    patrimonio_total = round(patrimonio_reservado + compute_current_equity(), 4)
+    if capital.get("verification_status") == "verified" and snapshot and snapshot.is_valid:
+        snap_items_by_ticker = {it.ticker: it for it in snapshot.active_positions}
+        active = []
+        for t in get_active_trades():
+            item = snap_items_by_ticker.get(t.get("ticker"))
+            if item and item.current_price is not None:
+                active.append({
+                    **t,
+                    "shares": item.shares,
+                    "entry_price": item.entry_price,
+                    "current_price": item.current_price,
+                    "alocado": item.alocado,
+                    "pnl_monetario": item.pnl_monetario,
+                    "pnl_pct": item.pnl_pct,
+                    "verification_status": "verified",
+                    "reason": None,
+                    "snapshot_id": snapshot.snapshot_id,
+                })
+            else:
+                active.append(unpublished_trade(t))
+    else:
+        active = [unpublished_trade(t) for t in get_active_trades()]
 
     return {
-        "capital": {
-            "patrimonio_total": patrimonio_total,
-            "patrimonio_reservado": patrimonio_reservado,
-            "saldo_disponivel": pf.get("saldo_disponivel", 100.0),
-            "em_posicoes": pf.get("em_posicoes", 0.0),
-            "saldo_livre": pf.get("saldo_livre", 100.0),
-            # usabilidade 2e: teto de exposição do bot (None = sem teto) e
-            # o operável derivado — calculados SÓ em get_portfolio().
-            "margem_operavel": pf.get("margem_operavel"),
-            "saldo_operavel": pf.get("saldo_operavel", pf.get("saldo_livre", 100.0)),
-        },
-        "active_positions": active_positions,
-        "closed_positions": closed_positions,
+        "capital": capital,
+        "active_positions": active,
+        "closed_positions": [unpublished_trade(t) for t in get_closed_trades()],
+        "value": capital.get("value"),
+        "verification_status": capital.get("verification_status"),
+        "reason": capital.get("reason"),
     }
 
 
@@ -1067,31 +1132,63 @@ def api_set_margem_operavel(req: ValorRequest, api_key: str = Depends(verify_api
 
 @app.get("/api/candles/{ticker}")
 def get_candles(ticker: str):
+    import math
+    import pandas as pd
     from .data.feed import fetch_recent_data
 
     df = fetch_recent_data(ticker, period="30d", interval="1d")
-    if df is None:
-        return {"ticker": ticker, "candles": []}
+    if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+        raise HTTPException(status_code=503, detail={"code": "candle_history_unavailable"})
 
-    # Format for lightweight-charts
+    # Check for duplicate column names or missing required columns
+    required_cols = ["date", "open", "high", "low", "close", "volume"]
+    cols = list(df.columns)
+    if len(cols) != len(set(cols)):
+        raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+    if any(c not in cols for c in required_cols):
+        raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+
     candles = []
-    import pandas as pd
+    prev_dt = None
 
-    for idx, row in df.iterrows():
-        # timestamp to YYYY-MM-DD
-        dt = pd.to_datetime(row["date"])
-        # Fix yfinance bug where current day has 0 for Open/High/Low
-        o = float(row["open"])
-        h = float(row["high"])
-        l = float(row["low"])
-        c = float(row["close"])
-        if o == 0 and h == 0 and l == 0 and c > 0:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug(f"Patching broken yfinance data for {ticker} on {dt.strftime('%Y-%m-%d')}: replacing zeroed O/H/L with Close ({c})")
-            o = c
-            h = c
-            l = c
+    for idx in range(len(df)):
+        row = df.iloc[idx]
+        raw_dt = row["date"]
+
+        # Validate date
+        if raw_dt is None or not isinstance(raw_dt, str) or len(raw_dt) != 10:
+            raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+        try:
+            dt = pd.to_datetime(raw_dt, format="%Y-%m-%d", errors="raise")
+        except Exception:
+            raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+
+        if prev_dt is not None and dt <= prev_dt:
+            # Not strictly ascending or duplicate day
+            raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+        prev_dt = dt
+
+        # Validate numeric OHLCV
+        try:
+            o_raw, h_raw, l_raw, c_raw, v_raw = row["open"], row["high"], row["low"], row["close"], row["volume"]
+            if any(isinstance(x, (bool, str, pd.Series)) or x is None for x in (o_raw, h_raw, l_raw, c_raw, v_raw)):
+                raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+
+            o, h, l, c, v = float(o_raw), float(h_raw), float(l_raw), float(c_raw), float(v_raw)
+            if any(math.isnan(x) or math.isinf(x) for x in (o, h, l, c, v)):
+                raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+
+            # Prices must be strictly positive, volume non-negative
+            if o <= 0 or h <= 0 or l <= 0 or c <= 0 or v < 0:
+                raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+
+            # High and Low boundaries
+            if not (l <= o <= h and l <= c <= h and l <= h):
+                raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=502, detail={"code": "invalid_candle_history"})
 
         candles.append(
             {
@@ -1100,9 +1197,10 @@ def get_candles(ticker: str):
                 "high": h,
                 "low": l,
                 "close": c,
-                "value": float(row.get("volume", 0)),
+                "value": v,
             }
         )
+
     return {"ticker": ticker, "candles": candles}
 
 
@@ -1146,13 +1244,19 @@ def system_emergency_stop(
             
             from .data.feed import get_current_price
             current_price = get_current_price(ticker)
-            if current_price <= 0:
-                current_price = entry_price # fallback to entry if feed is down
+            if current_price is None or current_price <= 0:
+                current_price = None
+                logger.warning(
+                    "Emergency stop: preço de mercado indisponível para %s; "
+                    "ordem não fechada com preço sintético.",
+                    ticker,
+                )
+                continue
                 
             executor.close_order(trade_id, current_price, "EMERGENCY STOP")
         return {
             "status": "success",
-            "msg": "EMERGENCY STOP ACIONADO. Todas as posições fechadas.",
+            "msg": "EMERGENCY STOP ACIONADO. Posições válidas fechadas.",
         }
     except Exception:
         return {"error": "Internal server error"}
@@ -1161,7 +1265,7 @@ def system_emergency_stop(
 @app.get("/api/elite/risk_metrics")
 def get_risk_metrics_route():
     from .data.database import get_risk_metrics
-    return get_risk_metrics()
+    return get_risk_metrics(verify_provenance=True)
 
 
 # WebSocket for real-time agent logs
@@ -1219,18 +1323,82 @@ def get_broker_status_route():
 
 @app.get("/api/portfolio")
 def api_get_portfolio():
-    from .data.database import get_portfolio, compute_current_equity
+    from .data import database as db
+    from trading_bot.data.valuation_snapshot import (
+        get_latest_valuation_snapshot,
+        create_valuation_snapshot,
+    )
 
-    pf = get_portfolio()
-    # Mesma fórmula de /api/positions (Track A, achado em revisão externa
-    # do PR #10): patrimonio_total aqui tinha significado diferente do
-    # capital.patrimonio_total de /api/positions — mesmo campo, dois
-    # valores. Sem consumidor no frontend hoje, mas era uma armadilha pra
-    # quem um dia conectasse essa rota.
-    patrimonio_reservado = pf.get("patrimonio_total", 0.0)
-    pf["patrimonio_reservado"] = patrimonio_reservado
-    pf["patrimonio_total"] = round(patrimonio_reservado + compute_current_equity(), 4)
-    return pf
+    pf = db.get_portfolio()
+    snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
+    if snapshot is None:
+        snapshot = create_valuation_snapshot(db_path=db.DB_PATH)
+
+    if not snapshot.is_valid or snapshot.equity is None:
+        reason = "feed_price_unavailable" if "feed_price_unavailable" in (snapshot.reason or "") else (snapshot.reason or "feed_price_unavailable")
+        return _unavailable_portfolio_publication(pf, reason, snapshot_id=snapshot.snapshot_id)
+
+    # Evaluate snapshot through deterministic provenance gate
+    prov_agent = db.get_metric_provenance_agent()
+    resolved_db = Path(db.DB_PATH)
+    snapshot_dir = resolved_db.parent / "snapshots"
+    snapshot_path = snapshot_dir / f"valuation_{snapshot.snapshot_id}.json"
+    if not snapshot_path.exists():
+        snapshot_path = db.PROJECT_ROOT / "data" / "snapshots" / f"valuation_{snapshot.snapshot_id}.json"
+
+    if not snapshot_path.exists():
+        return _unavailable_portfolio_publication(
+            pf, "immutable_valuation_evidence_required", snapshot_id=snapshot.snapshot_id
+        )
+
+    try:
+        source_ref = str(snapshot_path.resolve().relative_to(db.PROJECT_ROOT.resolve())).replace("\\", "/")
+    except ValueError:
+        source_ref = f"data/snapshots/valuation_{snapshot.snapshot_id}.json"
+
+    import hashlib
+    source_sha256 = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
+
+    payload = {
+        "metric_name": "patrimonio_total",
+        "value": snapshot.equity,
+        "unit": "currency_brl",
+        "source_ref": source_ref,
+        "source_sha256": source_sha256,
+        "observed_at": snapshot.observed_at,
+        "collected_at": snapshot.collected_at,
+        "computed_at": snapshot.computed_at,
+        "owner": "trading_bot.data.valuation_snapshot",
+        "method_version": "1.0",
+    }
+    eval_res = prov_agent.evaluate(payload)
+    if eval_res.get("verification_status") == "verified":
+        monetary_keys = (
+            "patrimonio_total", "patrimonio_reservado", "saldo_disponivel",
+            "em_posicoes", "saldo_livre", "margem_operavel", "saldo_operavel",
+            "current_capital", "invested_capital", "initial_capital",
+        )
+        return {
+            **pf,
+            "patrimonio_total": snapshot.equity,
+            "saldo_disponivel": snapshot.portfolio.saldo_disponivel,
+            "em_posicoes": snapshot.portfolio.em_posicoes,
+            "saldo_livre": snapshot.portfolio.saldo_livre,
+            "margem_operavel": snapshot.portfolio.margem_operavel,
+            "saldo_operavel": snapshot.portfolio.saldo_livre,
+            "value": snapshot.equity,
+            "verification_status": "verified",
+            "reason": None,
+            "snapshot_id": snapshot.snapshot_id,
+            "observed_at": snapshot.observed_at.isoformat(),
+            "collected_at": snapshot.collected_at.isoformat(),
+            "computed_at": snapshot.computed_at.isoformat(),
+            "metrics_provenance": {key: eval_res for key in monetary_keys},
+        }
+
+    return _unavailable_portfolio_publication(
+        pf, "immutable_valuation_evidence_required", snapshot_id=snapshot.snapshot_id
+    )
 
 @app.get("/api/trades/active")
 def api_get_active_trades():

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createChart, CandlestickSeries } from 'lightweight-charts';
 import api from './api';
 import { Crosshair, ShieldAlert, Cpu, ChevronLeft, AlertTriangle } from 'lucide-react';
+import { formatCurrency, formatPercent, formatShares, isValidNumber } from './utils/formatters';
 
 
 const ActiveTradeDetails = ({ trade, onBack }) => {
@@ -120,20 +121,28 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
   }, [candles, loading, trade]);
 
   const isClosed = trade.status === 'closed';
-  const pnlColor = trade.pnl_pct >= 0 ? '#10b981' : '#f43f5e';
+  const isGain = isValidNumber(trade.pnl_pct) ? trade.pnl_pct >= 0 : null;
+  const pnlColor = isGain === null ? '#8b9bb4' : isGain ? '#10b981' : '#f43f5e';
 
-  // Financial calculations
-  const expectedProfit = trade.side === 'BUY' 
-    ? (trade.target_price - trade.entry_price) * trade.shares
-    : (trade.entry_price - trade.target_price) * trade.shares;
+  // Financial calculations with strict null checks (Fail-Closed)
+  const hasTargets = isValidNumber(trade.target_price) && isValidNumber(trade.entry_price) && isValidNumber(trade.shares);
+  const expectedProfit = hasTargets
+    ? (trade.side === 'BUY' 
+        ? (trade.target_price - trade.entry_price) * trade.shares
+        : (trade.entry_price - trade.target_price) * trade.shares)
+    : null;
 
-  const maxLoss = trade.side === 'BUY'
-    ? (trade.entry_price - trade.stop_loss) * trade.shares
-    : (trade.stop_loss - trade.entry_price) * trade.shares;
+  const hasStops = isValidNumber(trade.stop_loss) && isValidNumber(trade.entry_price) && isValidNumber(trade.shares);
+  const maxLoss = hasStops
+    ? (trade.side === 'BUY'
+        ? (trade.entry_price - trade.stop_loss) * trade.shares
+        : (trade.stop_loss - trade.entry_price) * trade.shares)
+    : null;
 
-  // pnl_monetario vem pronto da API (honest-dashboard Bloco 2).
   const pnlValue = trade.pnl_monetario;
-  const pnlSign = pnlValue >= 0 ? '+' : '-';
+  const alocadoValue = isValidNumber(trade.alocado)
+    ? trade.alocado
+    : (isValidNumber(trade.shares) && isValidNumber(trade.entry_price) ? trade.shares * trade.entry_price : null);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', animation: 'fadeIn 0.3s' }}>
@@ -184,32 +193,32 @@ const ActiveTradeDetails = ({ trade, onBack }) => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
             <div className="glass-panel" style={{ padding: '1rem' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>Entrada & Investimento</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', marginTop: '0.5rem' }}>R$ {trade.entry_price?.toFixed(2)}</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#fff', marginTop: '0.5rem' }}>{formatCurrency(trade.entry_price)}</div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                Alocado: <strong>R$ {(trade.shares * trade.entry_price).toFixed(2)}</strong> ({trade.shares?.toFixed(5)} un.)
+                Alocado: <strong>{formatCurrency(alocadoValue)}</strong> ({formatShares(trade.shares)} ações)
               </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', borderTop: '2px solid #10b981' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}><Crosshair size={12} style={{ display: 'inline', marginRight: '4px' }}/> Take Profit (Alvo)</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#10b981', marginTop: '0.5rem' }}>R$ {trade.target_price?.toFixed(2)}</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#10b981', marginTop: '0.5rem' }}>{formatCurrency(trade.target_price)}</div>
               <div style={{ fontSize: '0.75rem', color: '#10b981', marginTop: '0.25rem', fontWeight: 600 }}>
-                Lucro Estimado: +R$ {Math.max(0, expectedProfit).toFixed(2)}
+                Lucro Estimado: {isValidNumber(expectedProfit) ? `+${formatCurrency(Math.max(0, expectedProfit))}` : 'Indisponível'}
               </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', borderTop: '2px solid #f43f5e' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}><ShieldAlert size={12} style={{ display: 'inline', marginRight: '4px' }}/> Stop Loss (Risco)</span>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#f43f5e', marginTop: '0.5rem' }}>R$ {trade.stop_loss?.toFixed(2)}</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#f43f5e', marginTop: '0.5rem' }}>{formatCurrency(trade.stop_loss)}</div>
               <div style={{ fontSize: '0.75rem', color: '#f43f5e', marginTop: '0.25rem', fontWeight: 600 }}>
-                Perda Máxima: -R$ {Math.max(0, maxLoss).toFixed(2)}
+                Perda Máxima: {isValidNumber(maxLoss) ? `-${formatCurrency(Math.max(0, maxLoss))}` : 'Indisponível'}
               </div>
             </div>
             <div className="glass-panel" style={{ padding: '1rem', background: 'rgba(0,0,0,0.4)' }}>
               <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>{isClosed ? 'Resultado Final' : 'Lucro/Prejuízo Atual'}</span>
               <div style={{ fontSize: '1.5rem', fontWeight: 800, color: pnlColor, marginTop: '0.5rem' }}>
-                {pnlSign} R$ {Math.abs(pnlValue).toFixed(2)}
+                {formatCurrency(pnlValue, { showSign: true })}
               </div>
               <div style={{ fontSize: '0.75rem', color: pnlColor, marginTop: '0.25rem' }}>
-                ({trade.pnl_pct > 0 ? '+' : ''}{trade.pnl_pct?.toFixed(2)}%)
+                ({formatPercent(trade.pnl_pct)})
               </div>
             </div>
           </div>
