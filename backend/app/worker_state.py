@@ -174,6 +174,10 @@ class WorkerState:
         self.cycles_since_restart = 0
         self.restart_epoch_start = now_b3()
 
+    def on_start(self) -> None:
+        """Alias para on_worker_start (compatibilidade com LoopSupervisionState)."""
+        self.on_worker_start()
+
     def mark_scan(self) -> None:
         """Registra uma iteração completa (heartbeat) e aplica reset por estabilidade."""
         self.last_scan_at = now_b3()

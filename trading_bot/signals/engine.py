@@ -26,6 +26,8 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from trading_bot.data.signal_input import validate_signal_input
+from trading_bot.data.approval import require_data_approval
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +180,13 @@ def compute_signal(
     if len(df) < min_rows:
         return None
 
-    df = df.sort_values("ts").reset_index(drop=True)
+    try:
+        validate_signal_input(df)
+        require_data_approval(df, ticker)
+    except ValueError:
+        logger.warning("[%s] Histórico inválido ou sem aprovação; sinal bloqueado", ticker)
+        return None
+    df = df.reset_index(drop=True)
     close = df["adj_close"]
     high  = df["h"]
     low   = df["l"]

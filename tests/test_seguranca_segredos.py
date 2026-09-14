@@ -43,6 +43,10 @@ CAMINHOS_PROIBIDOS = [
 
 
 def _arquivos_rastreados() -> list[str]:
+    import shutil
+    import pytest
+    if not shutil.which("git"):
+        pytest.skip("git executavel nao encontrado no PATH do sistema")
     out = subprocess.run(
         ["git", "ls-files"], cwd=RAIZ, capture_output=True, text=True, check=True
     )
@@ -103,6 +107,10 @@ class TestNenhumSegredoVersionado:
     def test_gitignore_cobre_build_e_env_do_frontend(self):
         """Defesa em profundidade: além de não estar rastreado hoje, tem de
         estar ignorado — senão um `git add .` distraído reintroduz."""
+        import shutil
+        import pytest
+        if not shutil.which("git"):
+            pytest.skip("git executavel nao encontrado no PATH do sistema")
         for alvo in ("frontend/dist/assets/index.js", "frontend/.env.local", ".env"):
             r = subprocess.run(
                 ["git", "check-ignore", "-q", alvo],

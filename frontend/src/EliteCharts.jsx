@@ -13,6 +13,7 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
   if (!metrics) return <div style={{ color: '#8b9bb4' }}>Carregando métricas...</div>;
 
   const getMetricColor = (key, val) => {
+    if (typeof val !== 'number' || !Number.isFinite(val)) return '#8b9bb4';
     if (key === 'sharpe' || key === 'sortino' || key === 'calmar') return val >= 1 ? '#10b981' : (val >= 0.5 ? '#f59e0b' : '#f43f5e');
     if (key === 'max_drawdown_pct') return val > -10 ? '#10b981' : (val > -20 ? '#f59e0b' : '#f43f5e');
     if (key === 'win_rate') return val >= 0.5 ? '#10b981' : '#f43f5e';
@@ -20,7 +21,7 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
     return '#e2e8f0';
   };
 
-  const formatters = {
+  const numericFormatters = {
     sharpe: v => v.toFixed(2),
     sortino: v => v.toFixed(2),
     calmar: v => v.toFixed(2),
@@ -31,6 +32,10 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
     avg_loss: v => `${v.toFixed(2)}%`
   };
 
+  const formatters = Object.fromEntries(Object.entries(numericFormatters).map(([key, format]) => [
+    key, value => typeof value === 'number' && Number.isFinite(value) ? format(value) : 'Indisponível',
+  ]));
+
   const labels = {
     sharpe: 'Sharpe Ratio', sortino: 'Sortino Ratio', calmar: 'Calmar Ratio',
     max_drawdown_pct: 'Max Drawdown', var_95_daily: 'VaR 95% (Diário)',
@@ -38,6 +43,7 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
   };
 
   const getProgressVal = (key, val) => {
+    if (typeof val !== 'number' || !Number.isFinite(val)) return null;
     if (key === 'win_rate') return val * 100;
     if (key === 'sharpe' || key === 'sortino' || key === 'calmar') return Math.min(100, Math.max(0, (val / 3) * 100));
     if (key === 'max_drawdown_pct') return Math.min(100, Math.max(0, (Math.abs(val) / 30) * 100)); // assumes max 30% bad
@@ -46,14 +52,15 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
-      {Object.entries(metrics).map(([k, v]) => {
+      {Object.keys(labels).map(k => {
+        const v = metrics[k];
         const color = getMetricColor(k, v);
         const progress = getProgressVal(k, v);
         return (
           <div key={k} style={{ background: 'rgba(0,0,0,0.2)', padding: '0.75rem', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div style={{ position: 'absolute', bottom: 0, left: 0, height: '3px', width: '100%', background: 'rgba(255,255,255,0.05)' }}>
+            {progress !== null && <div style={{ position: 'absolute', bottom: 0, left: 0, height: '3px', width: '100%', background: 'rgba(255,255,255,0.05)' }}>
               <div style={{ height: '100%', width: `${progress}%`, background: color, opacity: 0.6, transition: 'width 1s ease' }} />
-            </div>
+            </div>}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div style={{ fontSize: '0.65rem', color: '#8b9bb4', textTransform: 'uppercase', letterSpacing: '0.5px', lineHeight: 1.2 }}>{labels[k]}</div>
               <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: color, boxShadow: `0 0 6px ${color}`, flexShrink: 0, marginTop: '2px' }} />
@@ -64,6 +71,12 @@ export const RiskMetricsPanel = React.memo(({ metrics }) => {
           </div>
         );
       })}
+      {metrics._metadata && <div style={{ gridColumn: '1 / -1', color: '#8b9bb4', fontSize: '0.72rem' }}>
+        <div>Origem: {typeof metrics._metadata.source === 'string' ? metrics._metadata.source : 'Não informada'}</div>
+        <div>Responsável: {typeof metrics._metadata.owner === 'string' ? metrics._metadata.owner : 'Não informado'}</div>
+        <div>Relatório gerado em: {typeof metrics._metadata.generated_at_utc === 'string' ? metrics._metadata.generated_at_utc : 'Não informado'} (não indica atualização das cotações)</div>
+        <div>Amostra: {Number.isInteger(metrics._metadata.sample_count) ? metrics._metadata.sample_count : 'Indisponível'}; registros inválidos: {Number.isInteger(metrics._metadata.invalid_count) ? metrics._metadata.invalid_count : 'Indisponível'}</div>
+      </div>}
     </div>
   );
 });

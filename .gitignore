@@ -4,10 +4,14 @@
 
 # --- Credenciais e segredos (NUNCA commitar) ---
 .env
+.env.*
+!.env.example
 *.key
 *.pem
 *.p12
 secrets/
+.pytest_tmp/
+node_modules/
 
 # --- Banco de dados e dados gerados (apenas raiz do projeto) ---
 /data/

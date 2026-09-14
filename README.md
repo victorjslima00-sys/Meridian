@@ -85,6 +85,16 @@ Uma chave incluída em JavaScript nunca é um segredo real. Em produção, prefi
 
 ## Testes
 
+### Diagnóstico opcional MetaTrader 5
+
+O diagnóstico local para Windows conecta exclusivamente uma conta **demo**, em
+**somente leitura**, para conferir conexão e regras dos instrumentos. Não envia
+ordens e não altera o simulador B3. Preparação e limites: [MT5_DEMO.md](docs/MT5_DEMO.md).
+
+Para pesquisa de dados, há também um [coletor D1 demo](docs/MT5_HISTORY.md)
+e um [importador COTAHIST B3](docs/COTAHIST.md), ambos independentes dos sinais
+e da execução. Relatórios e arquivos brutos ficam em `reports/`, fora do Git.
+
 ```bash
 pytest tests/ --ignore=tests/e2e
 pytest tests/e2e

@@ -1,12 +1,12 @@
 import sqlite3
 import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from ..data.database import DB_PATH
 
 
 class ExecutorAgent:
-    def __init__(self):
-        self.db_path = DB_PATH
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or DB_PATH
 
     def _connect(self) -> sqlite3.Connection:
         """Conexão padrão do executor: IMMEDIATE (escreve logo na primeira

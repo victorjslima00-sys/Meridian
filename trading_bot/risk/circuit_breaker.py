@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class CircuitBreaker:
 
     def check(
         self,
-        current_equity: float,
+        current_equity: Optional[float],
         initial_equity: float,
         equity_start_of_day: float,
         equity_30d_ago: float,
@@ -68,6 +69,9 @@ class CircuitBreaker:
         Avalia se o Circuit Breaker deve ser acionado.
         Retorna (True, motivo) ou (False, "").
         """
+        if current_equity is None:
+            return CircuitBreakerStatus(True, "Equity indisponível (feed offline ou valor nulo - Fail-Closed)")
+
         if current_equity <= 0:
             return CircuitBreakerStatus(True, "Falência total (equity <= 0)")
 
@@ -115,6 +119,12 @@ class CircuitBreaker:
                 return False
 
             current_equity = compute_current_equity()
+            if current_equity is None:
+                logger.warning(
+                    "CIRCUIT BREAKER FAIL-CLOSED: cotação de mercado indisponível (equity=None) — "
+                    "bloqueando novas entradas."
+                )
+                return False
         except Exception as e:
             logger.error(
                 f"CIRCUIT BREAKER FAIL-CLOSED: erro ao obter equity/snapshots ({e}) — "

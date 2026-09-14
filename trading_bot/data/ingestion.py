@@ -80,18 +80,16 @@ def _normalize(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         else:
             raise ValueError(f"[{ticker}] Coluna de data não encontrada. Colunas: {df.columns.tolist()}")
 
-    # Garantir que adj_close existe (fallback para close se não vier ajustado)
-    if "adj_close" not in df.columns and "c" in df.columns:
-        df["adj_close"] = df["c"]
-        logger.warning("[%s] adj_close não disponível na fonte — usando close como fallback", ticker)
-
-    # Selecionar apenas colunas do schema
+    # Ausência não é preço ajustado nem autorização para remover uma barra.
     available = [col for col in STANDARD_COLUMNS if col in df.columns]
     missing = set(STANDARD_COLUMNS) - set(available)
     if missing:
-        logger.warning("[%s] Colunas ausentes no schema: %s", ticker, missing)
+        raise ValueError("incomplete_ohlcv_schema")
 
-    return df[available].dropna(subset=["ts", "c"])
+    out = df[available]
+    if out.isna().any().any():
+        raise ValueError("missing_ohlcv_values")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -150,22 +148,16 @@ def fetch_yfinance(
 
     out = _normalize(df, ticker)
 
-    # SANEAMENTO na porta de entrada. A auditoria de 2026-07-27 mediu, no
-    # yfinance para tickers da B3: 11,6% dos pregões com volume financeiro
-    # implausível (PCAR3 com 3 ações/dia em 2008) e 4,78% com fechamento
-    # congelado (UGPA3 fixo em R$3.302.501,25 por 590 pregões). A fonte não
-    # sinaliza nada disso. Sanear aqui é melhor que sanear em cada consumidor:
-    # o dado sujo nunca chega ao backtest, ao otimizador ou ao relatório.
+    # Os critérios legados sinalizam suspeitas, não comprovam erro da fonte.
+    # Se acionados, bloquear o lote; nunca entregar uma janela encurtada.
     if sanitize and not out.empty:
         from trading_bot.data.sanity import sanitize_ohlcv
 
         antes = len(out)
-        out = sanitize_ohlcv(out)
-        if len(out) < antes:
-            logger.info(
-                "[%s] saneamento removeu %d de %d pregoes implausiveis",
-                ticker, antes - len(out), antes,
-            )
+        inspected = sanitize_ohlcv(out)
+        if len(inspected) < antes:
+            logger.error("[%s] histórico suspeito; lote bloqueado sem remover barras", ticker)
+            raise ValueError("suspect_history_requires_review")
     return out
 
 
@@ -222,17 +214,7 @@ def fetch_brapi(
 
             quotes = results[0].get("historicalDataPrice", [])
             if not quotes:
-                # Fallback: usar o preço atual como candle do dia
-                r = results[0]
-                quotes = [{
-                    "date": int(datetime.now().timestamp()),
-                    "open": r.get("regularMarketOpen"),
-                    "high": r.get("regularMarketDayHigh"),
-                    "low": r.get("regularMarketDayLow"),
-                    "close": r.get("regularMarketPrice"),
-                    "volume": r.get("regularMarketVolume"),
-                    "adjustedClose": r.get("regularMarketPrice"),
-                }]
+                raise ValueError("historical_candle_unavailable")
 
             df = pd.DataFrame(quotes)
             df["ts"] = pd.to_datetime(df["date"], unit="s").dt.date

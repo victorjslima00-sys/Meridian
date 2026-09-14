@@ -92,6 +92,8 @@ class MarketAnalyst:
             {
                 "ts": pd.to_datetime(df["date"]).dt.date,
                 "adj_close": df["close"].astype(float),
+                "o": df["open"].astype(float),
+                "c": df["close"].astype(float),
                 "h": df["high"].astype(float),
                 "l": df["low"].astype(float),
                 "v": df["volume"].astype(float),

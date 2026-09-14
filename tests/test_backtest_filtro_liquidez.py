@@ -19,6 +19,8 @@ from datetime import date
 import pandas as pd
 import pytest
 
+pytestmark = pytest.mark.usefixtures("synthetic_backtest_approval")
+
 from trading_bot.backtest.engine import run_regime_backtest
 from tests.test_backtest_warmup import _serie_com_breakout_na_janela, N_TOTAL, N_JANELA
 

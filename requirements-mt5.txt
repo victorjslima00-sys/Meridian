@@ -1,0 +1,4 @@
+# Diagnóstico opcional local. Não muda as dependências do backend/CI Linux.
+# Python 3.11 ou 3.12, Windows 64 bits.
+pydantic==2.11.10
+MetaTrader5==5.0.6180; sys_platform == "win32" and platform_machine == "AMD64"

@@ -146,8 +146,9 @@ class TestFiltroLigadoAoIngestor:
             ingestion.yf, "download",
             lambda *a, **k: pd.DataFrame({"Close": [1.0]}),
         )
-        out = ingestion.fetch_yfinance("X", date(2020, 1, 1))
-        assert len(out) == len(sujo) - 5
+        import pytest
+        with pytest.raises(ValueError, match="suspect_history_requires_review"):
+            ingestion.fetch_yfinance("X", date(2020, 1, 1))
 
     def test_pode_ser_desligado_explicitamente(self, monkeypatch):
         """Escape hatch para quem precisar do dado cru (auditoria de fonte,
