@@ -35,10 +35,9 @@ jobs:
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics \
             --exclude=.venv,__pycache__,frontend,infra,.agents
 
-      - name: Lint (qualidade geral)
+      - name: Lint (qualidade geral — catraca de debito maximo)
         run: |
-          flake8 . --count --exit-zero --max-complexity=15 --max-line-length=127 \
-            --statistics --exclude=.venv,__pycache__,frontend,infra,.agents
+          python scripts/check_lint_ratchet.py
 
       - name: Rodar testes (trading_bot core + backend agents)
         env:
@@ -55,6 +54,7 @@ jobs:
             --cov=backend \
             --cov-report=term-missing \
             --cov-report=xml \
+            --cov-fail-under=84 \
             --asyncio-mode=auto \
             -v
 
@@ -81,6 +81,9 @@ jobs:
       - name: Lint frontend
         working-directory: frontend
         run: npm run lint
+      - name: Run frontend honesty tests
+        working-directory: frontend
+        run: npm test
       - name: Build frontend
         working-directory: frontend
         run: npm run build
