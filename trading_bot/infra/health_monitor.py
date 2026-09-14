@@ -83,26 +83,49 @@ class OperationalHealthMonitor:
             "ram_available_gb": None,
         }
         try:
-            if not (hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32")):
-                logger.warning("Windows kernel32 API not available on this platform")
-                return fallback
+            if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32"):
+                stat = MEMORYSTATUSEX()
+                stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+                success = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+                if success:
+                    return {
+                        "ram_total_mb": round(stat.ullTotalPhys / (1024 ** 2), 2),
+                        "ram_available_mb": round(stat.ullAvailPhys / (1024 ** 2), 2),
+                        "ram_load_pct": float(stat.dwMemoryLoad),
+                        "ram_total_gb": round(stat.ullTotalPhys / (1024 ** 3), 2),
+                        "ram_available_gb": round(stat.ullAvailPhys / (1024 ** 3), 2),
+                    }
+                else:
+                    logger.error("Falha ao invocar GlobalMemoryStatusEx")
 
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            success = ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-            if not success:
-                logger.error("Falha ao invocar GlobalMemoryStatusEx")
-                return fallback
+            # Linux / Ubuntu support via /proc/meminfo
+            if os.path.exists("/proc/meminfo"):
+                meminfo: dict[str, int] = {}
+                with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.split(":")
+                        if len(parts) == 2:
+                            key = parts[0].strip()
+                            val = parts[1].strip().split()[0]
+                            meminfo[key] = int(val)
+                total_kb = meminfo.get("MemTotal", 0)
+                avail_kb = meminfo.get("MemAvailable", 0)
+                if total_kb > 0:
+                    total_mb = round(total_kb / 1024.0, 2)
+                    avail_mb = round(avail_kb / 1024.0, 2)
+                    load_pct = round((1.0 - (avail_kb / total_kb)) * 100.0, 2)
+                    return {
+                        "ram_total_mb": total_mb,
+                        "ram_available_mb": avail_mb,
+                        "ram_load_pct": load_pct,
+                        "ram_total_gb": round(total_mb / 1024.0, 2),
+                        "ram_available_gb": round(avail_mb / 1024.0, 2),
+                    }
 
-            return {
-                "ram_total_mb": round(stat.ullTotalPhys / (1024 ** 2), 2),
-                "ram_available_mb": round(stat.ullAvailPhys / (1024 ** 2), 2),
-                "ram_load_pct": float(stat.dwMemoryLoad),
-                "ram_total_gb": round(stat.ullTotalPhys / (1024 ** 3), 2),
-                "ram_available_gb": round(stat.ullAvailPhys / (1024 ** 3), 2),
-            }
+            logger.warning("OS memory API not available on this platform")
+            return fallback
         except Exception as exc:
-            logger.warning("Cannot read Windows memory metrics: %s", exc)
+            logger.warning("Cannot read memory metrics: %s", exc)
             return fallback
 
     def collect_system_metrics(self) -> dict[str, Any]:

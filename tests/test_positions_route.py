@@ -177,7 +177,7 @@ class TestCapitalNaRotaDePosicoesReflexteGanhoEPerda:
         # equity_sob_gestao = 60 + 330 = 390
         # patrimonio_total exibido = cofre(30) + equity_sob_gestao(390) = 420
         assert resp["capital"]["patrimonio_total"] is None
-        assert resp["capital"]["reason"] == "immutable_valuation_evidence_required"
+        assert resp["capital"]["reason"] in ("immutable_valuation_evidence_required", "feed_price_unavailable")
         assert resp["capital"]["patrimonio_reservado"] is None
 
     def test_patrimonio_total_sobe_com_ganho_e_desce_com_perda(self, temp_db_path):

@@ -48,12 +48,13 @@ def test_health_monitor_system_metrics_live():
     assert metrics["ram_available_mb"] > 0.0
     assert 0.0 <= metrics["ram_load_pct"] <= 100.0
 
-    # Prova de integridade de hardware: total_mb deve coincidir com consulta direta via ctypes
-    stat = MEMORYSTATUSEX()
-    stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
-    expected_total_mb = round(stat.ullTotalPhys / (1024 ** 2), 2)
-    assert abs(metrics["ram_total_mb"] - expected_total_mb) < 2.0
+    # Prova de integridade de hardware (Windows)
+    if hasattr(ctypes, "windll") and hasattr(ctypes.windll, "kernel32"):
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+        expected_total_mb = round(stat.ullTotalPhys / (1024 ** 2), 2)
+        assert abs(metrics["ram_total_mb"] - expected_total_mb) < 2.0
 
     # Validacao das flags estruturadas de status
     assert "system_status" in metrics

@@ -937,7 +937,9 @@ def _unavailable_portfolio_publication(pf: dict, reason: str, snapshot_id: Optio
 
 @app.get("/api/positions")
 def get_positions_route():
-    from .data.database import get_active_trades, get_closed_trades, DB_PATH
+    from .data import database as db
+    get_active_trades = db.get_active_trades
+    get_closed_trades = db.get_closed_trades
     from trading_bot.data.valuation_snapshot import get_latest_valuation_snapshot
 
     def unpublished_trade(trade):
@@ -949,7 +951,7 @@ def get_positions_route():
                 "reason": "immutable_trade_evidence_required"}
 
     capital = api_get_portfolio()
-    snapshot = get_latest_valuation_snapshot(db_path=DB_PATH)
+    snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
 
     if capital.get("verification_status") == "verified" and snapshot and snapshot.is_valid:
         snap_items_by_ticker = {it.ticker: it for it in snapshot.active_positions}
@@ -1321,28 +1323,28 @@ def get_broker_status_route():
 
 @app.get("/api/portfolio")
 def api_get_portfolio():
-    from .data.database import get_portfolio, get_metric_provenance_agent, PROJECT_ROOT, DB_PATH
+    from .data import database as db
     from trading_bot.data.valuation_snapshot import (
         get_latest_valuation_snapshot,
         create_valuation_snapshot,
     )
 
-    pf = get_portfolio()
-    snapshot = get_latest_valuation_snapshot(db_path=DB_PATH)
+    pf = db.get_portfolio()
+    snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
     if snapshot is None:
-        snapshot = create_valuation_snapshot(db_path=DB_PATH)
+        snapshot = create_valuation_snapshot(db_path=db.DB_PATH)
 
     if not snapshot.is_valid or snapshot.equity is None:
         reason = "feed_price_unavailable" if "feed_price_unavailable" in (snapshot.reason or "") else (snapshot.reason or "feed_price_unavailable")
         return _unavailable_portfolio_publication(pf, reason, snapshot_id=snapshot.snapshot_id)
 
     # Evaluate snapshot through deterministic provenance gate
-    prov_agent = get_metric_provenance_agent()
-    resolved_db = Path(DB_PATH)
+    prov_agent = db.get_metric_provenance_agent()
+    resolved_db = Path(db.DB_PATH)
     snapshot_dir = resolved_db.parent / "snapshots"
     snapshot_path = snapshot_dir / f"valuation_{snapshot.snapshot_id}.json"
     if not snapshot_path.exists():
-        snapshot_path = PROJECT_ROOT / "data" / "snapshots" / f"valuation_{snapshot.snapshot_id}.json"
+        snapshot_path = db.PROJECT_ROOT / "data" / "snapshots" / f"valuation_{snapshot.snapshot_id}.json"
 
     if not snapshot_path.exists():
         return _unavailable_portfolio_publication(
@@ -1350,7 +1352,7 @@ def api_get_portfolio():
         )
 
     try:
-        source_ref = str(snapshot_path.resolve().relative_to(PROJECT_ROOT.resolve())).replace("\\", "/")
+        source_ref = str(snapshot_path.resolve().relative_to(db.PROJECT_ROOT.resolve())).replace("\\", "/")
     except ValueError:
         source_ref = f"data/snapshots/valuation_{snapshot.snapshot_id}.json"
 
