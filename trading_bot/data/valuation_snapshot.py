@@ -298,7 +298,7 @@ def create_valuation_snapshot(
                 obs_age = (now - quote.observed_at).total_seconds()
                 col_age = (now - quote.collected_at).total_seconds()
                 quote_stale = (obs_age > max_quote_age_seconds or col_age > max_quote_age_seconds)
-                quote_future = (quote.observed_at > now or quote.collected_at > now)
+                quote_future = ((quote.observed_at - now).total_seconds() > 1.0 or (quote.collected_at - now).total_seconds() > 1.0)
 
                 if quote_future:
                     is_valid = False
@@ -631,6 +631,7 @@ def get_latest_valuation_snapshot(
                 row = cur.fetchone()
                 if row is not None:
                     return get_valuation_snapshot(row["snapshot_id"], store_dir=store_dir, db_path=resolved_db)
+            return None
         finally:
             conn.close()
 

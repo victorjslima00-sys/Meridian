@@ -1367,11 +1367,17 @@ def api_get_portfolio():
             return _unavailable_portfolio_publication(pf, f"snapshot_integrity_error: {str(e)}")
 
     if not snapshot.is_valid or snapshot.equity is None:
-        reason = (
-            "feed_price_unavailable"
-            if "feed_price_unavailable" in (snapshot.reason or "")
-            else (snapshot.reason or "feed_price_unavailable")
-        )
+        if "feed_price_unavailable" in (snapshot.reason or ""):
+            reason = "feed_price_unavailable"
+        elif (
+            "quote_evidence_required" in (snapshot.reason or "")
+            or "immutable" in (snapshot.reason or "")
+            or "stale_quote" in (snapshot.reason or "")
+            or "future_quote" in (snapshot.reason or "")
+        ):
+            reason = "immutable_valuation_evidence_required"
+        else:
+            reason = snapshot.reason or "immutable_valuation_evidence_required"
         return _unavailable_portfolio_publication(pf, reason, snapshot_id=snapshot.snapshot_id)
 
     # Evaluate snapshot through deterministic provenance gate
