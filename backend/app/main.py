@@ -1407,17 +1407,29 @@ def api_get_portfolio():
         "current_capital", "invested_capital", "initial_capital",
     )
 
+    # Derive saldo_operavel strictly from frozen snapshot fields using Meridian domain rule
+    snap_saldo_livre = snapshot.portfolio.saldo_livre
+    snap_margem_operavel = snapshot.portfolio.margem_operavel
+    snap_em_posicoes = snapshot.portfolio.em_posicoes
+
+    if snap_margem_operavel is None:
+        derived_saldo_operavel = snap_saldo_livre
+    else:
+        derived_saldo_operavel = round(
+            min(snap_saldo_livre, max(0.0, snap_margem_operavel - snap_em_posicoes)), 4
+        )
+
     candidate_values = {
         "patrimonio_total": snapshot.equity,
         "saldo_disponivel": snapshot.portfolio.saldo_disponivel,
         "em_posicoes": snapshot.portfolio.em_posicoes,
         "saldo_livre": snapshot.portfolio.saldo_livre,
         "margem_operavel": snapshot.portfolio.margem_operavel,
-        "saldo_operavel": snapshot.portfolio.saldo_livre,
-        "patrimonio_reservado": pf.get("patrimonio_reservado"),
-        "current_capital": pf.get("current_capital"),
-        "invested_capital": pf.get("invested_capital"),
-        "initial_capital": pf.get("initial_capital"),
+        "saldo_operavel": derived_saldo_operavel,
+        "patrimonio_reservado": None,
+        "current_capital": None,
+        "invested_capital": None,
+        "initial_capital": None,
     }
 
     metrics_provenance = {}

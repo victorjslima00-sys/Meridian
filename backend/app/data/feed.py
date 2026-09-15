@@ -97,6 +97,8 @@ def _cache_get_entry(
         fetched_at, df, collected_at_utc, raw_evidence, source_sha256, source_ref = entry
         if time.monotonic() - fetched_at > ttl:
             return None
+        if not raw_evidence or not source_sha256:
+            return None
         return df.copy(), collected_at_utc, raw_evidence, source_sha256, source_ref
 
 
@@ -107,39 +109,64 @@ def _extract_raw_evidence_from_df(
     interval: str,
     df: pd.DataFrame,
     collected_at_utc: datetime,
-) -> Tuple[datetime, dict, str, str]:
+) -> Optional[Tuple[datetime, dict, str, str]]:
+    if df is None or df.empty:
+        return None
+
     candle = df.iloc[-1]
-    if "date" in candle:
+    date_val = None
+    if "date" in candle and not pd.isna(candle["date"]):
         date_val = candle["date"]
-    elif "datetime" in candle:
+    elif "datetime" in candle and not pd.isna(candle["datetime"]):
         date_val = candle["datetime"]
-    elif "index" in candle:
+    elif "index" in candle and not pd.isna(candle["index"]):
         date_val = candle["index"]
-    else:
-        date_val = collected_at_utc
+
+    # Condition 1: Missing source observation timestamp -> fail closed (None)
+    # Collection clock must never be substituted as observation time.
+    if date_val is None:
+        logger.warning("[%s] Missing source observation timestamp", ticker)
+        return None
 
     if isinstance(date_val, str):
-        parsed_date = pd.to_datetime(date_val)
+        try:
+            parsed_date = pd.to_datetime(date_val)
+        except Exception:
+            logger.warning("[%s] Failed to parse observation timestamp: %s", ticker, date_val)
+            return None
     else:
         parsed_date = date_val
 
+    # Condition 2: Naive timestamp without defensible provider timezone semantics -> fail closed
+    # Do NOT fabricate timezone by assuming UTC or calling tz_localize.
     if hasattr(parsed_date, "tzinfo") and parsed_date.tzinfo is not None:
         observed_at_utc = parsed_date.astimezone(timezone.utc)
-    elif hasattr(parsed_date, "tz_localize"):
-        observed_at_utc = parsed_date.tz_localize(timezone.utc)
-    elif isinstance(parsed_date, datetime):
-        observed_at_utc = parsed_date.replace(tzinfo=timezone.utc)
+    elif hasattr(parsed_date, "tz") and parsed_date.tz is not None:
+        observed_at_utc = parsed_date.tz_convert(timezone.utc).to_pydatetime()
     else:
-        observed_at_utc = collected_at_utc
+        logger.warning(
+            "[%s] Naive observation timestamp without defensible provider timezone semantics: %s",
+            ticker, date_val
+        )
+        return None
 
+    # Condition 3: observed_at > collected_at -> fail closed
+    # Collection clock must never be rewritten to make evidence valid.
     if observed_at_utc > collected_at_utc:
-        collected_at_utc = observed_at_utc
+        logger.warning(
+            "[%s] Future observation timestamp rejected: observed_at (%s) > collected_at (%s)",
+            ticker, observed_at_utc, collected_at_utc
+        )
+        return None
 
-    close_p = float(candle["close"]) if "close" in candle else 0.0
-    open_p = float(candle["open"]) if "open" in candle else None
-    high_p = float(candle["high"]) if "high" in candle else None
-    low_p = float(candle["low"]) if "low" in candle else None
-    vol = float(candle["volume"]) if "volume" in candle else None
+    close_p = float(candle["close"]) if "close" in candle and not pd.isna(candle["close"]) else 0.0
+    if math.isnan(close_p) or math.isinf(close_p) or close_p <= 0.0:
+        return None
+
+    open_p = float(candle["open"]) if "open" in candle and not pd.isna(candle["open"]) else None
+    high_p = float(candle["high"]) if "high" in candle and not pd.isna(candle["high"]) else None
+    low_p = float(candle["low"]) if "low" in candle and not pd.isna(candle["low"]) else None
+    vol = float(candle["volume"]) if "volume" in candle and not pd.isna(candle["volume"]) else None
 
     raw_evidence = {
         "ticker": ticker.upper(),
@@ -175,9 +202,15 @@ def _cache_put(
     if collected_at_utc is None:
         collected_at_utc = datetime.now(timezone.utc)
     if (raw_evidence is None or source_sha256 is None or source_ref is None) and not df.empty:
-        _, raw_evidence, source_sha256, source_ref = _extract_raw_evidence_from_df(
+        extracted = _extract_raw_evidence_from_df(
             ticker, ticker, period, interval, df, collected_at_utc
         )
+        if extracted is not None:
+            _, raw_evidence, source_sha256, source_ref = extracted
+        else:
+            raw_evidence = None
+            source_sha256 = None
+            source_ref = None
     with _cache_meta_lock:
         _cache[key] = (
             time.monotonic(),

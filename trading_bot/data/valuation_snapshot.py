@@ -102,6 +102,88 @@ class EvidencedQuote(BaseModel):
             raise ValueError(
                 f"source_sha256 mismatch with raw_evidence: {self.source_sha256} != {expected_hash}"
             )
+
+        # Semantic binding: bind quote fields to recoverable raw_evidence
+        raw = self.raw_evidence
+
+        # 1. ticker
+        raw_ticker = raw.get("ticker")
+        if raw_ticker is None or str(raw_ticker).strip().upper() != self.ticker:
+            raise ValueError(
+                f"EvidencedQuote ticker '{self.ticker}' does not match raw_evidence ticker '{raw_ticker}'"
+            )
+
+        # 2. price vs raw close
+        raw_close = raw.get("close")
+        if raw_close is None:
+            raise ValueError("raw_evidence missing 'close'")
+        try:
+            raw_close_val = float(raw_close)
+        except (ValueError, TypeError):
+            raise ValueError(f"raw_evidence 'close' is not a valid number: {raw_close}")
+        if abs(self.price - raw_close_val) > 1e-6:
+            raise ValueError(
+                f"EvidencedQuote price {self.price} does not match raw_evidence close {raw_close_val}"
+            )
+
+        # 3. source
+        raw_source = raw.get("source")
+        if raw_source is None or str(raw_source) != self.source:
+            raise ValueError(
+                f"EvidencedQuote source '{self.source}' does not match raw_evidence source '{raw_source}'"
+            )
+
+        # 4. price_kind
+        raw_price_kind = raw.get("price_kind")
+        if raw_price_kind is not None and str(raw_price_kind) != self.price_kind:
+            raise ValueError(
+                f"EvidencedQuote price_kind '{self.price_kind}' does not match raw_evidence price_kind '{raw_price_kind}'"
+            )
+
+        # 5. interval
+        raw_interval = raw.get("interval")
+        if raw_interval is not None and self.interval is not None and str(raw_interval) != str(self.interval):
+            raise ValueError(
+                f"EvidencedQuote interval '{self.interval}' does not match raw_evidence interval '{raw_interval}'"
+            )
+
+        # 6. vendor_symbol
+        raw_vendor_symbol = raw.get("vendor_symbol")
+        if raw_vendor_symbol is not None and self.vendor_symbol is not None and str(raw_vendor_symbol) != str(self.vendor_symbol):
+            raise ValueError(
+                f"EvidencedQuote vendor_symbol '{self.vendor_symbol}' does not match raw_evidence vendor_symbol '{raw_vendor_symbol}'"
+            )
+
+        # 7. observed_at
+        raw_observed_at = raw.get("observed_at")
+        if raw_observed_at is None:
+            raise ValueError("raw_evidence missing 'observed_at'")
+        try:
+            raw_obs_dt = datetime.fromisoformat(str(raw_observed_at))
+            if raw_obs_dt.tzinfo is None:
+                raise ValueError("raw_evidence observed_at must be timezone-aware")
+        except Exception as e:
+            raise ValueError(f"Invalid observed_at in raw_evidence: {e}")
+        if abs((self.observed_at - raw_obs_dt).total_seconds()) > 0.001:
+            raise ValueError(
+                f"EvidencedQuote observed_at {self.observed_at} does not match raw_evidence observed_at {raw_obs_dt}"
+            )
+
+        # 8. collected_at
+        raw_collected_at = raw.get("collected_at")
+        if raw_collected_at is None:
+            raise ValueError("raw_evidence missing 'collected_at'")
+        try:
+            raw_col_dt = datetime.fromisoformat(str(raw_collected_at))
+            if raw_col_dt.tzinfo is None:
+                raise ValueError("raw_evidence collected_at must be timezone-aware")
+        except Exception as e:
+            raise ValueError(f"Invalid collected_at in raw_evidence: {e}")
+        if abs((self.collected_at - raw_col_dt).total_seconds()) > 0.001:
+            raise ValueError(
+                f"EvidencedQuote collected_at {self.collected_at} does not match raw_evidence collected_at {raw_col_dt}"
+            )
+
         return self
 
 
@@ -160,6 +242,14 @@ class ValuationSnapshot(BaseModel):
         # If positions exist, upgrade to market_quotes.
         if len(self.active_positions) > 0 and self.quote_evidence_kind == "cash_only_no_market_quotes":
             object.__setattr__(self, "quote_evidence_kind", "market_quotes")
+
+        # Full-SHA snapshots enforce snapshot_id == f"snap_{source_sha256}"
+        if len(self.snapshot_id) == 69:
+            expected_id = f"snap_{self.source_sha256}"
+            if self.snapshot_id != expected_id:
+                raise ValueError(
+                    f"snapshot_id mismatch with source_sha256: {self.snapshot_id} != {expected_id}"
+                )
         return self
 
 
@@ -406,10 +496,21 @@ def create_valuation_snapshot(
     digest = _compute_payload_sha256(json_dict)
     snapshot_id = f"snap_{digest}"
 
-    snapshot = dummy.model_copy(update={
-        "snapshot_id": snapshot_id,
-        "source_sha256": digest,
-    })
+    snapshot = ValuationSnapshot(
+        snapshot_id=snapshot_id,
+        unit="currency_brl",
+        quote_evidence_kind=quote_evidence_kind,
+        observed_at=observed_at,
+        collected_at=collected_at,
+        computed_at=now,
+        portfolio=portfolio_snap,
+        active_positions=items,
+        equity=computed_equity,
+        mtm_total=computed_mtm,
+        is_valid=is_valid,
+        reason=reason,
+        source_sha256=digest,
+    )
 
     save_valuation_snapshot(snapshot, store_dir=store_dir, db_path=resolved_db)
     return snapshot
@@ -437,6 +538,20 @@ def save_valuation_snapshot(
 
     content = snapshot.model_dump_json(indent=2)
     expected_sha = snapshot.source_sha256
+
+    # Verify content digest binding and enforce no new legacy writes
+    json_dict = json.loads(content)
+    recomputed_sha = _compute_payload_sha256(json_dict)
+    if expected_sha != recomputed_sha:
+        raise SnapshotIntegrityError(
+            f"Snapshot source_sha256 mismatch with recomputed payload digest: {expected_sha} != {recomputed_sha}"
+        )
+    if len(snapshot.snapshot_id) != 69 or snapshot.snapshot_id != f"snap_{recomputed_sha}":
+        raise SnapshotIntegrityError(
+            f"New snapshots must enforce snapshot_id == f'snap_{{source_sha256}}': "
+            f"{snapshot.snapshot_id} != snap_{recomputed_sha}. "
+            f"Legacy 16-hex IDs are read-only compatibility ONLY and must never be created by new writes."
+        )
 
     # 1. Filesystem check
     if file_path.exists():
@@ -564,7 +679,7 @@ def get_valuation_snapshot(
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='valuation_snapshots'")
             if cur.fetchone() is not None:
                 cur.execute(
-                    "SELECT payload_json, sha256 FROM valuation_snapshots WHERE snapshot_id = ?",
+                    "SELECT snapshot_id, payload_json, sha256 FROM valuation_snapshots WHERE snapshot_id = ?",
                     (snapshot_id,),
                 )
                 db_row = cur.fetchone()
@@ -600,6 +715,55 @@ def get_valuation_snapshot(
     except Exception as e:
         raise SnapshotIntegrityError(f"Failed to parse snapshot SQLite payload for {snapshot_id}: {e}")
 
+    # Filename ID binding
+    filename = file_path.name
+    if not (filename.startswith("valuation_") and filename.endswith(".json")):
+        raise SnapshotIntegrityError(f"Invalid snapshot filename format: {filename}")
+    filename_id = filename[len("valuation_"):-len(".json")]
+
+    # SQLite primary key binding
+    db_pk_id = str(db_row["snapshot_id"])
+
+    # Payload snapshot_id binding
+    file_payload_id = file_dict.get("snapshot_id")
+    db_payload_id = db_dict.get("snapshot_id")
+
+    # 1. Filename ID vs file payload ID
+    if filename_id != file_payload_id:
+        raise SnapshotIntegrityError(
+            f"Filename ID vs payload ID mismatch: filename '{filename_id}' != payload '{file_payload_id}'"
+        )
+
+    # 2. Database primary key vs database payload ID
+    if db_pk_id != db_payload_id:
+        raise SnapshotIntegrityError(
+            f"Database primary key vs payload ID mismatch: db PK '{db_pk_id}' != payload '{db_payload_id}'"
+        )
+
+    # 3. Cross-store payload ID agreement
+    if file_payload_id != db_payload_id:
+        raise SnapshotIntegrityError(
+            f"Conflicting payload snapshot_id between filesystem ('{file_payload_id}') and database ('{db_payload_id}')"
+        )
+
+    # 4. Bindings to requested snapshot_id
+    if filename_id != snapshot_id:
+        raise SnapshotIntegrityError(
+            f"Filename ID mismatch for snapshot: filename id '{filename_id}' != requested '{snapshot_id}'"
+        )
+    if db_pk_id != snapshot_id:
+        raise SnapshotIntegrityError(
+            f"Database primary key mismatch: db PK '{db_pk_id}' != requested '{snapshot_id}'"
+        )
+    if file_payload_id != snapshot_id:
+        raise SnapshotIntegrityError(
+            f"File payload snapshot_id mismatch: file payload '{file_payload_id}' != requested '{snapshot_id}'"
+        )
+    if db_payload_id != snapshot_id:
+        raise SnapshotIntegrityError(
+            f"Database payload snapshot_id mismatch: db payload '{db_payload_id}' != requested '{snapshot_id}'"
+        )
+
     file_sha = _compute_payload_sha256(file_dict)
     file_stored_sha = file_dict.get("source_sha256")
     if file_sha != file_stored_sha:
@@ -624,6 +788,32 @@ def get_valuation_snapshot(
         raise SnapshotIntegrityError(
             f"Conflicting payload between filesystem and database for snapshot {snapshot_id}"
         )
+
+    # Full-SHA snapshots enforce: snapshot_id == f"snap_{recomputed_digest}"
+    # Legacy 16-hex snapshots remain read-only compatible
+    is_legacy = len(snapshot_id) == 21 and snapshot_id.startswith("snap_")
+    if not is_legacy:
+        expected_full_id = f"snap_{file_sha}"
+        if snapshot_id != expected_full_id:
+            raise SnapshotIntegrityError(
+                f"Requested snapshot_id does not match recomputed digest: {snapshot_id} != {expected_full_id}"
+            )
+        if file_payload_id != expected_full_id:
+            raise SnapshotIntegrityError(
+                f"File payload snapshot_id does not match recomputed digest: {file_payload_id} != {expected_full_id}"
+            )
+        if db_payload_id != expected_full_id:
+            raise SnapshotIntegrityError(
+                f"Database payload snapshot_id does not match recomputed digest: {db_payload_id} != {expected_full_id}"
+            )
+        if filename_id != expected_full_id:
+            raise SnapshotIntegrityError(
+                f"Filename snapshot_id does not match recomputed digest: {filename_id} != {expected_full_id}"
+            )
+        if db_pk_id != expected_full_id:
+            raise SnapshotIntegrityError(
+                f"Database primary key does not match recomputed digest: {db_pk_id} != {expected_full_id}"
+            )
 
     return ValuationSnapshot.model_validate_json(file_text)
 

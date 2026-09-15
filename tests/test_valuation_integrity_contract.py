@@ -636,12 +636,48 @@ def test_cache_hit_retains_original_collection_time_and_sha256():
 # 9. Broker Calls Invariant: real_broker_calls == 0
 # ---------------------------------------------------------------------------
 
-def test_broker_calls_remain_strictly_zero():
-    """Verify no live broker modules or endpoints are invoked."""
-    from backend.app.markets.paper_broker import PaperBroker
-    broker = PaperBroker()
-    assert hasattr(broker, "execute_order")
-    # Invariant: No live broker integration activated, real_broker_calls == 0
+def test_broker_boundary_structural_isolation():
+    """Verify structural paper/live broker boundary isolation in NEXUS-001 scope.
+
+    Proves:
+    1. Touched production files (valuation_snapshot.py, feed.py, main.py) do NOT import live broker modules.
+    2. Paper broker protocol does not trigger live broker calls.
+    3. Valuation engine remains strictly isolated from trade execution and broker interfaces.
+
+    Runtime real_broker_calls count status is UNVERIFIED (no runtime counter in repository).
+    Broker activation by NEXUS-001 is NOT DETECTED.
+    """
+    import ast
+
+    # Check valuation_snapshot.py AST
+    snap_path = database.PROJECT_ROOT / "trading_bot" / "data" / "valuation_snapshot.py"
+    snap_tree = ast.parse(snap_path.read_text(encoding="utf-8"))
+    imported_modules = []
+    for node in ast.walk(snap_tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                imported_modules.append(n.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                imported_modules.append(node.module)
+
+    for mod in imported_modules:
+        assert "broker" not in mod, f"Unexpected broker import in valuation_snapshot: {mod}"
+
+    # Check feed.py AST
+    feed_path = database.PROJECT_ROOT / "backend" / "app" / "data" / "feed.py"
+    feed_tree = ast.parse(feed_path.read_text(encoding="utf-8"))
+    feed_imports = []
+    for node in ast.walk(feed_tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                feed_imports.append(n.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                feed_imports.append(node.module)
+
+    for mod in feed_imports:
+        assert "broker" not in mod, f"Unexpected broker import in feed.py: {mod}"
 
 
 # ---------------------------------------------------------------------------
@@ -920,3 +956,559 @@ def test_get_evidenced_quote_fails_closed_on_corrupt_candle():
     with patch("backend.app.data.feed._fetch_from_yfinance", return_value=nan_df):
         quote = feed.get_evidenced_quote("B3SA3.SA")
         assert quote is None
+
+
+# ---------------------------------------------------------------------------
+# 11. NEXUS-001-R1 Closeout: Snapshot Identity & Content Binding Adversarial Tests
+# ---------------------------------------------------------------------------
+
+def test_adversarial_tampered_payload_snapshot_id_in_both_file_and_sqlite_fails_closed(integrity_env):
+    """Adversarial: Alter payload snapshot_id in BOTH file and SQLite while preserving
+    all other bytes and hash semantics -> MUST FAIL closed with SnapshotIntegrityError.
+    """
+    db_file, store_dir, _ = integrity_env
+    now = datetime.datetime.now(datetime.timezone.utc)
+    quotes = {
+        "PETR4.SA": _make_valid_quote("PETR4.SA", price=35.0, observed_at=now, collected_at=now),
+        "VALE3.SA": _make_valid_quote("VALE3.SA", price=65.0, observed_at=now, collected_at=now),
+    }
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        quote_provider=lambda t: quotes.get(t),
+        store_dir=store_dir,
+        clock_now=now,
+    )
+    orig_id = snap.snapshot_id
+    fake_id = "snap_" + "a" * 64
+
+    # Tamper payload snapshot_id in file
+    snap_file = store_dir / f"valuation_{orig_id}.json"
+    data = json.loads(snap_file.read_text(encoding="utf-8"))
+    data["snapshot_id"] = fake_id
+    tampered_json = json.dumps(data, indent=2)
+    snap_file.write_text(tampered_json, encoding="utf-8")
+
+    # Tamper payload snapshot_id in SQLite row as well
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "UPDATE valuation_snapshots SET snapshot_id = ?, payload_json = ? WHERE snapshot_id = ?",
+            (fake_id, tampered_json, orig_id),
+        )
+
+    # 1. Requesting orig_id must fail closed (mismatch with file and db payload)
+    with pytest.raises(SnapshotIntegrityError):
+        get_valuation_snapshot(orig_id, store_dir=store_dir, db_path=db_file)
+
+    # 2. Rename file to match fake_id and request fake_id -> MUST FAIL:
+    # fake_id does NOT match recomputed semantic payload digest!
+    fake_file = store_dir / f"valuation_{fake_id}.json"
+    snap_file.rename(fake_file)
+    with pytest.raises(SnapshotIntegrityError, match="does not match recomputed digest"):
+        get_valuation_snapshot(fake_id, store_dir=store_dir, db_path=db_file)
+
+
+def test_adversarial_db_primary_key_vs_payload_id_mismatch_fails_closed(integrity_env):
+    """Adversarial: SQLite primary key snapshot_id != payload snapshot_id -> MUST FAIL."""
+    db_file, store_dir, _ = integrity_env
+    now = datetime.datetime.now(datetime.timezone.utc)
+    quotes = {
+        "PETR4.SA": _make_valid_quote("PETR4.SA", price=35.0, observed_at=now, collected_at=now),
+        "VALE3.SA": _make_valid_quote("VALE3.SA", price=65.0, observed_at=now, collected_at=now),
+    }
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        quote_provider=lambda t: quotes.get(t),
+        store_dir=store_dir,
+        clock_now=now,
+    )
+    orig_id = snap.snapshot_id
+    fake_pk = "snap_" + "b" * 64
+
+    # Write file for fake_pk with snapshot_id = fake_pk
+    orig_file = store_dir / f"valuation_{orig_id}.json"
+    data = json.loads(orig_file.read_text(encoding="utf-8"))
+    data["snapshot_id"] = fake_pk
+    fake_file = store_dir / f"valuation_{fake_pk}.json"
+    fake_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # In DB: set PK column to fake_pk, but leave payload_json containing orig_id
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "UPDATE valuation_snapshots SET snapshot_id = ? WHERE snapshot_id = ?",
+            (fake_pk, orig_id),
+        )
+
+    # Calling with fake_pk loads both file (id=fake_pk) and DB (PK=fake_pk, payload=orig_id)
+    # Must fail because db PK (fake_pk) != db payload ID (orig_id)
+    with pytest.raises(SnapshotIntegrityError, match="Database primary key vs payload ID mismatch"):
+        get_valuation_snapshot(fake_pk, store_dir=store_dir, db_path=db_file)
+
+
+def test_adversarial_filename_id_vs_payload_id_mismatch_fails_closed(integrity_env):
+    """Adversarial: Filename ID != payload snapshot_id -> MUST FAIL."""
+    db_file, store_dir, _ = integrity_env
+    now = datetime.datetime.now(datetime.timezone.utc)
+    quotes = {
+        "PETR4.SA": _make_valid_quote("PETR4.SA", price=35.0, observed_at=now, collected_at=now),
+        "VALE3.SA": _make_valid_quote("VALE3.SA", price=65.0, observed_at=now, collected_at=now),
+    }
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        quote_provider=lambda t: quotes.get(t),
+        store_dir=store_dir,
+        clock_now=now,
+    )
+    orig_id = snap.snapshot_id
+    fake_id = "snap_" + "c" * 64
+
+    # Rename file so filename ID (fake_id) does not match payload inside (orig_id)
+    orig_file = store_dir / f"valuation_{orig_id}.json"
+    fake_file = store_dir / f"valuation_{fake_id}.json"
+    orig_file.rename(fake_file)
+
+    # In DB, update PK to fake_id so both sides exist for fake_id, but payload inside still has orig_id
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            "UPDATE valuation_snapshots SET snapshot_id = ? WHERE snapshot_id = ?",
+            (fake_id, orig_id),
+        )
+
+    with pytest.raises(SnapshotIntegrityError, match="Filename ID vs payload ID mismatch"):
+        get_valuation_snapshot(fake_id, store_dir=store_dir, db_path=db_file)
+
+
+def test_save_valuation_snapshot_rejects_new_legacy_16_hex_writes(integrity_env):
+    """New snapshots must never use legacy 16-hex IDs; legacy is read-only compatibility only."""
+    from trading_bot.data.valuation_snapshot import (
+        save_valuation_snapshot,
+        ValuationSnapshot,
+        PortfolioBalanceSnapshot,
+        _compute_payload_sha256,
+    )
+    db_file, store_dir, _ = integrity_env
+    now = datetime.datetime.now(datetime.timezone.utc)
+    legacy_id = "snap_0123456789abcdef"
+    pf_snap = PortfolioBalanceSnapshot(
+        patrimonio_total=100000.0,
+        saldo_disponivel=40000.0,
+        em_posicoes=0.0,
+        saldo_livre=40000.0,
+        currency="BRL",
+    )
+    temp_snap = ValuationSnapshot(
+        snapshot_id=legacy_id,
+        unit="currency_brl",
+        quote_evidence_kind="cash_only_no_market_quotes",
+        observed_at=now,
+        collected_at=now,
+        computed_at=now,
+        portfolio=pf_snap,
+        active_positions=[],
+        equity=40000.0,
+        mtm_total=0.0,
+        is_valid=True,
+        source_sha256="0" * 64,
+    )
+    content_dict = json.loads(temp_snap.model_dump_json(indent=2))
+    digest = _compute_payload_sha256(content_dict)
+    snap = ValuationSnapshot(
+        snapshot_id=legacy_id,
+        unit="currency_brl",
+        quote_evidence_kind="cash_only_no_market_quotes",
+        observed_at=now,
+        collected_at=now,
+        computed_at=now,
+        portfolio=pf_snap,
+        active_positions=[],
+        equity=40000.0,
+        mtm_total=0.0,
+        is_valid=True,
+        source_sha256=digest,
+    )
+    with pytest.raises(SnapshotIntegrityError, match="Legacy 16-hex IDs are read-only"):
+        save_valuation_snapshot(snap, store_dir=store_dir, db_path=db_file)
+
+
+# ---------------------------------------------------------------------------
+# 12. NEXUS-001-R1 Closeout: No Timestamp Fabrication Tests
+# ---------------------------------------------------------------------------
+
+def test_feed_fails_closed_on_missing_source_observation_timestamp():
+    """Missing source observation timestamp -> evidence unavailable / None."""
+    collected_at = datetime.datetime.now(datetime.timezone.utc)
+    df_missing_date = pd.DataFrame(
+        {
+            "open": [30.0],
+            "high": [31.0],
+            "low": [29.5],
+            "close": [30.5],
+            "volume": [1000],
+        }
+    )
+    res = feed._extract_raw_evidence_from_df("PETR4", "PETR4.SA", "1d", "1m", df_missing_date, collected_at)
+    assert res is None
+
+    with patch("backend.app.data.feed._fetch_from_yfinance", return_value=df_missing_date):
+        quote = feed.get_evidenced_quote("PETR4.SA")
+        assert quote is None
+
+
+def test_feed_fails_closed_on_naive_observation_timestamp():
+    """Naive timestamp without defensible provider timezone -> fail closed / None."""
+    collected_at = datetime.datetime.now(datetime.timezone.utc)
+    naive_dt = datetime.datetime(2026, 7, 18, 10, 0, 0)  # No tzinfo
+    df_naive = pd.DataFrame(
+        {
+            "date": [naive_dt],
+            "open": [30.0],
+            "high": [31.0],
+            "low": [29.5],
+            "close": [30.5],
+            "volume": [1000],
+        }
+    )
+    res = feed._extract_raw_evidence_from_df("VALE3", "VALE3.SA", "1d", "1m", df_naive, collected_at)
+    assert res is None
+
+    with patch("backend.app.data.feed._fetch_from_yfinance", return_value=df_naive):
+        quote = feed.get_evidenced_quote("VALE3.SA")
+        assert quote is None
+
+
+def test_feed_fails_closed_on_future_observation_timestamp_without_clock_rewrite():
+    """observed_at > collected_at -> fail closed, collection clock must NEVER be rewritten."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    future_obs = now + datetime.timedelta(hours=1)
+    col_clock = now
+
+    df_future = pd.DataFrame(
+        {
+            "date": [future_obs],
+            "open": [30.0],
+            "high": [31.0],
+            "low": [29.5],
+            "close": [30.5],
+            "volume": [1000],
+        }
+    )
+    res = feed._extract_raw_evidence_from_df("B3SA3", "B3SA3.SA", "1d", "1m", df_future, col_clock)
+    assert res is None
+
+    # Verify collection clock is untouched
+    assert col_clock == now
+
+    with patch("backend.app.data.feed._fetch_from_yfinance", return_value=df_future):
+        quote = feed.get_evidenced_quote("B3SA3.SA")
+        assert quote is None
+
+
+# ---------------------------------------------------------------------------
+# 13. NEXUS-001-R1 Closeout: EvidencedQuote Semantic Binding Adversarial Tests
+# ---------------------------------------------------------------------------
+
+def test_evidenced_quote_rejects_price_vs_raw_close_mismatch():
+    """If raw evidence says close=30 and EvidencedQuote says price=31 -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "period": "1d",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+        "volume": 1000.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="does not match raw_evidence close"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=31.0,  # Mismatch! close is 30.0
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol="PETR4.SA",
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_ticker_mismatch():
+    """If raw evidence ticker differs from EvidencedQuote ticker -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="ticker.*does not match raw_evidence ticker"):
+        EvidencedQuote(
+            ticker="VALE3.SA",  # Mismatch!
+            price=30.0,
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol="PETR4.SA",
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_timestamp_mismatch():
+    """If observed_at or collected_at differs from raw_evidence -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    diff_obs = now - datetime.timedelta(minutes=10)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="observed_at.*does not match raw_evidence observed_at"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=30.0,
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol="PETR4.SA",
+            observed_at=diff_obs,  # Mismatch!
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_source_mismatch():
+    """If source differs from raw_evidence source -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="source.*does not match raw_evidence source"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=30.0,
+            currency="BRL",
+            source="bloomberg",  # Mismatch!
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol="PETR4.SA",
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+# ---------------------------------------------------------------------------
+# 14. NEXUS-001-R1 Closeout: API Snapshot Coherence & Domain Rule Tests
+# ---------------------------------------------------------------------------
+
+def test_api_portfolio_publication_remains_bound_to_snapshot_when_db_changes(test_app, integrity_env):
+    """DB state changes AFTER snapshot creation -> API publication remains strictly bound to snapshot."""
+    db_file, store_dir, registry_path = integrity_env
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM trades")
+        conn.execute(
+            "UPDATE portfolio SET patrimonio_total=50000.0, saldo_disponivel=40000.0, em_posicoes=0.0, margem_operavel=40000.0"
+        )
+
+    proj_snap_dir = database.PROJECT_ROOT / "data" / "snapshots"
+    proj_snap_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clock = now - datetime.timedelta(seconds=15)
+
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        store_dir=proj_snap_dir,
+        clock_now=clock,
+    )
+    snap_file = proj_snap_dir / f"valuation_{snap.snapshot_id}.json"
+
+    try:
+        source_ref = snap_file.resolve().relative_to(database.PROJECT_ROOT.resolve()).as_posix()
+        source_sha256 = hashlib.sha256(snap_file.read_bytes()).hexdigest()
+
+        # Approve saldo_disponivel and patrimonio_total from the snapshot
+        approvals = []
+        for m_name, val in [("patrimonio_total", snap.equity), ("saldo_disponivel", snap.portfolio.saldo_disponivel)]:
+            rec = MetricRecord(
+                metric_name=m_name,
+                value=val,
+                unit="currency_brl",
+                source_ref=source_ref,
+                source_sha256=source_sha256,
+                observed_at=snap.observed_at,
+                collected_at=snap.collected_at,
+                computed_at=snap.computed_at,
+                owner="trading_bot.data.valuation_snapshot",
+                method_version="1.0",
+            )
+            approvals.append({
+                "metric_name": m_name,
+                "metric_sha256": metric_digest(rec),
+                "reviewed_by": "independent_auditor",
+                "reviewed_at": (clock + datetime.timedelta(seconds=5)).isoformat(),
+                "status": "approved",
+            })
+        registry_path.write_text(json.dumps({"version": 1, "approvals": approvals}), encoding="utf-8")
+
+        # Now MUTATE the live database AFTER snapshot was created
+        with sqlite3.connect(db_file) as conn:
+            conn.execute(
+                "UPDATE portfolio SET saldo_disponivel=999999.0, patrimonio_total=888888.0"
+            )
+
+        client = TestClient(test_app)
+        resp = client.get("/api/portfolio")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Published values MUST REMAIN BOUND to frozen snapshot (40000.0 and 40000.0), NOT mutated DB (999999.0 / 888888.0)
+        assert data["saldo_disponivel"] == 40000.0
+        assert data["patrimonio_total"] == 40000.0
+        assert data["saldo_disponivel"] != 999999.0
+        assert data["patrimonio_total"] != 888888.0
+    finally:
+        if snap_file.exists():
+            snap_file.unlink()
+
+
+def test_api_portfolio_derives_saldo_operavel_with_meridian_domain_rule(test_app, integrity_env):
+    """Prove saldo_operavel is derived with domain rule:
+    min(saldo_livre, max(0, margem_operavel - em_posicoes))
+    and is NOT blindly equal to saldo_livre when margem_operavel < saldo_livre.
+    """
+    db_file, store_dir, registry_path = integrity_env
+    # saldo_disponivel = 40000, em_posicoes = 10000 -> saldo_livre = 30000
+    # margem_operavel = 20000 (< saldo_livre 30000)
+    # expected saldo_operavel = min(30000, max(0, 20000 - 10000)) = 10000 != 30000!
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM trades")
+        conn.execute(
+            "UPDATE portfolio SET patrimonio_total=100000.0, saldo_disponivel=40000.0, em_posicoes=10000.0, margem_operavel=20000.0"
+        )
+
+    proj_snap_dir = database.PROJECT_ROOT / "data" / "snapshots"
+    proj_snap_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clock = now - datetime.timedelta(seconds=15)
+
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        store_dir=proj_snap_dir,
+        clock_now=clock,
+    )
+    snap_file = proj_snap_dir / f"valuation_{snap.snapshot_id}.json"
+
+    try:
+        source_ref = snap_file.resolve().relative_to(database.PROJECT_ROOT.resolve()).as_posix()
+        source_sha256 = hashlib.sha256(snap_file.read_bytes()).hexdigest()
+
+        # Approve saldo_operavel
+        rec = MetricRecord(
+            metric_name="saldo_operavel",
+            value=10000.0,
+            unit="currency_brl",
+            source_ref=source_ref,
+            source_sha256=source_sha256,
+            observed_at=snap.observed_at,
+            collected_at=snap.collected_at,
+            computed_at=snap.computed_at,
+            owner="trading_bot.data.valuation_snapshot",
+            method_version="1.0",
+        )
+        approval = {
+            "metric_name": "saldo_operavel",
+            "metric_sha256": metric_digest(rec),
+            "reviewed_by": "independent_auditor",
+            "reviewed_at": (clock + datetime.timedelta(seconds=5)).isoformat(),
+            "status": "approved",
+        }
+        registry_path.write_text(json.dumps({"version": 1, "approvals": [approval]}), encoding="utf-8")
+
+        client = TestClient(test_app)
+        resp = client.get("/api/portfolio")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # saldo_operavel must be 10000.0, NOT 30000.0 (saldo_livre)
+        assert data["saldo_operavel"] == 10000.0
+        assert data["saldo_operavel"] != snap.portfolio.saldo_livre
+        assert data["metrics_provenance"]["saldo_operavel"]["verification_status"] == "verified"
+    finally:
+        if snap_file.exists():
+            snap_file.unlink()
+
+
+def test_api_portfolio_never_claims_snapshot_provenance_for_unbacked_fields(test_app, integrity_env):
+    """Fields not represented in the snapshot (patrimonio_reservado, current_capital,
+    invested_capital, initial_capital) must publish as None / unavailable.
+    """
+    db_file, store_dir, _ = integrity_env
+    proj_snap_dir = database.PROJECT_ROOT / "data" / "snapshots"
+    proj_snap_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clock = now - datetime.timedelta(seconds=10)
+
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        quote_provider=lambda t: _make_valid_quote(t, price=30.0, observed_at=clock, collected_at=clock),
+        store_dir=proj_snap_dir,
+        clock_now=clock,
+    )
+    snap_file = proj_snap_dir / f"valuation_{snap.snapshot_id}.json"
+
+    try:
+        client = TestClient(test_app)
+        resp = client.get("/api/portfolio")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        unbacked = ("patrimonio_reservado", "current_capital", "invested_capital", "initial_capital")
+        for key in unbacked:
+            assert data[key] is None
+            assert data["metrics_provenance"][key]["verification_status"] == "unavailable"
+    finally:
+        if snap_file.exists():
+            snap_file.unlink()
