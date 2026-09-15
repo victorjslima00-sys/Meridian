@@ -679,6 +679,23 @@ def test_broker_boundary_structural_isolation():
     for mod in feed_imports:
         assert "broker" not in mod, f"Unexpected broker import in feed.py: {mod}"
 
+    # Check main.py AST
+    main_path = database.PROJECT_ROOT / "backend" / "app" / "main.py"
+    main_tree = ast.parse(main_path.read_text(encoding="utf-8"))
+    main_imports = []
+    for node in ast.walk(main_tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                main_imports.append(n.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                main_imports.append(node.module)
+
+    for mod in main_imports:
+        # main.py must not import live broker implementations (broker_cedro, executor, etc.)
+        assert "broker_cedro" not in mod, f"Unexpected live broker import in main.py: {mod}"
+        assert "trading_bot.broker" not in mod, f"Unexpected broker import in main.py: {mod}"
+
 
 # ---------------------------------------------------------------------------
 # 10. Additional Edge Case Verifications & Regressions
@@ -1334,6 +1351,163 @@ def test_evidenced_quote_rejects_source_mismatch():
             source_ref="yfinance://PETR4.SA",
             source_sha256=sha,
             raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_price_kind_mismatch():
+    """If price_kind differs from raw_evidence price_kind -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="price_kind.*does not match raw_evidence price_kind"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=30.0,
+            currency="BRL",
+            source="yfinance",
+            price_kind="tick",  # Mismatch!
+            interval="1m",
+            vendor_symbol="PETR4.SA",
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_missing_price_kind_in_raw():
+    """If raw_evidence is missing price_kind -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="price_kind.*does not match raw_evidence price_kind"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=30.0,
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol="PETR4.SA",
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_interval_mismatch():
+    """If interval differs from raw_evidence interval -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="interval.*does not match raw_evidence interval"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=30.0,
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="5m",  # Mismatch!
+            vendor_symbol="PETR4.SA",
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_evidenced_quote_rejects_vendor_symbol_mismatch():
+    """If vendor_symbol differs from raw_evidence vendor_symbol -> REJECT."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    raw = {
+        "ticker": "PETR4.SA",
+        "vendor_symbol": "PETR4.SA",
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "close": 30.0,
+    }
+    sha = compute_evidence_sha256(raw)
+
+    with pytest.raises(ValidationError, match="vendor_symbol.*does not match raw_evidence vendor_symbol"):
+        EvidencedQuote(
+            ticker="PETR4.SA",
+            price=30.0,
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol="PETR3.SA",  # Mismatch!
+            observed_at=now,
+            collected_at=now,
+            source_ref="yfinance://PETR4.SA",
+            source_sha256=sha,
+            raw_evidence=raw,
+        )
+
+
+def test_valuation_snapshot_rejects_invalid_intermediate_hex_id_length():
+    """Snapshot ID must strictly be 16-hex (legacy) or 64-hex (full-SHA). Intermediate lengths are invalid."""
+    from trading_bot.data.valuation_snapshot import ValuationSnapshot, PortfolioBalanceSnapshot
+    now = datetime.datetime.now(datetime.timezone.utc)
+    pf_snap = PortfolioBalanceSnapshot(
+        patrimonio_total=100000.0,
+        saldo_disponivel=40000.0,
+        em_posicoes=0.0,
+        saldo_livre=40000.0,
+        currency="BRL",
+    )
+    # 32-hex chars snapshot ID (snap_ + 32 chars = 37 chars)
+    invalid_id = "snap_" + "a" * 32
+    with pytest.raises(ValidationError):
+        ValuationSnapshot(
+            snapshot_id=invalid_id,
+            unit="currency_brl",
+            quote_evidence_kind="cash_only_no_market_quotes",
+            observed_at=now,
+            collected_at=now,
+            computed_at=now,
+            portfolio=pf_snap,
+            active_positions=[],
+            equity=40000.0,
+            mtm_total=0.0,
+            is_valid=True,
+            source_sha256="a" * 64,
         )
 
 

@@ -135,21 +135,25 @@ class EvidencedQuote(BaseModel):
 
         # 4. price_kind
         raw_price_kind = raw.get("price_kind")
-        if raw_price_kind is not None and str(raw_price_kind) != self.price_kind:
+        if raw_price_kind is None or str(raw_price_kind) != self.price_kind:
             raise ValueError(
                 f"EvidencedQuote price_kind '{self.price_kind}' does not match raw_evidence price_kind '{raw_price_kind}'"
             )
 
         # 5. interval
         raw_interval = raw.get("interval")
-        if raw_interval is not None and self.interval is not None and str(raw_interval) != str(self.interval):
+        raw_interval_str = str(raw_interval) if raw_interval is not None else None
+        quote_interval_str = str(self.interval) if self.interval is not None else None
+        if raw_interval_str != quote_interval_str:
             raise ValueError(
                 f"EvidencedQuote interval '{self.interval}' does not match raw_evidence interval '{raw_interval}'"
             )
 
         # 6. vendor_symbol
         raw_vendor_symbol = raw.get("vendor_symbol")
-        if raw_vendor_symbol is not None and self.vendor_symbol is not None and str(raw_vendor_symbol) != str(self.vendor_symbol):
+        raw_vendor_str = str(raw_vendor_symbol) if raw_vendor_symbol is not None else None
+        quote_vendor_str = str(self.vendor_symbol) if self.vendor_symbol is not None else None
+        if raw_vendor_str != quote_vendor_str:
             raise ValueError(
                 f"EvidencedQuote vendor_symbol '{self.vendor_symbol}' does not match raw_evidence vendor_symbol '{raw_vendor_symbol}'"
             )
@@ -222,7 +226,7 @@ class PortfolioBalanceSnapshot(BaseModel):
 class ValuationSnapshot(BaseModel):
     """Immutable valuation snapshot with cryptographic integrity binding."""
     model_config = ConfigDict(strict=True, extra="forbid")
-    snapshot_id: str = Field(pattern=r"^snap_[0-9a-f]{16,64}$")
+    snapshot_id: str = Field(pattern=r"^snap_([0-9a-f]{16}|[0-9a-f]{64})$")
     unit: str = Field(default="currency_brl")
     quote_evidence_kind: Literal["market_quotes", "cash_only_no_market_quotes"] = "cash_only_no_market_quotes"
     observed_at: datetime
@@ -244,7 +248,8 @@ class ValuationSnapshot(BaseModel):
             object.__setattr__(self, "quote_evidence_kind", "market_quotes")
 
         # Full-SHA snapshots enforce snapshot_id == f"snap_{source_sha256}"
-        if len(self.snapshot_id) == 69:
+        is_legacy = len(self.snapshot_id) == 21
+        if not is_legacy:
             expected_id = f"snap_{self.source_sha256}"
             if self.snapshot_id != expected_id:
                 raise ValueError(
