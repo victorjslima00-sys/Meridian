@@ -2,10 +2,13 @@ import time
 import logging
 import threading
 from collections import OrderedDict
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 import yfinance as yf
 import pandas as pd
+
+from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ PRICE_CACHE_TTL_SECONDS = 15    # tests podem monkeypatchar
 PRICE_CACHE_MAX_ENTRIES = 200   # ~50 tickers × combinações (period, interval) usadas no código
 
 _cache_meta_lock = threading.Lock()
-_cache: "OrderedDict[Tuple[str, str, str], Tuple[float, pd.DataFrame]]" = OrderedDict()
+_cache: "OrderedDict[Tuple[str, str, str], Tuple[float, pd.DataFrame, datetime, dict, str, str]]" = OrderedDict()
 _key_locks: dict = {}
 
 
@@ -75,28 +78,117 @@ def _cache_get(key: Tuple[str, str, str], ttl: float) -> Optional[pd.DataFrame]:
         entry = _cache.get(key)
         if entry is None:
             return None
-        fetched_at, df = entry
+        fetched_at = entry[0]
+        df = entry[1]
         if time.monotonic() - fetched_at > ttl:
             return None
         return df.copy()
 
 
-def _cache_put(key: Tuple[str, str, str], df: pd.DataFrame) -> None:
-    """Só é chamada com um resultado BEM-SUCEDIDO — ver fetch_recent_data.
-    Uma falha nunca vira entrada de cache: se cacheássemos o "não sei",
-    um erro transitório de rede ficaria congelado até o TTL expirar,
-    quando o certo é deixar a PRÓXIMA chamada tentar de novo.
-
-    Evicção FIFO por ordem de escrita quando PRICE_CACHE_MAX_ENTRIES é
-    excedido — o universo tem ~50 tickers hoje, mas nada garante isso pra
-    sempre; sem teto, o cache cresceria sem limite se o universo mudar."""
+def _cache_get_entry(
+    key: Tuple[str, str, str], ttl: float
+) -> Optional[Tuple[pd.DataFrame, datetime, dict, str, str]]:
+    """None se não há entrada válida; caso contrário retorna tupla com cópia do df e evidências."""
     with _cache_meta_lock:
-        _cache[key] = (time.monotonic(), df.copy())
+        entry = _cache.get(key)
+        if entry is None:
+            return None
+        fetched_at, df, collected_at_utc, raw_evidence, source_sha256, source_ref = entry
+        if time.monotonic() - fetched_at > ttl:
+            return None
+        return df.copy(), collected_at_utc, raw_evidence, source_sha256, source_ref
+
+
+def _extract_raw_evidence_from_df(
+    ticker: str,
+    normalized: str,
+    period: str,
+    interval: str,
+    df: pd.DataFrame,
+    collected_at_utc: datetime,
+) -> Tuple[datetime, dict, str, str]:
+    candle = df.iloc[-1]
+    if "date" in candle:
+        date_val = candle["date"]
+    elif "datetime" in candle:
+        date_val = candle["datetime"]
+    elif "index" in candle:
+        date_val = candle["index"]
+    else:
+        date_val = collected_at_utc
+
+    if isinstance(date_val, str):
+        parsed_date = pd.to_datetime(date_val)
+    else:
+        parsed_date = date_val
+
+    if hasattr(parsed_date, "tzinfo") and parsed_date.tzinfo is not None:
+        observed_at_utc = parsed_date.astimezone(timezone.utc)
+    elif hasattr(parsed_date, "tz_localize"):
+        observed_at_utc = parsed_date.tz_localize(timezone.utc)
+    elif isinstance(parsed_date, datetime):
+        observed_at_utc = parsed_date.replace(tzinfo=timezone.utc)
+    else:
+        observed_at_utc = collected_at_utc
+
+    if observed_at_utc > collected_at_utc:
+        collected_at_utc = observed_at_utc
+
+    close_p = float(candle["close"]) if "close" in candle else 0.0
+    open_p = float(candle["open"]) if "open" in candle else None
+    high_p = float(candle["high"]) if "high" in candle else None
+    low_p = float(candle["low"]) if "low" in candle else None
+    vol = float(candle["volume"]) if "volume" in candle else None
+
+    raw_evidence = {
+        "ticker": ticker.upper(),
+        "vendor_symbol": normalized,
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": interval,
+        "period": period,
+        "observed_at": observed_at_utc.isoformat(),
+        "collected_at": collected_at_utc.isoformat(),
+        "close": close_p,
+        "open": open_p,
+        "high": high_p,
+        "low": low_p,
+        "volume": vol,
+    }
+    source_sha256 = compute_evidence_sha256(raw_evidence)
+    source_ref = f"yfinance://{normalized}?period={period}&interval={interval}&observed_at={observed_at_utc.isoformat()}"
+    return observed_at_utc, raw_evidence, source_sha256, source_ref
+
+
+def _cache_put(
+    key: Tuple[str, str, str],
+    df: pd.DataFrame,
+    collected_at_utc: Optional[datetime] = None,
+    raw_evidence: Optional[dict] = None,
+    source_sha256: Optional[str] = None,
+    source_ref: Optional[str] = None,
+) -> None:
+    """Só é chamada com um resultado BEM-SUCEDIDO — ver fetch_recent_data.
+    Preserva ou extrai a evidência criptográfica e timestamps para auditoria."""
+    ticker, period, interval = key
+    if collected_at_utc is None:
+        collected_at_utc = datetime.now(timezone.utc)
+    if (raw_evidence is None or source_sha256 is None or source_ref is None) and not df.empty:
+        _, raw_evidence, source_sha256, source_ref = _extract_raw_evidence_from_df(
+            ticker, ticker, period, interval, df, collected_at_utc
+        )
+    with _cache_meta_lock:
+        _cache[key] = (
+            time.monotonic(),
+            df.copy(),
+            collected_at_utc,
+            raw_evidence or {},
+            source_sha256 or "",
+            source_ref or "",
+        )
         _cache.move_to_end(key)
         while len(_cache) > PRICE_CACHE_MAX_ENTRIES:
             oldest_key, _ = _cache.popitem(last=False)
-            # Nunca remove um lock que está em uso (fetch em andamento para
-            # aquela chave) — só limpa locks já ociosos.
             lock = _key_locks.get(oldest_key)
             if lock is not None and not lock.locked():
                 del _key_locks[oldest_key]
@@ -227,3 +319,83 @@ def get_current_price(ticker: str) -> float:
     if df is not None and not df.empty:
         return float(df.iloc[-1]["close"])
     return 0.0
+
+
+def get_evidenced_quote(ticker: str, ttl: Optional[float] = None) -> Optional[EvidencedQuote]:
+    """Fetch recent 1m candle and construct an EvidencedQuote.
+
+    A 1m candle close is bar_close data, NOT exchange-native tick/quote data.
+    Preserves price_kind='bar_close', interval='1m', source='yfinance',
+    vendor_symbol and actual candle timestamp.
+    Preserves original collected_at and source_sha256 across cache hits.
+    """
+    normalized = _normalize_ticker(ticker)
+    key = _cache_key(normalized, "1d", "1m")
+    effective_ttl = ttl if ttl is not None else PRICE_CACHE_TTL_SECONDS
+
+    cached = _cache_get_entry(key, effective_ttl)
+    if cached is not None:
+        df, collected_at_utc, raw_evidence, source_sha256, source_ref = cached
+        if df is not None and not df.empty and raw_evidence and source_sha256:
+            observed_at = datetime.fromisoformat(raw_evidence["observed_at"])
+            return EvidencedQuote(
+                ticker=ticker.upper(),
+                price=float(df.iloc[-1]["close"]),
+                currency="BRL",
+                source="yfinance",
+                price_kind="bar_close",
+                interval="1m",
+                vendor_symbol=normalized,
+                observed_at=observed_at,
+                collected_at=collected_at_utc,
+                source_ref=source_ref,
+                source_sha256=source_sha256,
+                raw_evidence=raw_evidence,
+            )
+
+    lock = _get_key_lock(key)
+    with lock:
+        cached = _cache_get_entry(key, effective_ttl)
+        if cached is not None:
+            df, collected_at_utc, raw_evidence, source_sha256, source_ref = cached
+            if df is not None and not df.empty and raw_evidence and source_sha256:
+                observed_at = datetime.fromisoformat(raw_evidence["observed_at"])
+                return EvidencedQuote(
+                    ticker=ticker.upper(),
+                    price=float(df.iloc[-1]["close"]),
+                    currency="BRL",
+                    source="yfinance",
+                    price_kind="bar_close",
+                    interval="1m",
+                    vendor_symbol=normalized,
+                    observed_at=observed_at,
+                    collected_at=collected_at_utc,
+                    source_ref=source_ref,
+                    source_sha256=source_sha256,
+                    raw_evidence=raw_evidence,
+                )
+
+        collected_at_utc = datetime.now(timezone.utc)
+        df = _fetch_from_yfinance(normalized, "1d", "1m", max_retries=3)
+        if df is None or df.empty:
+            return None
+
+        observed_at_utc, raw_evidence, source_sha256, source_ref = _extract_raw_evidence_from_df(
+            ticker, normalized, "1d", "1m", df, collected_at_utc
+        )
+        _cache_put(key, df, collected_at_utc, raw_evidence, source_sha256, source_ref)
+
+        return EvidencedQuote(
+            ticker=ticker.upper(),
+            price=float(df.iloc[-1]["close"]),
+            currency="BRL",
+            source="yfinance",
+            price_kind="bar_close",
+            interval="1m",
+            vendor_symbol=normalized,
+            observed_at=observed_at_utc,
+            collected_at=collected_at_utc,
+            source_ref=source_ref,
+            source_sha256=source_sha256,
+            raw_evidence=raw_evidence,
+        )

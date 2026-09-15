@@ -940,7 +940,11 @@ def get_positions_route():
     from .data import database as db
     get_active_trades = db.get_active_trades
     get_closed_trades = db.get_closed_trades
-    from trading_bot.data.valuation_snapshot import get_latest_valuation_snapshot
+    from trading_bot.data.valuation_snapshot import (
+        get_latest_valuation_snapshot,
+        is_snapshot_fresh,
+        SnapshotIntegrityError,
+    )
 
     def unpublished_trade(trade):
         # Identity/status remain visible; unverified financial values do not.
@@ -951,13 +955,25 @@ def get_positions_route():
                 "reason": "immutable_trade_evidence_required"}
 
     capital = api_get_portfolio()
-    snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
+    try:
+        snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
+    except SnapshotIntegrityError:
+        snapshot = None
 
-    if capital.get("verification_status") == "verified" and snapshot and snapshot.is_valid:
-        snap_items_by_ticker = {it.ticker: it for it in snapshot.active_positions}
+    active_trades = get_active_trades()
+    active_trade_ids = [t["id"] for t in active_trades if "id" in t]
+
+    if (
+        capital.get("verification_status") == "verified"
+        and snapshot is not None
+        and snapshot.is_valid
+        and is_snapshot_fresh(snapshot, active_trade_ids)
+    ):
+        snap_items_by_trade_id = {it.trade_id: it for it in snapshot.active_positions}
         active = []
-        for t in get_active_trades():
-            item = snap_items_by_ticker.get(t.get("ticker"))
+        for t in active_trades:
+            trade_id = t.get("id")
+            item = snap_items_by_trade_id.get(trade_id)
             if item and item.current_price is not None:
                 active.append({
                     **t,
@@ -974,7 +990,7 @@ def get_positions_route():
             else:
                 active.append(unpublished_trade(t))
     else:
-        active = [unpublished_trade(t) for t in get_active_trades()]
+        active = [unpublished_trade(t) for t in active_trades]
 
     return {
         "capital": capital,
@@ -1327,15 +1343,35 @@ def api_get_portfolio():
     from trading_bot.data.valuation_snapshot import (
         get_latest_valuation_snapshot,
         create_valuation_snapshot,
+        is_snapshot_fresh,
+        SnapshotIntegrityError,
     )
+    from backend.app.data.feed import get_evidenced_quote
 
     pf = db.get_portfolio()
-    snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
-    if snapshot is None:
-        snapshot = create_valuation_snapshot(db_path=db.DB_PATH)
+    active_trades = db.get_active_trades()
+    active_trade_ids = [t["id"] for t in active_trades if "id" in t]
+
+    try:
+        snapshot = get_latest_valuation_snapshot(db_path=db.DB_PATH)
+    except SnapshotIntegrityError as e:
+        return _unavailable_portfolio_publication(pf, f"snapshot_integrity_error: {str(e)}")
+
+    if snapshot is None or not is_snapshot_fresh(snapshot, active_trade_ids):
+        try:
+            snapshot = create_valuation_snapshot(
+                db_path=db.DB_PATH,
+                quote_provider=get_evidenced_quote,
+            )
+        except SnapshotIntegrityError as e:
+            return _unavailable_portfolio_publication(pf, f"snapshot_integrity_error: {str(e)}")
 
     if not snapshot.is_valid or snapshot.equity is None:
-        reason = "feed_price_unavailable" if "feed_price_unavailable" in (snapshot.reason or "") else (snapshot.reason or "feed_price_unavailable")
+        reason = (
+            "feed_price_unavailable"
+            if "feed_price_unavailable" in (snapshot.reason or "")
+            else (snapshot.reason or "feed_price_unavailable")
+        )
         return _unavailable_portfolio_publication(pf, reason, snapshot_id=snapshot.snapshot_id)
 
     # Evaluate snapshot through deterministic provenance gate
@@ -1359,45 +1395,77 @@ def api_get_portfolio():
     import hashlib
     source_sha256 = hashlib.sha256(snapshot_path.read_bytes()).hexdigest()
 
-    payload = {
-        "metric_name": "patrimonio_total",
-        "value": snapshot.equity,
-        "unit": "currency_brl",
-        "source_ref": source_ref,
-        "source_sha256": source_sha256,
-        "observed_at": snapshot.observed_at,
-        "collected_at": snapshot.collected_at,
-        "computed_at": snapshot.computed_at,
-        "owner": "trading_bot.data.valuation_snapshot",
-        "method_version": "1.0",
+    monetary_keys = (
+        "patrimonio_total", "patrimonio_reservado", "saldo_disponivel",
+        "em_posicoes", "saldo_livre", "margem_operavel", "saldo_operavel",
+        "current_capital", "invested_capital", "initial_capital",
+    )
+
+    candidate_values = {
+        "patrimonio_total": snapshot.equity,
+        "saldo_disponivel": snapshot.portfolio.saldo_disponivel,
+        "em_posicoes": snapshot.portfolio.em_posicoes,
+        "saldo_livre": snapshot.portfolio.saldo_livre,
+        "margem_operavel": snapshot.portfolio.margem_operavel,
+        "saldo_operavel": snapshot.portfolio.saldo_livre,
+        "patrimonio_reservado": pf.get("patrimonio_reservado"),
+        "current_capital": pf.get("current_capital"),
+        "invested_capital": pf.get("invested_capital"),
+        "initial_capital": pf.get("initial_capital"),
     }
-    eval_res = prov_agent.evaluate(payload)
-    if eval_res.get("verification_status") == "verified":
-        monetary_keys = (
-            "patrimonio_total", "patrimonio_reservado", "saldo_disponivel",
-            "em_posicoes", "saldo_livre", "margem_operavel", "saldo_operavel",
-            "current_capital", "invested_capital", "initial_capital",
-        )
+
+    metrics_provenance = {}
+    published_monetary = {}
+
+    for metric_name in monetary_keys:
+        val = candidate_values.get(metric_name)
+        if val is None:
+            metrics_provenance[metric_name] = {
+                "value": None,
+                "verification_status": "unavailable",
+                "reason": "metric_value_none",
+                "snapshot_id": snapshot.snapshot_id,
+            }
+            published_monetary[metric_name] = None
+            continue
+
+        record_payload = {
+            "metric_name": metric_name,
+            "value": float(val),
+            "unit": "currency_brl",
+            "source_ref": source_ref,
+            "source_sha256": source_sha256,
+            "observed_at": snapshot.observed_at,
+            "collected_at": snapshot.collected_at,
+            "computed_at": snapshot.computed_at,
+            "owner": "trading_bot.data.valuation_snapshot",
+            "method_version": "1.0",
+        }
+        eval_res = prov_agent.evaluate(record_payload)
+        eval_res["snapshot_id"] = snapshot.snapshot_id
+        metrics_provenance[metric_name] = eval_res
+        if eval_res.get("verification_status") == "verified":
+            published_monetary[metric_name] = float(val)
+        else:
+            published_monetary[metric_name] = None
+
+    patrimonio_eval = metrics_provenance.get("patrimonio_total", {})
+    if patrimonio_eval.get("verification_status") == "verified":
         return {
             **pf,
-            "patrimonio_total": snapshot.equity,
-            "saldo_disponivel": snapshot.portfolio.saldo_disponivel,
-            "em_posicoes": snapshot.portfolio.em_posicoes,
-            "saldo_livre": snapshot.portfolio.saldo_livre,
-            "margem_operavel": snapshot.portfolio.margem_operavel,
-            "saldo_operavel": snapshot.portfolio.saldo_livre,
-            "value": snapshot.equity,
+            **published_monetary,
+            "value": published_monetary.get("patrimonio_total"),
             "verification_status": "verified",
             "reason": None,
             "snapshot_id": snapshot.snapshot_id,
             "observed_at": snapshot.observed_at.isoformat(),
             "collected_at": snapshot.collected_at.isoformat(),
             "computed_at": snapshot.computed_at.isoformat(),
-            "metrics_provenance": {key: eval_res for key in monetary_keys},
+            "metrics_provenance": metrics_provenance,
         }
 
     return _unavailable_portfolio_publication(
-        pf, "immutable_valuation_evidence_required", snapshot_id=snapshot.snapshot_id
+        pf, "independent_approval_required", snapshot_id=snapshot.snapshot_id
     )
 
 @app.get("/api/trades/active")
