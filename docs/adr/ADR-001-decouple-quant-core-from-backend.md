@@ -1,22 +1,29 @@
 # ADR-001: Desacoplamento do Núcleo Quantitativo (`trading_bot`) da Camada Web (`backend.app`)
 
-- **Status**: Proposto (Submetido para ratificação institucional)
+- **Status**: Proposto (Submetido para apreciação e ratificação institucional)
 - **Data**: 2026-09-14
-- **Autoridade Responsável**: NEXUS CSOO / ANTIGRAVITY (Engenharia de Software)
-- **Decisores**: Victor (Fundador), CEO Astra, NEXUS CSOO, Sentinel (Risco)
+- **Autoridade Proponente**: NEXUS CSOO / ANTIGRAVITY (Engenharia de Software)
+- **Decisores / Ratificadores**: Victor (Fundador), CEO Astra, NEXUS CSOO, Sentinel (Risco) [Aguardando Deliberação]
 - **Escopo**: `trading_bot/`, `backend/app/`
 - **Classificação**: Arquitetura de Software / Modularidade / Governança de Dependências
+- **Ratification**: PENDING
+- Ratification: PENDING
 
 ---
 
-## 1. Contexto e Formulação do Problema
+## 1. CURRENT STATE
 
-A especificação fundacional do projeto Meridian estabelece uma separação de responsabilidades em duas camadas primárias:
-1. **Núcleo Quantitativo e de Execução (`trading_bot/`)**: biblioteca desacoplada contendo os algoritmos de backtest, motores de sinais, avaliação temporal de modelos, circuit breakers e conectores de mercado.
+A especificação fundacional do projeto Meridian estabelece uma separação conceitual de responsabilidades em duas camadas primárias:
+1. **Núcleo Quantitativo e de Execução (`trading_bot/`)**: biblioteca contendo algoritmos de backtest, motores de sinais, avaliação temporal de modelos, circuit breakers e conectores de mercado.
 2. **Camada de Entrega e Aplicação (`backend/app/`)**: serviço web em FastAPI responsável pela exposição de rotas REST, autenticação, persistência relacional (SQLite), orquestração de workers assíncronos e supervisão operacional.
 
-### 1.1. A Inversão Empírica de Dependências
-A auditoria arquitetural realizada em setembro de 2026 (`MERIDIAN-ARCH-AUDIT-20260914-WS-D`) revelou uma quebra estrutural do princípio de inversão de dependências (Dependency Inversion Principle - DIP). Em vez de as dependências fluírem exclusivamente de fora para dentro (`backend/app` $\longrightarrow$ `trading_bot`), verificou-se a existência de **7 importações diretas e ativas** do núcleo quantitativo para o backend:
+No estado atual da base de código, as dependências não fluem exclusivamente de fora para dentro (`backend/app` $\longrightarrow$ `trading_bot`). Em vez disso, verificam-se importações ativas do núcleo quantitativo para o backend da aplicação, gerando acoplamento bidirecional.
+
+---
+
+## 2. OBSERVED EVIDENCE
+
+A auditoria arquitetural realizada em setembro de 2026 (`MERIDIAN-ARCH-AUDIT-20260914-WS-D`) identificou **7 importações diretas e ativas** do núcleo quantitativo para o backend:
 
 | Arquivo de Origem (`trading_bot/`) | Linha | Importação Detectada | Módulo de Destino (`backend/app/`) |
 | :--- | :--- | :--- | :--- |
@@ -30,15 +37,15 @@ A auditoria arquitetural realizada em setembro de 2026 (`MERIDIAN-ARCH-AUDIT-202
 
 Simultaneamente, o backend importa dezenas de símbolos essenciais de `trading_bot` (`CircuitBreaker`, `CentralCoordinator`, `TelegramNotifier`, `get_latest_valuation_snapshot`, `calculate_position_size`, `MetricProvenanceAgent`).
 
-### 1.2. Impactos Operacionais e Técnicos
+### Impactos Operacionais Diagnosticados
 1. **Acoplamento Circular e Fragilidade em Tempo de Execução**: A inicialização mútua dos módulos causa `ImportError: cannot import name ... from partially initialized module`. Para contornar essa falha, os desenvolvedores adotaram *lazy imports* (importações tardias declaradas dentro de métodos e funções, ex.: linhas 111 de `circuit_breaker.py` e `valuation_snapshot.py`).
-2. **Degradação de Performance em Loops Críticos**: As importações tardias são executadas a cada iteração de loops assíncronos (por exemplo, a cada ciclo de 5 segundos do `exit_loop`). Embora o cache interno do Python atenue o custo, a sobrecarga de resolução de escopo e verificação de dicionário permanece em caminhos críticos de latência.
-3. **Incapacidade de Distribuição Modular**: O pacote `trading_bot` não pode ser empacotado como uma biblioteca independente (ex.: `wheel` no PyPI corporativo) nem reutilizado em ambientes serverless (AWS Lambda, Google Cloud Run) sem carregar todo o framework FastAPI, Starlette e os esquemas do backend.
+2. **Degradação de Performance em Loops Críticos**: As importações tardias são executadas a cada iteração de loops assíncronos (por exemplo, a cada ciclo de 5 segundos do `exit_loop`).
+3. **Incapacidade de Distribuição Modular**: O pacote `trading_bot` não pode ser empacotado como uma biblioteca independente nem reutilizado em ambientes serverless ou pipelines locais sem carregar todo o framework FastAPI e Starlette.
 4. **Cegueira em Análise Estática**: Ferramentas de tipagem e verificação estática (`mypy`, `pyright`, `flake8`) perdem a capacidade de validar árvores de dependência completas devido a imports dinâmicos dentro do corpo de rotinas.
 
 ---
 
-## 2. Drivers de Decisão (Decision Drivers)
+## 3. DRIVERS DE DECISÃO (DECISION DRIVERS)
 
 1. **Modularidade e Reusabilidade**: `trading_bot` deve ser uma biblioteca matemática e de execução 100% autocontida, com dependências limitadas a pacotes científicos padrão (NumPy, Pandas, SciPy, Pydantic).
 2. **Eliminação de Imports Circulares**: Erradicação total de dependências cruzadas e de *lazy imports* defensivos.
@@ -47,7 +54,7 @@ Simultaneamente, o backend importa dezenas de símbolos essenciais de `trading_b
 
 ---
 
-## 3. Opções Consideradas
+## 4. OPÇÕES CONSIDERADAS
 
 ### Opção A: Manter os Lazy Imports com Documentação
 - *Vantagens*: Risco imediato zero; nenhuma alteração de código necessária.
@@ -57,20 +64,20 @@ Simultaneamente, o backend importa dezenas de símbolos essenciais de `trading_b
 - *Vantagens*: Unifica a árvore de imports sob uma raiz única.
 - *Desvantagens*: Destrói a separação arquitetural da plataforma, transformando o repositório em um monólito web acoplado, impedindo o uso do motor quantitativo em pipelines autônomos de pesquisa e HPC.
 
-### Opção C (Escolhida): Refatoração por Inversão de Controle (IoC), Extração de Interfaces e Camada de Domínio Compartilhada
+### Opção C (Recomendada): Refatoração por Inversão de Controle (IoC), Extração de Interfaces e Camada de Domínio Compartilhada
 - *Vantagens*: Resolve a causa raiz do acoplamento, viabiliza tipagem estática estrita, permite testes unitários com mocks limpos e viabiliza a publicação de `trading_bot` como pacote autônomo.
 - *Desvantagens*: Requer refatoração cuidadosa dos construtores de `CircuitBreaker`, `CentralCoordinator` e `PaperSessionRunner`.
 
 ---
 
-## 4. Decisão Arquitetural
+## 5. PROPOSAL & RECOMMENDED OPTION
 
-Adota-se a **Opção C**. Fica estabelecida a seguinte regra arquitetural inviolável:
+Recomenda-se formalmente a **Opção C**. Regra proposta para ratificação institucional:
 
-> **REGRA DE OURO ARQUITETURAL #1**:  
-> O namespace `trading_bot` **NUNCA DEVE IMPORTAR** de `backend`. Toda comunicação e provimento de serviços do backend para o núcleo quantitativo deve ocorrer através de interfaces abstratas implementadas pelo backend e injetadas no `trading_bot` via inversão de controle.
+> **REGRA ARQUITETURAL #1 (Proposta para Ratificação)**:  
+> O namespace `trading_bot` **NÃO DEVE IMPORTAR** de `backend`. Toda comunicação e provimento de serviços do backend para o núcleo quantitativo deve ocorrer através de interfaces abstratas implementadas pelo backend e injetadas no `trading_bot` via inversão de controle.
 
-### 4.1. Plano de Implementação Estrutural
+### Plano de Implementação Estrutural Proposto
 
 #### 1. Realocação de Utilitários de Domínio Neutros
 - Migrar funções temporais neutras como `now_b3()` de `backend/app/data/database.py` para `trading_bot/core/clock.py`.
@@ -114,15 +121,15 @@ Injetar o `IPriceFeed` na rotina de cálculo de valuation em vez de importar `ba
 
 ---
 
-## 5. Consequências
+## 6. CONSEQUÊNCIAS
 
-### 5.1. Consequências Positivas
+### Consequências Positivas
 - **Desacoplamento Rigoroso**: O grafo de dependências torna-se uma árvore acíclica direcionada (DAG): `backend` $\longrightarrow$ `trading_bot` $\longrightarrow$ `core/interfaces`.
 - **Eliminação de Lazy Imports**: Todas as importações voltam ao topo dos arquivos (`PEP 8`), permitindo análise estática com 100% de precisão por `flake8`, `mypy` e IDEs.
 - **Testabilidade Aprimorada**: Testes unitários do `CircuitBreaker` e `Coordinator` podem ser executados sem necessidade de banco de dados SQLite ou do framework FastAPI, reduzindo o tempo de execução da suíte de testes.
 - **Portabilidade Institucional**: `trading_bot` poderá ser compilado e distribuído em contêineres mínimos de pesquisa ou execução local (ex.: bridge com MetaTrader 5 sem overhead web).
 
-### 5.2. Consequências Negativas e Mitigações
+### Consequências Negativas e Mitigações
 - **Custo de Refatoração Inicial**: Demanda atualização dos pontos de chamada onde `CircuitBreaker` e `CentralCoordinator` são instanciados.
   - *Mitigação*: Implementar defaults opcionais retrocompatíveis com avisos de depreciação durante a fase de transição.
 - **Verbozidade de Injeção**: Exige código explícito de amarração (*wiring*) na inicialização da aplicação (`lifespan`).
@@ -130,9 +137,9 @@ Injetar o `IPriceFeed` na rotina de cálculo de valuation em vez de importar `ba
 
 ---
 
-## 6. Governança e Verificação Automatizada
+## 7. GOVERNANÇA E VERIFICAÇÃO AUTOMATIZADA
 
-Para garantir que a regra arquitetural não sofra regressão, deve ser introduzido um teste de tripwire automatizado em `tests/test_architecture_contracts.py`:
+Para garantir que a regra arquitetural não sofra regressão após ratificação, deve ser introduzido um teste de tripwire automatizado em `tests/test_architecture_contracts.py`:
 
 ```python
 import ast
@@ -153,3 +160,12 @@ def test_trading_bot_never_imports_backend():
                     violations.append(f"{py_file}:{node.lineno} imports from {node.module}")
     assert not violations, f"Regra de Inversão de Dependência violada: {violations}"
 ```
+
+---
+
+## 8. DECISION PENDING
+
+- **Status da Proposta**: PENDING
+- **Ratification**: PENDING
+- Ratification: PENDING
+- **Observação**: Este documento constitui recomendação técnica da engenharia e aguarda deliberação e ratificação institucional colegiada (Victor, Astra, Nexus, Sentinel) antes de qualquer implementação no código-fonte.

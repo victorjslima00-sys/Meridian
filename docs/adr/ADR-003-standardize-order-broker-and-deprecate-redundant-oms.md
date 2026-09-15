@@ -1,19 +1,32 @@
 # ADR-003: Padronização do Broker de Ordens e Depreciação de OMSs Redundantes
 
-- **Status**: Proposto (Submetido para ratificação institucional)
+- **Status**: Proposto (Submetido para apreciação e ratificação institucional)
 - **Data**: 2026-09-14
-- **Autoridade Responsável**: SENTINEL (Gestão de Risco) / ANTIGRAVITY (Engenharia de Execução)
-- **Decisores**: Victor (Fundador), CEO Astra, NEXUS CSOO, Sentinel, Antigravity
+- **Autoridade Proponente**: SENTINEL (Gestão de Risco) / ANTIGRAVITY (Engenharia de Execução)
+- **Decisores / Ratificadores**: Victor (Fundador), CEO Astra, NEXUS CSOO, Sentinel, Antigravity [Aguardando Deliberação]
 - **Escopo**: `backend/app/agents/executor.py`, `backend/app/markets/`, `trading_bot/broker/`, `trading_bot/execution/`
 - **Classificação**: Execução / Gestão de Ordens / Integridade Contábil
+- **Ratification**: PENDING
+- Ratification: PENDING
 
 ---
 
-## 1. Contexto e Formulação do Problema
+## 1. CURRENT STATE
 
-A execução de ordens e a reconciliação patrimonial são o núcleo crítico de qualquer plataforma quantitativa. Inconsistências nessa camada causam cálculos errôneos de patrimônio líquido (*equity*), violação de limites de risco e incapacidade de auditoria contábil.
+A execução de ordens e a reconciliação patrimonial são o núcleo crítico da plataforma Meridian. Inconsistências nessa camada causam cálculos errôneos de patrimônio líquido (*equity*), violação de limites de risco e incapacidade de auditoria contábil.
 
-A auditoria empírica de código identificou que o ecossistema Meridian acumulou **cinco modelos de ordens e abstrações de corretagem concorrentes**:
+No estado atual da base de código, o ecossistema Meridian acumulou **cinco modelos de ordens e abstrações de corretagem concorrentes**, operando de forma fragmentada:
+- `ExecutorAgent` (`backend/app/agents/executor.py`): persistência em tabela `trades` SQLite com locking imediato e gestão atômica de `portfolio`.
+- `PaperBroker` (`backend/app/markets/paper_broker.py`): implementa protocolo `Broker`, mas delega para `ExecutorAgent`.
+- `CedroBroker` (`trading_bot/broker/cedro.py`): grava em tabela isolada `paper_trades` sem debitar saldo de caixa.
+- `CedroClient` (`trading_bot/broker/cedro_client.py`): chamadas mock a URLs simuladas não autenticadas.
+- `OrderManagementSystem` (`trading_bot/execution/order_manager.py`): OMS volátil em memória (`Dict[str, Order]`) sem comunicação com banco.
+
+---
+
+## 2. OBSERVED EVIDENCE
+
+A auditoria empírica de código identificou o seguinte inventário de implementações concorrentes:
 
 | Implementação | Localização no Código | Entidade de Ordem | Mecanismo de Persistência | Impacto no Saldo (`portfolio`) | Consumidor Ativo em Produção |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,8 +36,7 @@ A auditoria empírica de código identificou que o ecossistema Meridian acumulou
 | **`CedroClient`** | `trading_bot/broker/cedro_client.py` | Objetos JSON simulados | Nenhuma (chamadas mock a URLs falsas) | Nenhum | Nenhum |
 | **`OrderManagementSystem`** | `trading_bot/execution/order_manager.py`| `@dataclass Order` com UUIDs | Memória volátil (`Dict[str, Order]`) | Nenhum | Apenas teste unitário `test_order_manager.py` |
 
-### 1.1. As Fricções Graves Decorrentes da Fragmentação
-
+### Fricções Graves Diagnosticadas Decorrentes da Fragmentação
 1. **Descompasso Contábil entre Tabelas Concorrentes**:
    - `ExecutorAgent` grava na tabela `trades` e gerencia saldos na tabela `portfolio` com garantias transacionais e índice único parcial (`idx_trades_one_active_per_ticker`).
    - `CedroBroker` grava ordens em uma tabela isolada `paper_trades` sem debitar o saldo de caixa, gerando descompasso contábil se ambos os fluxos forem acionados.
@@ -37,7 +49,7 @@ A auditoria empírica de código identificou que o ecossistema Meridian acumulou
 
 ---
 
-## 2. Drivers de Decisão (Decision Drivers)
+## 3. DRIVERS DE DECISÃO (DECISION DRIVERS)
 
 1. **Fonte Única de Verdade para Execução**: Unificar a contabilidade e a custódia de posições em um único repositório de dados com garantias ACID.
 2. **Alinhamento Contábil de Fricção Financeira**: Garantir que as simulações em Paper Trading repliquem os custos operacionais da B3 (10.0 bps) previstos nos modelos de pesquisa.
@@ -46,7 +58,7 @@ A auditoria empírica de código identificou que o ecossistema Meridian acumulou
 
 ---
 
-## 3. Opções Consideradas
+## 4. OPÇÕES CONSIDERADAS
 
 ### Opção A: Manter os Vários Brokers para "Flexibilidade"
 - *Vantagens*: Nenhum esforço imediato.
@@ -56,18 +68,18 @@ A auditoria empírica de código identificou que o ecossistema Meridian acumulou
 - *Vantagens*: Arquitetura orientada a objetos elegante com transições de estado explícitas.
 - *Desvantagens*: Perda de persistência imediata em falhas de processo; reimplementaria de forma frágil o que o SQLite com WAL já faz com atomicidade robusta.
 
-### Opção C (Escolhida): Padronização sobre Interface Canônica `IOrderBroker`, Promoção do `ExecutorAgent` e Depreciação de Módulos Órfãos
+### Opção C (Recomendada): Padronização sobre Interface Canônica `IOrderBroker`, Promoção do `ExecutorAgent` e Depreciação de Módulos Órfãos
 - *Vantagens*: Elimina código morto, consolida a persistência no SQLite já homologado, adiciona a taxa de fricção da B3 de 10 bps e estabelece um único modelo canônico de ordem.
 - *Desvantagens*: Exige atualização de testes que dependiam das tabelas legadas `paper_trades` e do OMS in-memory.
 
 ---
 
-## 4. Decisão Arquitetural
+## 5. PROPOSAL & RECOMMENDED OPTION
 
-Adota-se a **Opção C**. Fica estabelecida a padronização formal da camada de corretagem e execução:
+Recomenda-se formalmente a **Opção C**: Proposta para padronização da camada de corretagem e execução:
 
-### 4.1. Definição do Contrato Canônico `IOrderBroker`
-Em `trading_bot/core/interfaces.py` (ou `trading_bot/broker/canonical.py`), estabelece-se o contrato formal de corretagem:
+### 5.1. Definição Proposta do Contrato Canônico `IOrderBroker`
+Em `trading_bot/core/interfaces.py` (ou `trading_bot/broker/canonical.py`), propõe-se estabelecer o contrato formal de corretagem:
 
 ```python
 from typing import Protocol, Optional, Dict, Any, List
@@ -106,22 +118,22 @@ class IOrderBroker(Protocol):
     def get_cash_balance(self) -> float: ...
 ```
 
-### 4.2. Promoção do `ExecutorAgent` como Engine Canônica
-O `ExecutorAgent` (`backend/app/agents/executor.py`) é ratificado como a implementação de referência para Paper Trading, operando sobre o SQLite com locking imediato e WAL. O `PaperBroker` (`backend/app/markets/paper_broker.py`) será atualizado para aderir estritamente a `IOrderBroker`, atuando como fachada padronizada.
+### 5.2. Promoção Proposta do `ExecutorAgent` como Engine Canônica
+O `ExecutorAgent` (`backend/app/agents/executor.py`) é proposto como implementação de referência para Paper Trading, operando sobre o SQLite com locking imediato e WAL. O `PaperBroker` (`backend/app/markets/paper_broker.py`) será atualizado para aderir estritamente a `IOrderBroker`, atuando como fachada padronizada.
 
-### 4.3. Descomissionamento dos Módulos Legados
+### 5.3. Descomissionamento Proposto dos Módulos Legados
 1. Marcar como `@deprecated` e remover o agendamento do script `scripts/fase2_paper_trading.py`.
 2. Remover a tabela isolada `paper_trades` das migrações do banco.
 3. Descomissionar `trading_bot/broker/cedro.py`, `trading_bot/broker/cedro_client.py` e os mocks não autenticados.
 4. Refatorar `trading_bot/execution/order_manager.py` para armazenar ordens na tabela SQLite permanente ou consolidar sua máquina de estados dentro de `ExecutorAgent`.
 
-### 4.4. Incorporação Obrigatória de Custos da B3 no PnL
-Modificar a rotina de encerramento de operações em `backend/app/agents/executor.py:168`:
+### 5.4. Incorporação Obrigatória de Custos da B3 no PnL
+Proposta de modificação da rotina de encerramento de operações em `backend/app/agents/executor.py:168`:
 ```python
 # Fórmula anterior (PnL Bruto irrealista):
 # pnl_pct = ((current_price - entry_price) / entry_price) * 100
 
-# Nova Fórmula Oficial (PnL Líquido com Fricção Institucional):
+# Nova Fórmula Oficial Proposta (PnL Líquido com Fricção Institucional):
 B3_FRICTION_RATE = 0.0010  # 10.0 bps (emolumentos B3 + liquidação CBLC)
 gross_pnl_pct = ((current_price - entry_price) / entry_price)
 net_pnl_pct = (gross_pnl_pct - (2 * B3_FRICTION_RATE)) * 100
@@ -130,21 +142,30 @@ pnl_reais = (current_price - entry_price) * shares - (entry_price * shares * B3_
 
 ---
 
-## 5. Consequências
+## 6. CONSEQUÊNCIAS
 
-### 5.1. Consequências Positivas
+### Consequências Positivas
 - **Alinhamento entre Pesquisa e Execução**: O resultado de rentabilidade em Paper Trading passa a refletir fielmente o que foi calibrado nos modelos walk-forward de pesquisa quantitativa.
 - **Segurança Contábil**: Fim do risco de dados órfãos na tabela `paper_trades`. Apenas uma tabela oficial (`trades`) e um registro de caixa (`portfolio`) mantêm a posição patrimonial.
 - **Rastreabilidade e Idempotência**: Cada ordem enviada possui um identificador unívoco gravado de forma durável, impedindo execuções duplicadas acidentais.
 
-### 5.2. Consequências Negativas e Mitigações
+### Consequências Negativas e Mitigações
 - **Ajuste de Testes Existentes**: Testes que esperavam PnL bruto exato precisarão ser calibrados para o PnL líquido pós-fricção de 10 bps.
   - *Mitigação*: Atualizar as fixtures de teste para verificar tanto o PnL bruto quanto o líquido de emolumentos.
 
 ---
 
-## 6. Governança e Verificação
+## 7. GOVERNANÇA E VERIFICAÇÃO (PROPOSTAS)
 
 1. Executar auditoria de esquema no banco SQLite para confirmar ausência de referências a `paper_trades`.
 2. Validar que toda execução em `ExecutorAgent` gera débito de taxas de 10.0 bps.
 3. Verificar a invariante `real_broker_calls == 0` em todas as rotas e classes de corretagem.
+
+---
+
+## 8. DECISION PENDING
+
+- **Status da Proposta**: PENDING
+- **Ratification**: PENDING
+- Ratification: PENDING
+- **Observação**: Este documento é uma proposta técnica. Nenhuma alteração em `executor.py` ou em tabelas de corretagem deve ser executada sem autorização executiva expressa e deliberação institucional dos decisores.

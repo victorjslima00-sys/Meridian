@@ -1,26 +1,31 @@
 # ADR-005: Saneamento de Configurações Fantasma e Formalização de Schemas
 
-- **Status**: Proposto (Submetido para ratificação institucional)
+- **Status**: Proposto (Submetido para apreciação e ratificação institucional)
 - **Data**: 2026-09-14
-- **Autoridade Responsável**: NEXUS CSOO / ANTIGRAVITY (Engenharia de Plataforma)
-- **Decisores**: Victor (Fundador), CEO Astra, NEXUS CSOO, Sentinel, Antigravity
+- **Autoridade Proponente**: NEXUS CSOO / ANTIGRAVITY (Engenharia de Plataforma)
+- **Decisores / Ratificadores**: Victor (Fundador), CEO Astra, NEXUS CSOO, Sentinel, Antigravity [Aguardando Deliberação]
 - **Escopo**: `config/settings.yaml`, `backend/app/runtime_config.py`, `trading_bot/core/config.py`
 - **Classificação**: Governança de Configuração / Qualidade de Software / Confiabilidade
+- **Ratification**: PENDING
+- Ratification: PENDING
 
 ---
 
-## 1. Contexto e Formulação do Problema
+## 1. CURRENT STATE
 
 Arquivos de configuração declarativos (como `config/settings.yaml`) constituem o contrato primário entre operadores de infraestrutura, gestores de risco e o código executável de uma plataforma de negociação algorítmica.
 
-A auditoria arquitetural empírica diagnosticada em setembro de 2026 identificou **duas fragilidades graves na camada de configuração do Meridian**:
+No estado atual da base de código, a auditoria arquitetural identificou descompassos significativos entre os parâmetros declarados no YAML e os parâmetros efetivamente consumidos pelo código executável do Meridian.
 
-### 1.1. Configurações Fantasma e Desconectadas
+---
+
+## 2. OBSERVED EVIDENCE
+
 Uma varredura automatizada contra todo o código-fonte identificou que pelo menos **12 chaves e blocos inteiros de configuração declarados em `config/settings.yaml` não possuem qualquer consumidor ativo**:
 
-| Chave em `config/settings.yaml` | Valor Declarado | Ocorrências no Código | Diagnóstico Empírico |
+| Chave de Configuração em `settings.yaml` | Valor Declarado | Ocorrências no Código | Diagnóstico Operacional |
 | :--- | :--- | :--- | :--- |
-| `data.brapi_base_url` | `"https://brapi.dev/api"` | 0 referências | A classe `cross_validation.py` utiliza URL codificada em string fixa. |
+| `data.brapi_base_url` | `"https://brapi.dev/api"` | 0 referências | O feed oficial utiliza exclusivamente CotaHist B3 e YFinance. Nenhuma rotina consome a API brapi. |
 | `data.rate_limit.requests_per_month` | `15000` | 0 referências | Nenhuma rotina monitora nem impõe cota mensal de chamadas. |
 | `data.rate_limit.retry_max_attempts` | `3` | 0 referências | Retries de rede não respeitam este parâmetro. |
 | `data.rate_limit.retry_backoff_seconds` | `2.0` | 0 referências | Backoff não utiliza esta variável. |
@@ -33,13 +38,13 @@ Uma varredura automatizada contra todo o código-fonte identificou que pelo meno
 | `genetic_optimizer.*` | Bloco completo | 0 referências | Não existe qualquer otimizador genético implementado no repositório. |
 | `llm.failure_policy` | `"technical_fallback"` | 1 leitura cosmética | `RuntimeConfig` valida a string, mas o runtime sempre força o fail-closed `HOLD`. |
 
-### 1.2. Riscos Operacionais das Configurações Fantasma
+### Riscos Operacionais das Configurações Fantasma
 1. **Falsa Sensação de Segurança e Controle**: Um operador que altere `data.rate_limit.requests_per_month` ou `signals.target_pct` acredita estar ajustando o comportamento do bot, quando na realidade o sistema ignora a mudança silenciosamente.
-2. **Ausência de Validação de Chaves Desconhecidas**: Erros de digitação cometidos por operadores no YAML (ex.: `max_drwdown` em vez de `max_drawdown`) não lançam exceção na inicialização; o sistema apenas adota valores default silenciosamente, o que viola o princípio *fail-fast*.
+2. **Ausência de Validação de Chaves Desconhecidas**: Erros de digitação cometidos por operadores no YAML (ex.: `max_drwdown` em vez de `max_drawdown`) não lançam exceção na inicialização; o sistema apenas adota valores default silenciosamente, violando o princípio *fail-fast*.
 
 ---
 
-## 2. Drivers de Decisão (Decision Drivers)
+## 3. DRIVERS DE DECISÃO (DECISION DRIVERS)
 
 1. **Paridade Absoluta entre Configuração e Código**: Toda chave presente em `config/settings.yaml` deve ter um consumidor ativo e testado. Toda chave órfã deve ser purgada.
 2. **Validação Estrita com Falha Rápida (*Fail-Fast*)**: A aplicação deve recusar-se a inicializar caso o arquivo de configuração contenha chaves desconhecidas (`extra="forbid"`), tipos incorretos ou valores fora dos limites prudenciais.
@@ -48,7 +53,7 @@ Uma varredura automatizada contra todo o código-fonte identificou que pelo meno
 
 ---
 
-## 3. Opções Consideradas
+## 4. OPÇÕES CONSIDERADAS
 
 ### Opção A: Manter as Chaves Órfãs para "Expansão Futura"
 - *Vantagens*: Nenhuma alteração no YAML.
@@ -58,25 +63,25 @@ Uma varredura automatizada contra todo o código-fonte identificou que pelo meno
 - *Vantagens*: Implementação rápida sem Pydantic.
 - *Desvantagens*: Não oferece coerção de tipos, mensagens de erro estruturadas nem prevenção contra injeção de parâmetros inválidos.
 
-### Opção C (Escolhida): Poda Cirúrgica de Chaves Fantasma e Formalização de Schemas Pydantic Estritos com `extra="forbid"`
+### Opção C (Recomendada): Poda Cirúrgica de Chaves Fantasma e Formalização de Schemas Pydantic Estritos com `extra="forbid"`
 - *Vantagens*: Elimina 100% dos parâmetros mortos, garante falha rápida contra erros tipográficos e centraliza a validação semântica em schemas formais.
 - *Desvantagens*: Qualquer parâmetro residual não documentado fará o boot da aplicação falhar (comportamento desejável para segurança institucional).
 
 ---
 
-## 4. Decisão Arquitetural
+## 5. PROPOSAL & RECOMMENDED OPTION
 
-Adota-se formalmente a **Opção C**. Fica estabelecida a higienização completa do ecossistema de configuração:
+Recomenda-se formalmente a **Opção C**: Proposta para higienização e formalização do ecossistema de configuração:
 
-### 4.1. Higienização de `config/settings.yaml`
-Remover sumariamente de `config/settings.yaml`:
+### 5.1. Higienização Proposta de `config/settings.yaml`
+Proposta de remoção de `config/settings.yaml`:
 - O bloco `genetic_optimizer` integralmente.
 - As chaves `rate_limit.*`, `cache_days`, `brapi_base_url` e `storage.redis_url` da seção `data`.
 - A chave `signals.target_pct` da seção `signals`.
 - A chave `confirmation_timeout_minutes` da seção `execution`.
 - O bloco `broker` contendo parâmetros legados da Cedro não consumidos.
 
-### 4.2. Formalização do Schema Pydantic com `extra="forbid"`
+### 5.2. Formalização Proposta do Schema Pydantic com `extra="forbid"`
 Unificar e estender `RuntimeConfig` (`backend/app/runtime_config.py` e `trading_bot/core/config.py`) com validação Pydantic estrita:
 
 ```python
@@ -124,26 +129,35 @@ class AppSettings(BaseModel):
         return v
 ```
 
-### 4.3. Política de Falha do LLM Formalizada
-Consolidar no schema e na lógica de negócio que a política de falha do módulo de LLM é permanentemente imutável como `failure_policy: "hold"`. O sistema recusa qualquer tentativa de configurar *fallback* permissivo até homologação expressa da diretoria executiva.
+### 5.3. Política de Falha do LLM Formalizada
+Consolidar no schema e na lógica de negócio que a política de falha do módulo de LLM é permanentemente fixada como `failure_policy: "hold"`. O sistema recusa qualquer tentativa de configurar fallback permissivo sem deliberação executiva formal.
 
 ---
 
-## 5. Consequências
+## 6. CONSEQUÊNCIAS
 
-### 5.1. Consequências Positivas
+### Consequências Positivas
 - **Fidelidade Declarativa**: O arquivo `settings.yaml` passa a refletir exatamente o que o motor de trading executa.
-- **Detecção Imediata de Erros Humanos**: Se um operador cometer um erro de digitação de parâmetro, a inicialização falhará imediatamente informando o campo exato e a linha correspondente.
-- **Limites de Risco Não Burlaríveis**: Valores extremos (como `max_daily_loss_pct: 0.99` ou `kelly_fraction: 5.0`) serão bloqueados na carga do YAML pelo Pydantic antes que qualquer worker inicie.
+- **Detecção Imediata de Erros Humanos**: Erros tipográficos em nomes de chaves lançam exceção na inicialização informando campo e linha correspondentes.
+- **Limites de Risco Não Burlaríveis**: Valores extremos (como `max_daily_loss_pct: 0.99` ou `kelly_fraction: 5.0`) são bloqueados na carga pelo Pydantic antes da inicialização de qualquer worker.
 
-### 5.2. Consequências Negativas e Mitigações
+### Consequências Negativas e Mitigações
 - **Rigidez Operacional**: Novos parâmetros não podem ser inseridos no YAML sem que o modelo Pydantic seja atualizado em código.
-  - *Mitigação*: Este é o comportamento intencional exigido para um sistema institucional de gestão de ativos financeiros.
+  - *Mitigação*: Este é o comportamento intencional exigido para integridade de ativos financeiros.
 
 ---
 
-## 6. Governança e Verificação
+## 7. GOVERNANÇA E VERIFICAÇÃO (PROPOSTAS)
 
-1. Executar teste automatizado em `tests/test_settings_schema.py` validando que injetar uma chave não mapeada no YAML lança `pydantic.ValidationError`.
-2. Verificar que `config/settings.yaml` contém zero parâmetros não consumidos.
+1. Teste automatizado em `tests/test_settings_schema.py` validando que injetar uma chave não mapeada no YAML lança `pydantic.ValidationError`.
+2. Verificação de que `config/settings.yaml` contém zero parâmetros não consumidos.
 3. Testar a rejeição de limites de risco matematicamente inválidos.
+
+---
+
+## 8. DECISION PENDING
+
+- **Status da Proposta**: PENDING
+- **Ratification**: PENDING
+- Ratification: PENDING
+- **Observação**: Este documento é uma proposta técnica. A limpeza de `settings.yaml` e refatoração de schemas será executada somente após deliberação e ratificação institucional dos decisores.
