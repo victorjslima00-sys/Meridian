@@ -42,16 +42,19 @@ class RiskManager:
         ticker: str = "",
         open_tickers: List[str] = None,
     ) -> Any:  # Will return RiskDecision
-        from backend.app.agents.schemas import StrategySignal, RiskDecision
+        from backend.app.agents.contracts import RiskDecision, TypedSignal
         from datetime import datetime, timezone
-        
+
         if open_tickers is None:
             open_tickers = []
-            
+
         try:
             if isinstance(analyst_signal, dict):
-                signal = StrategySignal.model_validate(analyst_signal)
-            elif isinstance(analyst_signal, StrategySignal):
+                analyst_signal_dict = dict(analyst_signal)
+                if "ticker" not in analyst_signal_dict and ticker:
+                    analyst_signal_dict["ticker"] = ticker
+                signal = TypedSignal.model_validate(analyst_signal_dict)
+            elif isinstance(analyst_signal, TypedSignal):
                 signal = analyst_signal
             else:
                 raise ValueError("Invalid signal type")
@@ -62,7 +65,7 @@ class RiskManager:
                 reason=f"Risk Manager veto: Invalid strategy signal - {str(e)}",
                 target_price=1.0,
                 stop_loss=1.0,
-                decision_timestamp=datetime.now(timezone.utc)
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
         _ticker = signal.ticker
@@ -71,7 +74,9 @@ class RiskManager:
                 signal_id=signal.signal_id,
                 approved=False,
                 reason="Ticker mismatch",
-                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                target_price=signal.target_price,
+                stop_loss=signal.stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
         if len(open_tickers) >= self.config.max_positions:
@@ -79,15 +84,19 @@ class RiskManager:
                 signal_id=signal.signal_id,
                 approved=False,
                 reason=f"Limite de {self.config.max_positions} posições atingido.",
-                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                target_price=signal.target_price,
+                stop_loss=signal.stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
-        # Signal invariants are already validated by StrategySignal, HOLD is not allowed by it but if it was:
-        if signal.signal == "HOLD":
+        if signal.side == "HOLD":
             return RiskDecision(
                 signal_id=signal.signal_id,
-                approved=False, reason="Analyst recommends HOLD.",
-                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                approved=False,
+                reason="Analyst recommends HOLD.",
+                target_price=signal.target_price,
+                stop_loss=signal.stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
         import sys
@@ -101,15 +110,20 @@ class RiskManager:
             if not cb.can_trade():
                 return RiskDecision(
                     signal_id=signal.signal_id,
-                    approved=False, reason="Circuit Breaker ativado (proteção global acionada).",
-                    target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                    approved=False,
+                    reason="Circuit Breaker ativado (proteção global acionada).",
+                    target_price=signal.target_price,
+                    stop_loss=signal.stop_loss,
+                    decision_timestamp=datetime.now(timezone.utc),
                 )
         except Exception as e:
             return RiskDecision(
                 signal_id=signal.signal_id,
                 approved=False,
                 reason=f"Circuit Breaker indisponível ({e}) — entrada bloqueada (fail-closed).",
-                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                target_price=signal.target_price,
+                stop_loss=signal.stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
         if _ticker and self._is_correlated_with_open(_ticker, open_tickers):
@@ -122,20 +136,31 @@ class RiskManager:
                 approved=False,
                 reason=(f"Risco de correlação: {_ticker} está no mesmo grupo de correlação "
                         f"que {correlated}. Apenas 1 ativo por grupo é permitido."),
-                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                target_price=signal.target_price,
+                stop_loss=signal.stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
-        current_price = signal.current_price
+        current_price = signal.price
         target_price = signal.target_price
         stop_loss = signal.stop_loss
         confidence = signal.confidence or 50
 
-        if signal.signal == "BUY":
+        if signal.side == "BUY":
             reward = target_price - current_price
             risk = current_price - stop_loss
-        else:
+        elif signal.side == "SELL":
             reward = current_price - target_price
             risk = stop_loss - current_price
+        else:
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason=f"Unknown signal side: {signal.side}",
+                target_price=target_price,
+                stop_loss=stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
+            )
 
         win_loss_ratio = reward / risk if risk > 0 else 0
 
@@ -147,13 +172,15 @@ class RiskManager:
             max_positions=self.config.max_positions,
             current_open_count=len(open_tickers),
         )
-        
+
         if pos_size <= 0:
             return RiskDecision(
                 signal_id=signal.signal_id,
                 approved=False,
                 reason=f"Sizing veto: alocação zero (cash R$ {self.saldo_livre:.2f}, posições {len(open_tickers)}/{self.config.max_positions}).",
-                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                target_price=target_price,
+                stop_loss=stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
         return RiskDecision(
@@ -165,3 +192,4 @@ class RiskManager:
             decision_timestamp=datetime.now(timezone.utc),
             reason=f"Aprovado (Donchian). Risco:Retorno {win_loss_ratio:.2f} | Kelly {self.config.kelly_fraction} do equity. Alocando R$ {pos_size:.2f}."
         )
+

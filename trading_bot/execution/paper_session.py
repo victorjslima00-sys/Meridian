@@ -119,7 +119,7 @@ class PaperSessionJournal:
         now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         event_id = f"EVT-{self.session_id}-{self.event_counter:04d}"
 
-        canonical_payload = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        canonical_payload = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
         digest = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
 
         event = PaperSessionEvent(
@@ -168,6 +168,7 @@ class PaperSessionRunner:
         self.executor_cls = executor_cls
 
         self.journal = PaperSessionJournal(self.session_id, self.storage_dir)
+        self.executed_signals: set[str] = set()
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -242,37 +243,60 @@ class PaperSessionRunner:
 
         executor = self.executor_cls(db_path=self.db_path)
         
-        from backend.app.agents.schemas import StrategySignal
+        from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal
 
         # 2. Avaliação de Sinais e Execução
         for raw_sig in signals:
             try:
-                sig = StrategySignal.model_validate(raw_sig)
+                sig = TypedSignal.model_validate(raw_sig)
             except Exception as e:
                 self.journal.append_event(
                     event_type="ORDER_REJECTED",
                     payload={"reason": f"Contract Rejection: Invalid strategy signal - {e}"},
-                    ticker=raw_sig.get("ticker", "UNKNOWN"),
+                    ticker=raw_sig.get("ticker", "UNKNOWN") if isinstance(raw_sig, dict) else "UNKNOWN",
                 )
                 orders_rejected += 1
                 continue
 
             ticker = sig.ticker
 
-            # Idempotência de Sessão: se o ticker já foi processado nesta sessão, pula
-            # Also idempotency by signal_id
-            if sig.signal_id in getattr(self.journal, 'executed_signals', set()):
+            # Idempotência de Sessão e Banco: se o signal_id já foi executado, pula
+            if sig.signal_id in self.executed_signals:
                 orders_skipped += 1
                 self.journal.append_event(
                     event_type="ORDER_SKIPPED",
-                    payload={"reason": "already_executed_in_this_session"},
+                    payload={"reason": "already_executed_in_this_session", "signal_id": sig.signal_id},
                     ticker=ticker,
                 )
                 continue
-                
-            if not hasattr(self.journal, 'executed_signals'):
-                self.journal.executed_signals = set()
-            self.journal.executed_signals.add(sig.signal_id)
+
+            conn_check = self._get_connection()
+            try:
+                already_in_db = conn_check.execute(
+                    "SELECT 1 FROM trades WHERE signal_id = ?", (sig.signal_id,)
+                ).fetchone()
+            finally:
+                conn_check.close()
+
+            if already_in_db:
+                self.executed_signals.add(sig.signal_id)
+                orders_skipped += 1
+                self.journal.append_event(
+                    event_type="ORDER_SKIPPED",
+                    payload={"reason": "already_executed_in_db_idempotency", "signal_id": sig.signal_id},
+                    ticker=ticker,
+                )
+                continue
+
+            # HOLD signals must never create execution authority
+            if sig.side == "HOLD":
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={"reason": "HOLD_signal_not_executable", "signal_id": sig.signal_id},
+                    ticker=ticker,
+                )
+                continue
 
             # Checagem de posição ativa pré-existente no banco
             open_tickers = self.get_active_tickers()
@@ -302,14 +326,25 @@ class PaperSessionRunner:
 
             self.journal.append_event(
                 event_type="RISK_DECISION",
-                payload={"approved": decision.approved, "reason": decision.reason},
+                payload={"approved": decision.approved, "reason": decision.reason, "decision_id": decision.decision_id},
                 ticker=ticker,
             )
 
             if decision.approved:
-                # Execução via ExecutorAgent existente
-                exec_res = executor.execute_order(ticker, decision, sig)
+                intent = ApprovedExecutionIntent(
+                    signal_id=sig.signal_id,
+                    decision_id=decision.decision_id,
+                    ticker=sig.ticker,
+                    side=sig.side,
+                    entry_price=sig.price,
+                    allocated_capital=decision.allocated_capital,
+                    target_price=decision.target_price,
+                    stop_loss=decision.stop_loss,
+                    dataset_sha256=sig.dataset_sha256,
+                )
+                exec_res = executor.execute_order(intent)
                 if exec_res.get("status") == "executed":
+                    self.executed_signals.add(sig.signal_id)
                     orders_executed += 1
                     allocated = float(exec_res.get("allocated_capital", decision.allocated_capital))
                     session_allocated_capital += allocated

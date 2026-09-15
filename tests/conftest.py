@@ -71,3 +71,45 @@ def reset_worker_state():
     state.reset()
     yield
     state.reset()
+
+
+@pytest.fixture
+def mock_circuit_breaker():
+    from unittest.mock import patch
+    with patch("trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade", return_value=True):
+        yield
+
+
+
+@pytest.fixture(autouse=True)
+def mock_validate_dataset_digest(monkeypatch, request):
+    if (
+        'test_data_approval' in request.module.__name__
+        or 'test_nexus_002' in request.module.__name__
+        or 'sem_aprovacao' in request.node.name
+    ):
+        return
+    import trading_bot.data.approval
+    from trading_bot.data.approval import Approval, Evidence
+
+    def _mock_require(digest):
+        if digest == 'invalid_hash':
+            raise ValueError('data_approval_required')
+        ev = Evidence(path="dummy.csv", sha256="0" * 64)
+        return Approval(
+            dataset_sha256=digest,
+            reviewed_by="test-mock",
+            review_notes="mocked for test",
+            status="approved",
+            source=ev,
+            calendar=ev,
+            adjustments=ev,
+            point_in_time=ev,
+        )
+
+    def _mock_validate(digest):
+        _mock_require(digest)
+
+    monkeypatch.setattr(trading_bot.data.approval, 'validate_dataset_digest', _mock_validate)
+    monkeypatch.setattr(trading_bot.data.approval, 'require_dataset_approval_by_digest', _mock_require)
+

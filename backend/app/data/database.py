@@ -125,11 +125,22 @@ def init_db():
         }
         if "signal_id" not in trades_cols:
             cursor.execute("ALTER TABLE trades ADD COLUMN signal_id TEXT")
-            
+
         cursor.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_unique_signal_id "
+            "SELECT signal_id, COUNT(*) FROM trades WHERE signal_id IS NOT NULL "
+            "GROUP BY signal_id HAVING COUNT(*) > 1"
+        )
+        dups = cursor.fetchall()
+        if dups:
+            raise RuntimeError(
+                f"Startup failed: Database contains duplicate strategy signal_ids in trades: {dups}"
+            )
+
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_strategy_signal_id "
             "ON trades(signal_id) WHERE signal_id IS NOT NULL"
         )
+
 
         # 1 posição ativa por ticker (P3-A Etapa 1). Índice PARCIAL (só cobre
         # status='active'): um ticker pode ter várias linhas 'closed' no

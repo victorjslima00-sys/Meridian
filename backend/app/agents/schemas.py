@@ -93,103 +93,26 @@ class AnalystDecision(BaseModel):
             )
         return self
 
-import hashlib
-import json
-from datetime import datetime, timezone
-from pydantic import ConfigDict
+from backend.app.agents.contracts import (
+    ApprovedExecutionIntent,
+    CONTRACT_VERSION,
+    ManualExecutionIntent,
+    RiskDecision,
+    StrategySignal,
+    TypedSignal,
+    compute_decision_id,
+    compute_signal_id,
+)
 
-class StrategySignal(BaseModel):
-    """The smallest strict typed contract necessary for autonomous/strategy-generated signals."""
-    model_config = ConfigDict(strict=True, extra="forbid")
+__all__ = [
+    "AnalystDecision",
+    "TypedSignal",
+    "StrategySignal",
+    "RiskDecision",
+    "ApprovedExecutionIntent",
+    "ManualExecutionIntent",
+    "CONTRACT_VERSION",
+    "compute_signal_id",
+    "compute_decision_id",
+]
 
-    ticker: str = Field(min_length=1)
-    signal: Literal["BUY", "SELL"]
-    current_price: float = Field(gt=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
-    confidence: int | None = Field(default=None, ge=0, le=100)
-    reason: str = Field(min_length=1)
-    generated_at: datetime
-    dataset_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-    dataset_approved: bool
-
-    @property
-    def signal_id(self) -> str:
-        payload = {
-            "ticker": self.ticker,
-            "signal": self.signal,
-            "current_price": float(self.current_price),
-            "target_price": float(self.target_price),
-            "stop_loss": float(self.stop_loss),
-            "dataset_sha256": self.dataset_sha256,
-            "generated_at": self.generated_at.isoformat(),
-        }
-        encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
-
-    @model_validator(mode="after")
-    def validate_invariants(self) -> "StrategySignal":
-        if self.generated_at.tzinfo is None or self.generated_at.tzinfo.utcoffset(self.generated_at) is None:
-            raise ValueError("generated_at must be timezone-aware")
-
-        if self.signal == "BUY":
-            if not (self.stop_loss < self.current_price < self.target_price):
-                raise ValueError("BUY requires stop_loss < current_price < target_price")
-        else:  # SELL
-            if not (self.target_price < self.current_price < self.stop_loss):
-                raise ValueError("SELL requires target_price < current_price < stop_loss")
-
-        if not self.dataset_approved:
-            raise ValueError("Strategy signal dataset must be approved")
-        
-        from trading_bot.data.approval import validate_dataset_digest
-        try:
-            validate_dataset_digest(self.dataset_sha256)
-        except Exception as e:
-            raise ValueError("Invalid or unapproved dataset_sha256") from e
-
-        return self
-
-class RiskDecision(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    
-    signal_id: str
-    approved: bool
-    reason: str
-    allocated_capital: float | None = Field(default=None, ge=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
-    decision_timestamp: datetime
-
-    @model_validator(mode="after")
-    def validate_approval(self) -> "RiskDecision":
-        if self.approved and self.allocated_capital is None:
-            raise ValueError("allocated_capital must be set if approved")
-        return self
-
-    def __getitem__(self, item):
-        return getattr(self, item)
-
-class ApprovedExecutionIntent(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    
-    signal_id: str
-    risk_decision_id: str
-    ticker: str
-    side: Literal["BUY", "SELL"]
-    entry_price: float = Field(gt=0, allow_inf_nan=False)
-    allocated_capital: float = Field(gt=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
-    dataset_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
-
-class ManualExecutionIntent(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    
-    ticker: str
-    side: Literal["BUY", "SELL"]
-    entry_price: float = Field(gt=0, allow_inf_nan=False)
-    allocated_capital: float = Field(gt=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
-    reason: str

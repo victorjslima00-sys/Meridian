@@ -47,12 +47,13 @@ def dataset_digest(df, ticker):
     return hashlib.sha256(payload).hexdigest()
 
 
-def validate_dataset_digest(digest: str) -> None:
-    if not isinstance(digest, str) or len(digest) != 64 or not all(c in '0123456789abcdef' for c in digest):
-        raise ValueError("invalid_digest_format")
+def require_dataset_approval_by_digest(dataset_sha256: str) -> Approval:
+    """Exact 64-hex digest, exact one registry match, revalidated evidence hashes. Fail closed."""
+    if not isinstance(dataset_sha256, str) or len(dataset_sha256) != 64 or not all(c in '0123456789abcdef' for c in dataset_sha256):
+        raise ValueError("data_approval_required")
     try:
         registry = Registry.model_validate_json(REGISTRY.read_bytes())
-        matches = [a for a in registry.approvals if a.dataset_sha256 == digest]
+        matches = [a for a in registry.approvals if a.dataset_sha256 == dataset_sha256]
         if len(matches) != 1:
             raise ValueError('missing_or_ambiguous_approval')
         approval = matches[0]
@@ -66,13 +67,19 @@ def validate_dataset_digest(digest: str) -> None:
                 raise ValueError('evidence_outside_project')
             if hashlib.sha256(path.read_bytes()).hexdigest() != evidence.sha256:
                 raise ValueError('evidence_changed')
+        return approval
     except Exception:
         raise ValueError('data_approval_required') from None
 
-def require_data_approval(df, ticker):
+
+def validate_dataset_digest(digest: str) -> None:
+    require_dataset_approval_by_digest(digest)
+
+
+def require_data_approval(df, ticker) -> Approval:
     """No approval from dataframe attrs/kwargs; no implicit slice approvals."""
     try:
         digest = dataset_digest(df, ticker)
-        validate_dataset_digest(digest)
+        return require_dataset_approval_by_digest(digest)
     except Exception:
         raise ValueError('data_approval_required') from None
