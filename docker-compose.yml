@@ -28,15 +28,14 @@ services:
     depends_on:
       - bot
 
-  # Container 3: O Frontend React (buildado e servido via local serve)
+  # Container 3: O Frontend React (pre-built multi-stage image servida via nginx)
   frontend:
-    image: node:22-alpine
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: meridian_frontend
-    working_dir: /app
-    command: sh -c "npm ci --prefer-offline && npm run build && ./node_modules/.bin/serve -s dist -l 3000"
+    restart: unless-stopped
     ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
+      - "3000:80"
     depends_on:
       - api

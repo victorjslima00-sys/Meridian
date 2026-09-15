@@ -24,7 +24,10 @@ Write-Host "Activating virtual environment..." -ForegroundColor Yellow
 Write-Host "Upgrading pip to pinned version..." -ForegroundColor Yellow
 python -m pip install pip==25.0.1
 
-if (Test-Path "requirements.lock") {
+if (Test-Path "requirements-dev.lock") {
+    Write-Host "Installing dependencies from requirements-dev.lock..." -ForegroundColor Yellow
+    pip install -r requirements-dev.lock
+} elseif (Test-Path "requirements.lock") {
     Write-Host "Installing dependencies from requirements.lock..." -ForegroundColor Yellow
     pip install -r requirements.lock
 } else {

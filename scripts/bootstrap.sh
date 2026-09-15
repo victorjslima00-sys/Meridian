@@ -22,7 +22,10 @@ source .venv/bin/activate
 echo "Upgrading pip to pinned version..."
 python -m pip install pip==25.0.1
 
-if [ -f "requirements.lock" ]; then
+if [ -f "requirements-dev.lock" ]; then
+    echo "Installing development dependencies from requirements-dev.lock..."
+    pip install -r requirements-dev.lock
+elif [ -f "requirements.lock" ]; then
     echo "Installing locked Python dependencies from requirements.lock..."
     pip install -r requirements.lock
 else
