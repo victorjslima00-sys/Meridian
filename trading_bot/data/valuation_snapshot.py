@@ -685,11 +685,11 @@ def get_latest_valuation_snapshot(
 
     # Case 5: Both exist but identify different snapshots (partial write of a newer snapshot or conflict)
     try:
-        snap_from_file = get_valuation_snapshot(file_latest_id, store_dir=store_dir, db_path=resolved_db)
+        get_valuation_snapshot(file_latest_id, store_dir=store_dir, db_path=resolved_db)
     except SnapshotIntegrityError:
         raise
     try:
-        snap_from_db = get_valuation_snapshot(db_latest_id, store_dir=store_dir, db_path=resolved_db)
+        get_valuation_snapshot(db_latest_id, store_dir=store_dir, db_path=resolved_db)
     except SnapshotIntegrityError:
         raise
 
