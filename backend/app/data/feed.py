@@ -1,3 +1,4 @@
+import math
 import time
 import logging
 import threading
@@ -328,83 +329,45 @@ def get_evidenced_quote(ticker: str, ttl: Optional[float] = None) -> Optional[Ev
     Preserves price_kind='bar_close', interval='1m', source='yfinance',
     vendor_symbol and actual candle timestamp.
     Preserves original collected_at and source_sha256 across cache hits.
+    Fails closed cleanly (returning None) on any defect or unverified scalar price.
     """
-    current_p = get_current_price(ticker)
-    if current_p is None or current_p <= 0.0:
-        return None
-
-    normalized = _normalize_ticker(ticker)
-    key = _cache_key(normalized, "1d", "1m")
-    effective_ttl = ttl if ttl is not None else PRICE_CACHE_TTL_SECONDS
-
-    cached = _cache_get_entry(key, effective_ttl)
-    if cached is not None:
-        df, collected_at_utc, raw_evidence, source_sha256, source_ref = cached
-        if df is not None and not df.empty and raw_evidence and source_sha256:
-            observed_at = datetime.fromisoformat(raw_evidence["observed_at"])
-            return EvidencedQuote(
-                ticker=ticker.upper(),
-                price=float(df.iloc[-1]["close"]),
-                currency="BRL",
-                source="yfinance",
-                price_kind="bar_close",
-                interval="1m",
-                vendor_symbol=normalized,
-                observed_at=observed_at,
-                collected_at=collected_at_utc,
-                source_ref=source_ref,
-                source_sha256=source_sha256,
-                raw_evidence=raw_evidence,
-            )
-
-    # When get_current_price is mocked by tests without cached evidence,
-    # do not make unmocked external requests
-    if hasattr(get_current_price, "assert_called"):
-        return None
-
-    lock = _get_key_lock(key)
-    with lock:
-        cached = _cache_get_entry(key, effective_ttl)
-        if cached is not None:
-            df, collected_at_utc, raw_evidence, source_sha256, source_ref = cached
-            if df is not None and not df.empty and raw_evidence and source_sha256:
-                observed_at = datetime.fromisoformat(raw_evidence["observed_at"])
-                return EvidencedQuote(
-                    ticker=ticker.upper(),
-                    price=float(df.iloc[-1]["close"]),
-                    currency="BRL",
-                    source="yfinance",
-                    price_kind="bar_close",
-                    interval="1m",
-                    vendor_symbol=normalized,
-                    observed_at=observed_at,
-                    collected_at=collected_at_utc,
-                    source_ref=source_ref,
-                    source_sha256=source_sha256,
-                    raw_evidence=raw_evidence,
-                )
-
-        collected_at_utc = datetime.now(timezone.utc)
-        df = _fetch_from_yfinance(normalized, "1d", "1m", max_retries=3)
-        if df is None or df.empty:
+    try:
+        current_p = get_current_price(ticker)
+        if current_p is None or current_p <= 0.0:
             return None
 
-        observed_at_utc, raw_evidence, source_sha256, source_ref = _extract_raw_evidence_from_df(
-            ticker, normalized, "1d", "1m", df, collected_at_utc
-        )
-        _cache_put(key, df, collected_at_utc, raw_evidence, source_sha256, source_ref)
+        normalized = _normalize_ticker(ticker)
+        key = _cache_key(normalized, "1d", "1m")
+        effective_ttl = ttl if ttl is not None else PRICE_CACHE_TTL_SECONDS
 
+        cached = _cache_get_entry(key, effective_ttl)
+        if cached is None:
+            # When get_current_price returns a scalar without cached evidence, fail closed
+            return None
+
+        df, collected_at_utc, raw_evidence, source_sha256, source_ref = cached
+        if df is None or df.empty or not raw_evidence or not source_sha256:
+            return None
+
+        close_val = float(df.iloc[-1]["close"])
+        if math.isnan(close_val) or math.isinf(close_val) or close_val <= 0.0:
+            return None
+
+        observed_at = datetime.fromisoformat(raw_evidence["observed_at"])
         return EvidencedQuote(
             ticker=ticker.upper(),
-            price=float(df.iloc[-1]["close"]),
+            price=close_val,
             currency="BRL",
             source="yfinance",
             price_kind="bar_close",
             interval="1m",
             vendor_symbol=normalized,
-            observed_at=observed_at_utc,
+            observed_at=observed_at,
             collected_at=collected_at_utc,
             source_ref=source_ref,
             source_sha256=source_sha256,
             raw_evidence=raw_evidence,
         )
+    except Exception as e:
+        logger.warning("[%s] Failed to construct EvidencedQuote: %s", ticker, e)
+        return None

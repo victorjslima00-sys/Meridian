@@ -30,8 +30,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Configurable freshness limits.
 # Temporary Paper defaults; institutional/market policy must explicitly configure SLAs.
-PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS: float = 60.0
-PAPER_DEFAULT_MAX_SNAPSHOT_AGE_SECONDS: float = 60.0
+PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS: float = float(os.getenv("MAX_QUOTE_AGE_SECONDS", "60.0"))
+PAPER_DEFAULT_MAX_SNAPSHOT_AGE_SECONDS: float = float(os.getenv("MAX_SNAPSHOT_AGE_SECONDS", "60.0"))
 
 
 class SnapshotIntegrityError(Exception):
@@ -154,12 +154,33 @@ class ValuationSnapshot(BaseModel):
     reason: str | None = None
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @model_validator(mode="after")
+    def validate_snapshot_semantics(self) -> ValuationSnapshot:
+        # Legacy snapshots omitted quote_evidence_kind and defaulted to cash_only_no_market_quotes.
+        # If positions exist, upgrade to market_quotes.
+        if len(self.active_positions) > 0 and self.quote_evidence_kind == "cash_only_no_market_quotes":
+            object.__setattr__(self, "quote_evidence_kind", "market_quotes")
+        return self
+
 
 def _compute_payload_sha256(payload: dict) -> str:
     """Deterministic canonical JSON SHA-256 excluding self-referential hash and snapshot_id."""
     clean = {k: v for k, v in payload.items() if k not in ("source_sha256", "snapshot_id")}
     encoded = json.dumps(clean, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _resolve_target_dir(store_dir: Optional[Path], resolved_db: Path) -> Path:
+    if store_dir is not None:
+        return Path(store_dir)
+    import tempfile
+    try:
+        temp_dir = Path(tempfile.gettempdir()).resolve()
+        if resolved_db.resolve().parent == temp_dir:
+            return resolved_db.parent / f"{resolved_db.stem}_snapshots"
+    except Exception:
+        pass
+    return resolved_db.parent / "snapshots"
 
 
 def create_valuation_snapshot(
@@ -409,7 +430,8 @@ def save_valuation_snapshot(
     - Conflicting content raises SnapshotIntegrityError.
     """
     resolved_db = Path(db_path) if db_path is not None else PROJECT_ROOT / "data" / "trading_bot.db"
-    target_dir = Path(store_dir) if store_dir is not None else (resolved_db.parent / "snapshots")
+    resolved_db.parent.mkdir(parents=True, exist_ok=True)
+    target_dir = _resolve_target_dir(store_dir, resolved_db)
     target_dir.mkdir(parents=True, exist_ok=True)
     file_path = target_dir / f"valuation_{snapshot.snapshot_id}.json"
 
@@ -434,71 +456,70 @@ def save_valuation_snapshot(
         tmp_file.write_text(content, encoding="utf-8")
         tmp_file.replace(file_path)
 
-    # 2. SQLite check
-    if resolved_db.exists():
-        conn = sqlite3.connect(str(resolved_db))
-        conn.row_factory = sqlite3.Row
-        try:
-            with conn:
+    # 2. SQLite check (always ensure both stores are populated)
+    conn = sqlite3.connect(str(resolved_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS valuation_snapshots (
+                    snapshot_id  TEXT PRIMARY KEY,
+                    observed_at  TIMESTAMP,
+                    collected_at TIMESTAMP,
+                    computed_at  TIMESTAMP,
+                    equity       REAL,
+                    is_valid     INTEGER NOT NULL,
+                    reason       TEXT,
+                    payload_json TEXT NOT NULL,
+                    sha256       TEXT NOT NULL
+                )
+                """
+            )
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT payload_json, sha256 FROM valuation_snapshots WHERE snapshot_id = ?",
+                (snapshot.snapshot_id,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                db_sha = row["sha256"]
+                if db_sha != expected_sha:
+                    raise SnapshotIntegrityError(
+                        f"Snapshot database conflict for {snapshot.snapshot_id}: sha256 mismatch ({db_sha} != {expected_sha})"
+                    )
+                try:
+                    db_dict = json.loads(row["payload_json"])
+                    computed_db_sha = _compute_payload_sha256(db_dict)
+                    if computed_db_sha != expected_sha:
+                        raise SnapshotIntegrityError(
+                            f"Snapshot database row corrupted for {snapshot.snapshot_id}: payload digest mismatch"
+                        )
+                except json.JSONDecodeError as e:
+                    raise SnapshotIntegrityError(f"Corrupted SQLite payload for {snapshot.snapshot_id}: {e}")
+            else:
+                # Plain INSERT INTO; fails closed on concurrent conflicting write
                 conn.execute(
                     """
-                    CREATE TABLE IF NOT EXISTS valuation_snapshots (
-                        snapshot_id  TEXT PRIMARY KEY,
-                        observed_at  TIMESTAMP,
-                        collected_at TIMESTAMP,
-                        computed_at  TIMESTAMP,
-                        equity       REAL,
-                        is_valid     INTEGER NOT NULL,
-                        reason       TEXT,
-                        payload_json TEXT NOT NULL,
-                        sha256       TEXT NOT NULL
-                    )
-                    """
+                    INSERT INTO valuation_snapshots (
+                        snapshot_id, observed_at, collected_at, computed_at,
+                        equity, is_valid, reason, payload_json, sha256
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        snapshot.observed_at.isoformat(),
+                        snapshot.collected_at.isoformat(),
+                        snapshot.computed_at.isoformat(),
+                        snapshot.equity,
+                        1 if snapshot.is_valid else 0,
+                        snapshot.reason,
+                        content,
+                        snapshot.source_sha256,
+                    ),
                 )
-                cur = conn.cursor()
-                cur.execute(
-                    "SELECT payload_json, sha256 FROM valuation_snapshots WHERE snapshot_id = ?",
-                    (snapshot.snapshot_id,),
-                )
-                row = cur.fetchone()
-                if row is not None:
-                    db_sha = row["sha256"]
-                    if db_sha != expected_sha:
-                        raise SnapshotIntegrityError(
-                            f"Snapshot database conflict for {snapshot.snapshot_id}: sha256 mismatch ({db_sha} != {expected_sha})"
-                        )
-                    try:
-                        db_dict = json.loads(row["payload_json"])
-                        computed_db_sha = _compute_payload_sha256(db_dict)
-                        if computed_db_sha != expected_sha:
-                            raise SnapshotIntegrityError(
-                                f"Snapshot database row corrupted for {snapshot.snapshot_id}: payload digest mismatch"
-                            )
-                    except json.JSONDecodeError as e:
-                        raise SnapshotIntegrityError(f"Corrupted SQLite payload for {snapshot.snapshot_id}: {e}")
-                else:
-                    # Plain INSERT INTO; fails closed on concurrent conflicting write
-                    conn.execute(
-                        """
-                        INSERT INTO valuation_snapshots (
-                            snapshot_id, observed_at, collected_at, computed_at,
-                            equity, is_valid, reason, payload_json, sha256
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            snapshot.snapshot_id,
-                            snapshot.observed_at.isoformat(),
-                            snapshot.collected_at.isoformat(),
-                            snapshot.computed_at.isoformat(),
-                            snapshot.equity,
-                            1 if snapshot.is_valid else 0,
-                            snapshot.reason,
-                            content,
-                            snapshot.source_sha256,
-                        ),
-                    )
-        finally:
-            conn.close()
+    finally:
+        conn.close()
 
     return file_path
 
@@ -524,7 +545,7 @@ def get_valuation_snapshot(
     No silent fallback to whichever copy parses.
     """
     resolved_db = Path(db_path) if db_path is not None else PROJECT_ROOT / "data" / "trading_bot.db"
-    target_dir = Path(store_dir) if store_dir is not None else (resolved_db.parent / "snapshots")
+    target_dir = _resolve_target_dir(store_dir, resolved_db)
     file_path = target_dir / f"valuation_{snapshot_id}.json"
     if not file_path.exists() and store_dir is None:
         alt_path = PROJECT_ROOT / "data" / "snapshots" / f"valuation_{snapshot_id}.json"
@@ -613,11 +634,13 @@ def get_latest_valuation_snapshot(
 ) -> Optional[ValuationSnapshot]:
     """Retrieve the most recent valuation snapshot where both stores match.
 
-    Fails closed with SnapshotIntegrityError if the most recent snapshot has integrity defects.
+    Fails closed with SnapshotIntegrityError if the most recent snapshot has integrity defects,
+    is partially written, or if filesystem and database disagree on the latest snapshot.
     """
     resolved_db = Path(db_path) if db_path is not None else PROJECT_ROOT / "data" / "trading_bot.db"
-    target_dir = Path(store_dir) if store_dir is not None else (resolved_db.parent / "snapshots")
+    target_dir = _resolve_target_dir(store_dir, resolved_db)
 
+    db_latest_id: Optional[str] = None
     if resolved_db.exists():
         conn = sqlite3.connect(str(resolved_db))
         conn.row_factory = sqlite3.Row
@@ -630,19 +653,49 @@ def get_latest_valuation_snapshot(
                 )
                 row = cur.fetchone()
                 if row is not None:
-                    return get_valuation_snapshot(row["snapshot_id"], store_dir=store_dir, db_path=resolved_db)
-            return None
+                    db_latest_id = str(row["snapshot_id"])
         finally:
             conn.close()
 
+    file_latest_id: Optional[str] = None
     if target_dir.exists():
-        files = sorted(target_dir.glob("valuation_snap_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        files = sorted(
+            [f for f in target_dir.glob("valuation_snap_*.json") if not f.name.startswith(".tmp_")],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
         if files:
-            latest_file = files[0]
-            s_id = latest_file.stem.replace("valuation_", "")
-            return get_valuation_snapshot(s_id, store_dir=store_dir, db_path=resolved_db)
+            file_latest_id = files[0].stem.replace("valuation_", "")
 
-    return None
+    # Case 1: Neither exists
+    if db_latest_id is None and file_latest_id is None:
+        return None
+
+    # Case 2: Present in database, missing in filesystem (partial write crash window)
+    if db_latest_id is not None and file_latest_id is None:
+        return get_valuation_snapshot(db_latest_id, store_dir=store_dir, db_path=resolved_db)
+
+    # Case 3: Present in filesystem, missing in database (partial write crash window)
+    if db_latest_id is None and file_latest_id is not None:
+        return get_valuation_snapshot(file_latest_id, store_dir=store_dir, db_path=resolved_db)
+
+    # Case 4: Both exist and identify the same latest snapshot
+    if db_latest_id == file_latest_id:
+        return get_valuation_snapshot(db_latest_id, store_dir=store_dir, db_path=resolved_db)
+
+    # Case 5: Both exist but identify different snapshots (partial write of a newer snapshot or conflict)
+    try:
+        snap_from_file = get_valuation_snapshot(file_latest_id, store_dir=store_dir, db_path=resolved_db)
+    except SnapshotIntegrityError:
+        raise
+    try:
+        snap_from_db = get_valuation_snapshot(db_latest_id, store_dir=store_dir, db_path=resolved_db)
+    except SnapshotIntegrityError:
+        raise
+
+    raise SnapshotIntegrityError(
+        f"Store conflict: latest filesystem snapshot {file_latest_id} does not match latest database snapshot {db_latest_id}"
+    )
 
 
 def is_snapshot_fresh(
@@ -655,7 +708,8 @@ def is_snapshot_fresh(
     """Validate snapshot validity, age, active trade_id set, and every constituent quote age.
 
     A newly computed snapshot containing an old quote is STILL STALE.
-    For cash-only portfolios, validates validity and that active trade set remains empty.
+    Constituent quotes are checked for market quote snapshots.
+    Snapshot computed_at age is strictly validated for ALL snapshots (including cash-only).
     """
     if not snapshot.is_valid:
         return False
@@ -671,16 +725,16 @@ def is_snapshot_fresh(
     if expected_trade_ids != snapshot_trade_ids:
         return False
 
-    # For cash-only portfolios, no market quote evidence exists to expire
-    if snapshot.quote_evidence_kind == "cash_only_no_market_quotes":
-        return len(expected_trade_ids) == 0
-
-    # 1. Snapshot age for market quote snapshots
+    # 1. Snapshot computed_at age (applies to ALL snapshots, cash-only and market-quotes)
     snapshot_age = (now - snapshot.computed_at).total_seconds()
     if snapshot_age < 0 or snapshot_age > max_snapshot_age_seconds:
         return False
 
-    # 2. Constituent quotes age
+    # For cash-only portfolios, no market quote evidence exists to expire
+    if snapshot.quote_evidence_kind == "cash_only_no_market_quotes":
+        return len(expected_trade_ids) == 0
+
+    # 2. Constituent quotes age (for market quote snapshots)
     for pos in snapshot.active_positions:
         if pos.quote_observed_at is None or pos.quote_collected_at is None:
             return False

@@ -513,7 +513,7 @@ def test_independent_metric_publication_evaluates_each_monetary_field(test_app, 
     proj_snap_dir.mkdir(parents=True, exist_ok=True)
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    clock = now - datetime.timedelta(hours=2)
+    clock = now - datetime.timedelta(seconds=20)
 
     snap = create_valuation_snapshot(
         db_path=db_file,
@@ -544,7 +544,7 @@ def test_independent_metric_publication_evaluates_each_monetary_field(test_app, 
             "metric_name": "patrimonio_total",
             "metric_sha256": metric_digest(record_patrimonio),
             "reviewed_by": "independent_auditor",
-            "reviewed_at": (clock + datetime.timedelta(hours=1)).isoformat(),
+            "reviewed_at": (clock + datetime.timedelta(seconds=10)).isoformat(),
             "status": "approved",
         }
         registry_path.write_text(json.dumps({"version": 1, "approvals": [approval_patrimonio]}), encoding="utf-8")
@@ -582,7 +582,7 @@ def test_independent_metric_publication_evaluates_each_monetary_field(test_app, 
             "metric_name": "saldo_disponivel",
             "metric_sha256": metric_digest(record_saldo),
             "reviewed_by": "independent_auditor",
-            "reviewed_at": (clock + datetime.timedelta(hours=1)).isoformat(),
+            "reviewed_at": (clock + datetime.timedelta(seconds=10)).isoformat(),
             "status": "approved",
         }
         registry_path.write_text(
@@ -642,3 +642,281 @@ def test_broker_calls_remain_strictly_zero():
     broker = PaperBroker()
     assert hasattr(broker, "execute_order")
     # Invariant: No live broker integration activated, real_broker_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# 10. Additional Edge Case Verifications & Regressions
+# ---------------------------------------------------------------------------
+
+def test_cash_only_snapshot_expires_after_max_snapshot_age_seconds(integrity_env):
+    """Amendment 5 & 7: Cash-only snapshots expire when computed_at exceeds max_snapshot_age_seconds."""
+    db_file, store_dir, _ = integrity_env
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM trades")
+        conn.execute("UPDATE portfolio SET em_posicoes=0")
+
+    t0 = datetime.datetime(2026, 9, 14, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        store_dir=store_dir,
+        clock_now=t0,
+    )
+    assert snap.is_valid is True
+    assert snap.quote_evidence_kind == "cash_only_no_market_quotes"
+
+    # At t0 + 10s (<=60s) -> fresh
+    assert is_snapshot_fresh(
+        snap,
+        active_trade_ids=[],
+        clock_now=t0 + datetime.timedelta(seconds=10),
+        max_snapshot_age_seconds=60.0,
+    ) is True
+
+    # At t0 + 120s (>60s) -> STALE
+    assert is_snapshot_fresh(
+        snap,
+        active_trade_ids=[],
+        clock_now=t0 + datetime.timedelta(seconds=120),
+        max_snapshot_age_seconds=60.0,
+    ) is False
+
+
+def test_get_latest_valuation_snapshot_detects_partial_write_crash_window(integrity_env):
+    """Amendment 6: Crash window during write of newer snapshot raises SnapshotIntegrityError; no silent fallback."""
+    from trading_bot.data.valuation_snapshot import get_latest_valuation_snapshot, PositionSnapshotItem, ValuationSnapshot, _compute_payload_sha256
+
+    db_file, store_dir, _ = integrity_env
+    t1 = datetime.datetime(2026, 9, 14, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    quotes1 = {
+        "PETR4.SA": _make_valid_quote("PETR4.SA", price=32.0, observed_at=t1, collected_at=t1),
+        "VALE3.SA": _make_valid_quote("VALE3.SA", price=62.0, observed_at=t1, collected_at=t1),
+    }
+
+    # Fully written S1
+    snap1 = create_valuation_snapshot(
+        db_path=db_file,
+        quote_provider=lambda t: quotes1.get(t),
+        store_dir=store_dir,
+        clock_now=t1,
+    )
+    latest1 = get_latest_valuation_snapshot(store_dir=store_dir, db_path=db_file)
+    assert latest1 is not None
+    assert latest1.snapshot_id == snap1.snapshot_id
+
+    # Simulate S2 write: file written to disk with newer timestamp, but process crashed before SQLite insert
+    t2 = t1 + datetime.timedelta(seconds=10)
+    quotes2 = {
+        "PETR4.SA": _make_valid_quote("PETR4.SA", price=33.0, observed_at=t2, collected_at=t2),
+        "VALE3.SA": _make_valid_quote("VALE3.SA", price=63.0, observed_at=t2, collected_at=t2),
+    }
+    pos_items = [
+        PositionSnapshotItem(
+            trade_id=101, ticker="PETR4.SA", shares=100.0, entry_price=30.0, current_price=33.0,
+            alocado=3300.0, pnl_monetario=300.0, pnl_pct=10.0,
+            quote_observed_at=t2, quote_collected_at=t2, quote_source="yfinance",
+            quote_price_kind="bar_close", quote_interval="1m", quote_vendor_symbol="PETR4.SA",
+            quote_source_ref=quotes2["PETR4.SA"].source_ref,
+            quote_source_sha256=quotes2["PETR4.SA"].source_sha256,
+            quote_raw_evidence=quotes2["PETR4.SA"].raw_evidence,
+        ),
+        PositionSnapshotItem(
+            trade_id=102, ticker="VALE3.SA", shares=50.0, entry_price=60.0, current_price=63.0,
+            alocado=3150.0, pnl_monetario=150.0, pnl_pct=5.0,
+            quote_observed_at=t2, quote_collected_at=t2, quote_source="yfinance",
+            quote_price_kind="bar_close", quote_interval="1m", quote_vendor_symbol="VALE3.SA",
+            quote_source_ref=quotes2["VALE3.SA"].source_ref,
+            quote_source_sha256=quotes2["VALE3.SA"].source_sha256,
+            quote_raw_evidence=quotes2["VALE3.SA"].raw_evidence,
+        ),
+    ]
+    snap2_dummy = ValuationSnapshot(
+        snapshot_id="snap_" + "2" * 64,
+        unit="currency_brl",
+        quote_evidence_kind="market_quotes",
+        observed_at=t2,
+        collected_at=t2,
+        computed_at=t2,
+        portfolio=snap1.portfolio,
+        active_positions=pos_items,
+        equity=36450.0,
+        mtm_total=6450.0,
+        is_valid=True,
+        reason=None,
+        source_sha256="2" * 64,
+    )
+    digest2 = _compute_payload_sha256(snap2_dummy.model_dump(mode="json"))
+    snap2 = snap2_dummy.model_copy(update={
+        "snapshot_id": f"snap_{digest2}",
+        "source_sha256": digest2,
+    })
+    # Write ONLY to disk (simulating crash before DB insert)
+    file_s2 = store_dir / f"valuation_{snap2.snapshot_id}.json"
+    file_s2.write_text(snap2.model_dump_json(indent=2), encoding="utf-8")
+
+    # get_latest_valuation_snapshot must detect S2 is partially written and RAISE SnapshotIntegrityError!
+    # MUST NOT silently return S1!
+    with pytest.raises(SnapshotIntegrityError, match="present in filesystem, missing in database"):
+        get_latest_valuation_snapshot(store_dir=store_dir, db_path=db_file)
+
+
+def test_legacy_16hex_snapshot_compatibility(integrity_env):
+    """Amendment 4: Legacy identifiers (snap_<16 hex>) remain read-only compatibility data."""
+    from trading_bot.data.valuation_snapshot import _compute_payload_sha256
+
+    db_file, store_dir, _ = integrity_env
+    now = datetime.datetime(2026, 9, 10, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    partial_legacy = {
+        "unit": "currency_brl",
+        "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+        "computed_at": now.isoformat(),
+        "portfolio": {
+            "patrimonio_total": 50000.0,
+            "saldo_disponivel": 20000.0,
+            "em_posicoes": 5000.0,
+            "saldo_livre": 15000.0,
+            "margem_operavel": None,
+            "currency": "BRL",
+        },
+        "active_positions": [
+            {
+                "trade_id": 101,
+                "ticker": "PETR4.SA",
+                "shares": 100.0,
+                "entry_price": 30.0,
+                "current_price": 35.0,
+                "alocado": 3500.0,
+                "pnl_monetario": 500.0,
+                "pnl_pct": 16.67,
+            }
+        ],
+        "equity": 18500.0,
+        "mtm_total": 3500.0,
+        "is_valid": True,
+        "reason": None,
+    }
+    digest = _compute_payload_sha256(partial_legacy)
+    legacy_id = f"snap_{digest[:16]}"
+    legacy_payload = {
+        "snapshot_id": legacy_id,
+        "source_sha256": digest,
+        **partial_legacy,
+    }
+    file_path = store_dir / f"valuation_{legacy_id}.json"
+    file_content = json.dumps(legacy_payload, indent=2)
+    file_path.write_text(file_content, encoding="utf-8")
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            """
+            INSERT INTO valuation_snapshots (
+                snapshot_id, observed_at, collected_at, computed_at,
+                equity, is_valid, reason, payload_json, sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                legacy_id,
+                now.isoformat(),
+                now.isoformat(),
+                now.isoformat(),
+                18500.0,
+                1,
+                None,
+                file_content,
+                digest,
+            ),
+        )
+
+    # Must be readable via get_valuation_snapshot
+    loaded = get_valuation_snapshot(legacy_id, store_dir=store_dir, db_path=db_file)
+    assert loaded is not None
+    assert loaded.snapshot_id == legacy_id
+    assert len(loaded.snapshot_id) == 21  # "snap_" + 16 chars
+    assert loaded.quote_evidence_kind == "market_quotes"
+    assert loaded.equity == 18500.0
+
+
+def test_independent_metric_publication_when_patrimonio_unapproved_but_saldo_approved(test_app, integrity_env):
+    """Amendment 8: When saldo_disponivel is approved and patrimonio_total is unapproved,
+    saldo_disponivel publishes with its value and verified status while patrimonio_total is unavailable.
+    """
+    db_file, store_dir, registry_path = integrity_env
+    with sqlite3.connect(db_file) as conn:
+        conn.execute("DELETE FROM trades")
+        conn.execute("UPDATE portfolio SET em_posicoes=0")
+
+    proj_snap_dir = database.PROJECT_ROOT / "data" / "snapshots"
+    proj_snap_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    clock = now - datetime.timedelta(seconds=20)
+
+    snap = create_valuation_snapshot(
+        db_path=db_file,
+        store_dir=proj_snap_dir,
+        clock_now=clock,
+    )
+    snap_file = proj_snap_dir / f"valuation_{snap.snapshot_id}.json"
+
+    try:
+        client = TestClient(test_app)
+        source_ref = snap_file.resolve().relative_to(database.PROJECT_ROOT.resolve()).as_posix()
+        source_sha256 = hashlib.sha256(snap_file.read_bytes()).hexdigest()
+
+        # Approve ONLY saldo_disponivel; patrimonio_total is NOT approved
+        record_saldo = MetricRecord(
+            metric_name="saldo_disponivel",
+            value=snap.portfolio.saldo_disponivel,
+            unit="currency_brl",
+            source_ref=source_ref,
+            source_sha256=source_sha256,
+            observed_at=snap.observed_at,
+            collected_at=snap.collected_at,
+            computed_at=snap.computed_at,
+            owner="trading_bot.data.valuation_snapshot",
+            method_version="1.0",
+        )
+        approval_saldo = {
+            "metric_name": "saldo_disponivel",
+            "metric_sha256": metric_digest(record_saldo),
+            "reviewed_by": "independent_auditor",
+            "reviewed_at": (clock + datetime.timedelta(seconds=10)).isoformat(),
+            "status": "approved",
+        }
+        registry_path.write_text(json.dumps({"version": 1, "approvals": [approval_saldo]}), encoding="utf-8")
+
+        resp = client.get("/api/portfolio")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # Overall portfolio and patrimonio_total are UNAVAILABLE
+        assert data["verification_status"] == "unavailable"
+        assert data["patrimonio_total"] is None
+        assert data["value"] is None
+        assert data["metrics_provenance"]["patrimonio_total"]["verification_status"] == "unavailable"
+
+        # saldo_disponivel IS VERIFIED and published independently!
+        assert data["saldo_disponivel"] == snap.portfolio.saldo_disponivel
+        assert data["metrics_provenance"]["saldo_disponivel"]["verification_status"] == "verified"
+    finally:
+        if snap_file.exists():
+            snap_file.unlink()
+
+
+def test_get_evidenced_quote_fails_closed_on_corrupt_candle():
+    """Verify that malformed or NaN candle close fails closed cleanly returning None."""
+    t_fixed = datetime.datetime(2026, 7, 18, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    nan_df = pd.DataFrame(
+        {
+            "date": [t_fixed],
+            "open": [30.0],
+            "high": [31.0],
+            "low": [29.5],
+            "close": [float("nan")],
+            "volume": [1000],
+        }
+    )
+
+    with patch("backend.app.data.feed._fetch_from_yfinance", return_value=nan_df):
+        quote = feed.get_evidenced_quote("B3SA3.SA")
+        assert quote is None

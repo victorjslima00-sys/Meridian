@@ -1449,30 +1449,32 @@ def api_get_portfolio():
         }
         eval_res = prov_agent.evaluate(record_payload)
         eval_res["snapshot_id"] = snapshot.snapshot_id
-        metrics_provenance[metric_name] = eval_res
         if eval_res.get("verification_status") == "verified":
             published_monetary[metric_name] = float(val)
         else:
             published_monetary[metric_name] = None
+            eval_res["observed_at"] = None
+            eval_res["collected_at"] = None
+            eval_res["computed_at"] = None
+        metrics_provenance[metric_name] = eval_res
 
     patrimonio_eval = metrics_provenance.get("patrimonio_total", {})
-    if patrimonio_eval.get("verification_status") == "verified":
-        return {
-            **pf,
-            **published_monetary,
-            "value": published_monetary.get("patrimonio_total"),
-            "verification_status": "verified",
-            "reason": None,
-            "snapshot_id": snapshot.snapshot_id,
-            "observed_at": snapshot.observed_at.isoformat(),
-            "collected_at": snapshot.collected_at.isoformat(),
-            "computed_at": snapshot.computed_at.isoformat(),
-            "metrics_provenance": metrics_provenance,
-        }
+    is_patrimonio_verified = (patrimonio_eval.get("verification_status") == "verified")
+    overall_status = "verified" if is_patrimonio_verified else "unavailable"
+    overall_reason = None if is_patrimonio_verified else patrimonio_eval.get("reason", "independent_approval_required")
 
-    return _unavailable_portfolio_publication(
-        pf, "independent_approval_required", snapshot_id=snapshot.snapshot_id
-    )
+    return {
+        **pf,
+        **published_monetary,
+        "value": published_monetary.get("patrimonio_total"),
+        "verification_status": overall_status,
+        "reason": overall_reason,
+        "snapshot_id": snapshot.snapshot_id,
+        "observed_at": snapshot.observed_at.isoformat() if is_patrimonio_verified else None,
+        "collected_at": snapshot.collected_at.isoformat() if is_patrimonio_verified else None,
+        "computed_at": snapshot.computed_at.isoformat() if is_patrimonio_verified else None,
+        "metrics_provenance": metrics_provenance,
+    }
 
 @app.get("/api/trades/active")
 def api_get_active_trades():

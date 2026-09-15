@@ -181,7 +181,7 @@ def test_independent_approval_lifecycle_for_valuation_snapshot(test_app, snapsho
         conn.execute("UPDATE portfolio SET em_posicoes=0")
     quotes = {"PETR4.SA": 30.00, "VALE3.SA": 60.00}
     now = datetime.datetime.now(datetime.timezone.utc)
-    clock = now - datetime.timedelta(hours=2)
+    clock = now - datetime.timedelta(seconds=20)
 
     # Put db into project root structure for relative path verification in provenance
     proj_snap_dir = database.PROJECT_ROOT / "data" / "snapshots"
@@ -229,7 +229,7 @@ def test_independent_approval_lifecycle_for_valuation_snapshot(test_app, snapsho
                 "metric_name": "patrimonio_total",
                 "metric_sha256": metric_digest(record),
                 "reviewed_by": "independent_chief_auditor",
-                "reviewed_at": (clock + datetime.timedelta(hours=1)).isoformat(),
+                "reviewed_at": (clock + datetime.timedelta(seconds=10)).isoformat(),
                 "status": "approved",
             }
             registry_path.write_text(json.dumps({"version": 1, "approvals": [approval]}), encoding="utf-8")
