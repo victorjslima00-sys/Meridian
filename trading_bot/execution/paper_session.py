@@ -241,15 +241,27 @@ class PaperSessionRunner:
         session_realized_pnl = 0.0
 
         executor = self.executor_cls(db_path=self.db_path)
+        
+        from backend.app.agents.schemas import StrategySignal
 
         # 2. Avaliação de Sinais e Execução
-        for sig in signals:
-            ticker = sig.get("ticker", "").strip().upper()
-            if not ticker:
+        for raw_sig in signals:
+            try:
+                sig = StrategySignal.model_validate(raw_sig)
+            except Exception as e:
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={"reason": f"Contract Rejection: Invalid strategy signal - {e}"},
+                    ticker=raw_sig.get("ticker", "UNKNOWN"),
+                )
+                orders_rejected += 1
                 continue
 
+            ticker = sig.ticker
+
             # Idempotência de Sessão: se o ticker já foi processado nesta sessão, pula
-            if ticker in self.journal.executed_tickers:
+            # Also idempotency by signal_id
+            if sig.signal_id in getattr(self.journal, 'executed_signals', set()):
                 orders_skipped += 1
                 self.journal.append_event(
                     event_type="ORDER_SKIPPED",
@@ -257,6 +269,10 @@ class PaperSessionRunner:
                     ticker=ticker,
                 )
                 continue
+                
+            if not hasattr(self.journal, 'executed_signals'):
+                self.journal.executed_signals = set()
+            self.journal.executed_signals.add(sig.signal_id)
 
             # Checagem de posição ativa pré-existente no banco
             open_tickers = self.get_active_tickers()
@@ -272,7 +288,7 @@ class PaperSessionRunner:
             # Registro do sinal recebido
             self.journal.append_event(
                 event_type="SIGNAL_EVALUATED",
-                payload=sig,
+                payload=raw_sig,
                 ticker=ticker,
             )
 
@@ -286,16 +302,16 @@ class PaperSessionRunner:
 
             self.journal.append_event(
                 event_type="RISK_DECISION",
-                payload=decision,
+                payload={"approved": decision.approved, "reason": decision.reason},
                 ticker=ticker,
             )
 
-            if decision.get("approved", False):
+            if decision.approved:
                 # Execução via ExecutorAgent existente
                 exec_res = executor.execute_order(ticker, decision, sig)
                 if exec_res.get("status") == "executed":
                     orders_executed += 1
-                    allocated = float(exec_res.get("allocated_capital", decision.get("allocated_capital", 0.0)))
+                    allocated = float(exec_res.get("allocated_capital", decision.allocated_capital))
                     session_allocated_capital += allocated
                     self.journal.append_event(
                         event_type="ORDER_EXECUTED",

@@ -38,27 +38,58 @@ class RiskManager:
 
     def evaluate_trade(
         self,
-        analyst_signal: Dict[str, Any],
+        analyst_signal: Any,
         ticker: str = "",
         open_tickers: List[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Avalia o sinal do analista e decide se deve executar.
-        Inclui checagem de correlação entre ativos.
-        """
+    ) -> Any:  # Will return RiskDecision
+        from backend.app.agents.schemas import StrategySignal, RiskDecision
+        from datetime import datetime, timezone
+        
         if open_tickers is None:
             open_tickers = []
+            
+        try:
+            if isinstance(analyst_signal, dict):
+                signal = StrategySignal.model_validate(analyst_signal)
+            elif isinstance(analyst_signal, StrategySignal):
+                signal = analyst_signal
+            else:
+                raise ValueError("Invalid signal type")
+        except Exception as e:
+            return RiskDecision(
+                signal_id="invalid",
+                approved=False,
+                reason=f"Risk Manager veto: Invalid strategy signal - {str(e)}",
+                target_price=1.0,
+                stop_loss=1.0,
+                decision_timestamp=datetime.now(timezone.utc)
+            )
+
+        _ticker = signal.ticker
+        if ticker and ticker != _ticker:
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason="Ticker mismatch",
+                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+            )
 
         if len(open_tickers) >= self.config.max_positions:
-            return {
-                "approved": False,
-                "reason": f"Limite de {self.config.max_positions} posições atingido.",
-            }
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason=f"Limite de {self.config.max_positions} posições atingido.",
+                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+            )
 
-        if analyst_signal["signal"] == "HOLD":
-            return {"approved": False, "reason": "Analyst recommends HOLD."}
+        # Signal invariants are already validated by StrategySignal, HOLD is not allowed by it but if it was:
+        if signal.signal == "HOLD":
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False, reason="Analyst recommends HOLD.",
+                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+            )
 
-        # Check Global Circuit Breaker — FAIL-CLOSED: qualquer erro bloqueia a entrada
         import sys
         from pathlib import Path
         try:
@@ -68,65 +99,47 @@ class RiskManager:
             from trading_bot.risk.circuit_breaker import CircuitBreaker
             cb = CircuitBreaker.from_config()
             if not cb.can_trade():
-                return {"approved": False, "reason": "Circuit Breaker ativado (proteção global acionada)."}
+                return RiskDecision(
+                    signal_id=signal.signal_id,
+                    approved=False, reason="Circuit Breaker ativado (proteção global acionada).",
+                    target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+                )
         except Exception as e:
-            return {
-                "approved": False,
-                "reason": f"Circuit Breaker indisponível ({e}) — entrada bloqueada (fail-closed).",
-            }
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason=f"Circuit Breaker indisponível ({e}) — entrada bloqueada (fail-closed).",
+                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+            )
 
-        # GAP 3 Fix: Bloquear ativos altamente correlacionados
-        if ticker and self._is_correlated_with_open(ticker, open_tickers):
+        if _ticker and self._is_correlated_with_open(_ticker, open_tickers):
             correlated = [
-                t
-                for t in open_tickers
-                if any(t in g and ticker in g for g in CORRELATED_GROUPS)
+                t for t in open_tickers
+                if any(t in g and _ticker in g for g in CORRELATED_GROUPS)
             ]
-            return {
-                "approved": False,
-                "reason": (
-                    f"Risco de correlação: {ticker} está no mesmo grupo de correlação "
-                    f"que {correlated}. Apenas 1 ativo por grupo é permitido."
-                ),
-            }
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason=(f"Risco de correlação: {_ticker} está no mesmo grupo de correlação "
+                        f"que {correlated}. Apenas 1 ativo por grupo é permitido."),
+                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+            )
 
-        current_price = analyst_signal.get("last_price", 0.0)
-        target_price = analyst_signal.get("target_price", 0.0)
-        stop_loss = analyst_signal.get("stop_loss", 0.0)
-        confidence = analyst_signal.get("confidence", 50)
+        current_price = signal.current_price
+        target_price = signal.target_price
+        stop_loss = signal.stop_loss
+        confidence = signal.confidence or 50
 
-        if current_price <= 0 or target_price <= 0 or stop_loss <= 0:
-            return {
-                "approved": False,
-                "reason": "Risk Manager veto: Invalid price targets.",
-            }
-
-        # Calculate Reward and Risk distances. A checagem de direção
-        # inválida/alvos ilógicos que existia aqui (risk<=0 or reward<=0)
-        # foi removida (dashboard-depth Track A): AnalystDecision
-        # (backend/app/agents/schemas.py) já garante, via Pydantic, que
-        # stop_loss < preço < target_price em BUY (invertido em SELL)
-        # ANTES de qualquer sinal chegar aqui — reward e risk são
-        # matematicamente positivos por construção quando signal != HOLD.
-        if analyst_signal["signal"] == "BUY":
+        if signal.signal == "BUY":
             reward = target_price - current_price
             risk = current_price - stop_loss
-        else:  # SELL
+        else:
             reward = current_price - target_price
             risk = stop_loss - current_price
 
-        win_loss_ratio = reward / risk
+        win_loss_ratio = reward / risk if risk > 0 else 0
 
-        # Fase 1 Commit 2: DIMENSIONAMENTO alinhado ao backtest. Antes usava
-        # um Kelly derivado da CONFIANÇA (self.calculate_position_size), que
-        # NÃO é o que foi backtestado. Agora chama a MESMA função que o
-        # backtest usa (trading_bot.risk.position_sizing.calculate_position_size):
-        # Kelly FIXO (kelly_fraction), sobre o total_equity (cash + posições),
-        # com teto no cash e no número de posições. Rodar ao vivo exatamente o
-        # que foi validado, sizing incluído. win_loss_ratio segue só no texto
-        # de log (não dimensiona mais).
         from trading_bot.risk.position_sizing import calculate_position_size
-
         pos_size = calculate_position_size(
             capital_cash=self.saldo_livre,
             open_positions_capital=self.em_posicoes,
@@ -134,23 +147,21 @@ class RiskManager:
             max_positions=self.config.max_positions,
             current_open_count=len(open_tickers),
         )
+        
         if pos_size <= 0:
-            return {
-                "approved": False,
-                "reason": (
-                    f"Sizing veto: alocação zero (cash R$ {self.saldo_livre:.2f}, "
-                    f"posições {len(open_tickers)}/{self.config.max_positions})."
-                ),
-            }
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason=f"Sizing veto: alocação zero (cash R$ {self.saldo_livre:.2f}, posições {len(open_tickers)}/{self.config.max_positions}).",
+                target_price=1.0, stop_loss=1.0, decision_timestamp=datetime.now(timezone.utc)
+            )
 
-        return {
-            "approved": True,
-            "allocated_capital": pos_size,
-            "target_price": target_price,
-            "stop_loss": stop_loss,
-            "reason": (
-                f"Aprovado (Donchian). Risco:Retorno {win_loss_ratio:.2f} | "
-                f"Kelly {self.config.kelly_fraction} do equity. "
-                f"Alocando R$ {pos_size:.2f}."
-            ),
-        }
+        return RiskDecision(
+            signal_id=signal.signal_id,
+            approved=True,
+            allocated_capital=pos_size,
+            target_price=target_price,
+            stop_loss=stop_loss,
+            decision_timestamp=datetime.now(timezone.utc),
+            reason=f"Aprovado (Donchian). Risco:Retorno {win_loss_ratio:.2f} | Kelly {self.config.kelly_fraction} do equity. Alocando R$ {pos_size:.2f}."
+        )

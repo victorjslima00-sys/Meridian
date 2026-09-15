@@ -114,9 +114,21 @@ def init_db():
             pnl_pct REAL,
             exit_reason TEXT,
             ai_rationale TEXT,
-            status TEXT
+            status TEXT,
+            signal_id TEXT
         )
         """
+        )
+        
+        trades_cols = {
+            row[1] for row in cursor.execute("PRAGMA table_info(trades)").fetchall()
+        }
+        if "signal_id" not in trades_cols:
+            cursor.execute("ALTER TABLE trades ADD COLUMN signal_id TEXT")
+            
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_unique_signal_id "
+            "ON trades(signal_id) WHERE signal_id IS NOT NULL"
         )
 
         # 1 posição ativa por ticker (P3-A Etapa 1). Índice PARCIAL (só cobre

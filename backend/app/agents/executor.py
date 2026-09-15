@@ -17,36 +17,91 @@ class ExecutorAgent:
         return conn
 
     def execute_order(
-        self, ticker: str, decision: Dict[str, Any], analysis: Dict[str, Any]
+        self, ticker: Any = None, decision: Optional[Dict[str, Any]] = None, analysis: Optional[Dict[str, Any]] = None, intent: Any = None
     ):
-        """
-        Simulates an execution through our 'Paper Trading' broker.
-        Writes the trade to the database.
-        """
-        if not decision.get("approved", False):
-            return {"status": "rejected", "reason": "Not approved by risk manager."}
+        from backend.app.agents.schemas import ApprovedExecutionIntent, ManualExecutionIntent, StrategySignal, RiskDecision
+        
+        # Compatibility mapping
+        if intent is None:
+            intent = ticker
+        
+        if decision is not None and analysis is not None:
+            is_manual = False
+            if isinstance(decision, dict):
+                reason = decision.get("reason", "")
+                is_manual = "Ordem manual" in reason or "Manual" in reason
+            elif hasattr(decision, "reason"):
+                is_manual = "Manual" in decision.reason
+                
+            if is_manual:
+                intent = ManualExecutionIntent(
+                    ticker=ticker,
+                    side=analysis.get("signal", "BUY") if isinstance(analysis, dict) else analysis.signal,
+                    entry_price=analysis.get("last_price", 1.0) if isinstance(analysis, dict) else analysis.current_price,
+                    allocated_capital=decision.get("allocated_capital", 1.0) if isinstance(decision, dict) else decision.allocated_capital,
+                    target_price=decision.get("target_price", 1.0) if isinstance(decision, dict) else decision.target_price,
+                    stop_loss=decision.get("stop_loss", 1.0) if isinstance(decision, dict) else decision.stop_loss,
+                    reason=decision.get("reason", "Manual") if isinstance(decision, dict) else decision.reason
+                )
+            else:
+                try:
+                    if isinstance(analysis, dict):
+                        sig = StrategySignal.model_validate(analysis)
+                    else:
+                        sig = analysis
+                        
+                    if isinstance(decision, dict):
+                        risk = RiskDecision.model_validate(decision)
+                    else:
+                        risk = decision
+                        
+                    if not risk.approved:
+                        return {"status": "rejected", "reason": "Not approved by risk manager."}
+                        
+                    intent = ApprovedExecutionIntent(
+                        signal_id=sig.signal_id,
+                        risk_decision_id=risk.signal_id,
+                        ticker=ticker,
+                        side=sig.signal,
+                        entry_price=sig.current_price,
+                        allocated_capital=risk.allocated_capital,
+                        target_price=risk.target_price,
+                        stop_loss=risk.stop_loss,
+                        dataset_sha256=sig.dataset_sha256
+                    )
+                except Exception as e:
+                    return {"status": "rejected", "reason": f"Invalid strategy intent: {e}"}
+        else:
+            intent = intent_or_ticker
+            
+        if not isinstance(intent, (ApprovedExecutionIntent, ManualExecutionIntent)):
+            return {"status": "rejected", "reason": "Invalid execution intent type"}
 
-        current_price = analysis.get("last_price", 0.0)
-        allocated = decision.get("allocated_capital", 0.0)
+        ticker = intent.ticker
+        current_price = intent.entry_price
+        allocated = intent.allocated_capital
         shares = allocated / current_price if current_price > 0 else 0
-
-        target_price = decision.get("target_price", 0.0)
-        stop_loss = decision.get("stop_loss", 0.0)
-        analyst_reason = analysis.get("reason", "N/A")
-        rm_reason = decision.get("reason", "N/A")
-        rationale = f"{analyst_reason} | {rm_reason}"
-        side = analysis.get("signal", "BUY")
+        target_price = intent.target_price
+        stop_loss = intent.stop_loss
+        side = intent.side
+        is_strategy = isinstance(intent, ApprovedExecutionIntent)
+        signal_id = intent.signal_id if is_strategy else None
+        rationale = f"Strategy Intent (Signal {signal_id})" if is_strategy else f"Manual: {intent.reason}"
 
         conn = self._connect()
         try:
             cursor = conn.cursor()
 
-            # Guarda transacional (early-exit): checagem dentro da mesma
-            # transação IMMEDIATE, evita tentar o INSERT no caso comum.
-            # Sozinha ela é raçosa (TOCTOU: duas conexões podem passar aqui
-            # "ao mesmo tempo" antes de qualquer uma escrever) — quem
-            # realmente garante 1-ativo-por-ticker é o índice único parcial
-            # abaixo, via IntegrityError.
+            # Signal idempotency check BEFORE opening position check
+            if signal_id:
+                cursor.execute("SELECT 1 FROM trades WHERE signal_id = ?", (signal_id,))
+                if cursor.fetchone():
+                    return {
+                        "status": "skipped_existing_position",
+                        "ticker": ticker,
+                        "reason": "Signal already executed (idempotency).",
+                    }
+
             cursor.execute(
                 "SELECT 1 FROM trades WHERE ticker = ? AND status = 'active'",
                 (ticker,),
@@ -61,32 +116,20 @@ class ExecutorAgent:
             try:
                 cursor.execute(
                     """
-                INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status, signal_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
                 """,
                     (
-                        ticker,
-                        side,
-                        shares,
-                        current_price,
-                        target_price,
-                        stop_loss,
-                        datetime.datetime.now(),
-                        rationale,
+                        ticker, side, shares, current_price, target_price, stop_loss,
+                        datetime.datetime.now(), rationale, signal_id
                     ),
                 )
             except sqlite3.IntegrityError:
-                # Backstop do índice único: outra conexão venceu a corrida
-                # entre a checagem acima e este INSERT. O BEGIN IMMEDIATE já
-                # foi disparado por essa tentativa de INSERT (mesmo falha),
-                # então a transação segue aberta segurando o lock de escrita
-                # até fecharmos — rollback explícito libera na hora, em vez
-                # de depender do close() implícito no finally.
                 conn.rollback()
                 return {
                     "status": "skipped_existing_position",
                     "ticker": ticker,
-                    "reason": "Já existe posição ativa para este ticker (concorrência).",
+                    "reason": "Já existe posição ativa ou sinal repetido (concorrência).",
                 }
 
             # Deduct from portfolio
