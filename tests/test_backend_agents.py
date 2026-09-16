@@ -225,6 +225,9 @@ class TestExecutorAgent:
         import tempfile
         import os
         from backend.app.agents.executor import ExecutorAgent
+        from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal, RiskDecision
+        from datetime import datetime, timezone
+
         with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
             db_path = f.name
         try:
@@ -235,9 +238,32 @@ class TestExecutorAgent:
             conn_setup.execute('INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (0.0, 100.0, 0.0, ?)', (datetime.now(),))
             conn_setup.commit()
             conn_setup.close()
+
+            sig = TypedSignal(
+                ticker="BTC-USD",
+                side="BUY",
+                price=62000.0,
+                target_price=65000.0,
+                stop_loss=60000.0,
+                reason="Test signal",
+                dataset_sha256="0" * 64,
+                dataset_approved=True,
+                generated_at=datetime.now(timezone.utc),
+            )
+            dec = RiskDecision(
+                signal_id=sig.signal_id,
+                approved=True,
+                allocated_capital=10.0,
+                target_price=65000.0,
+                stop_loss=60000.0,
+                reason="Test reason",
+                decision_timestamp=datetime.now(timezone.utc),
+            )
+            intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+
             with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kwargs: _real_connect(db_path)):
-                executor = ExecutorAgent()
-                result = executor.execute_order(ticker='BTC-USD', decision={'approved': True, 'allocated_capital': 10.0, 'target_price': 65000.0, 'stop_loss': 60000.0, 'signal_id': 'test_id', 'decision_timestamp': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, analysis={'signal': 'BUY', 'current_price': 62000.0, 'reason': 'Test', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70})
+                executor = ExecutorAgent(db_path=db_path)
+                result = executor.execute_order(intent)
             assert result['status'] == 'executed'
             assert result['shares'] > 0
             conn_check = _real_connect(db_path)
@@ -251,7 +277,8 @@ class TestExecutorAgent:
         from backend.app.agents.executor import ExecutorAgent
         conn = _init_in_memory_db()
         with patch('backend.app.agents.executor.sqlite3.connect', return_value=conn):
-            result = ExecutorAgent().execute_order(ticker='BTC-USD', decision={'approved': False, 'reason': 'Veto'}, analysis={'signal': 'BUY', 'current_price': 62000.0, 'reason': '', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70})
+            # Raw unapproved dictionary rejected before transaction
+            result = ExecutorAgent().execute_order({'approved': False, 'reason': 'Veto'})
         assert result['status'] == 'rejected'
         count = conn.execute('SELECT COUNT(*) FROM trades').fetchone()[0]
         assert count == 0

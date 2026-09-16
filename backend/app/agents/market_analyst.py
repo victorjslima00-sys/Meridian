@@ -62,13 +62,21 @@ class MarketAnalyst:
         self.ticker = ticker
 
     def _hold(self, reason: str, last_price: float = 0.0) -> Dict[str, Any]:
+        from datetime import datetime, timezone
         return {
+            "ticker": self.ticker,
             "signal": "HOLD",
+            "side": "HOLD",
             "confidence": 0,
+            "price": float(last_price) if last_price > 0 else 1.0,
             "target_price": 0.0,
             "stop_loss": 0.0,
             "reason": reason,
             "last_price": float(last_price),
+            "generated_at": datetime.now(timezone.utc),
+            "dataset_sha256": "0" * 64,
+            "dataset_approved": True,
+            "strategy_id": "donchian_breakout",
         }
 
     async def analyze(self) -> Dict[str, Any]:
@@ -123,8 +131,25 @@ class MarketAnalyst:
         # de compra). score (0-1) vira 'confidence' só para exibição/log — o
         # dimensionamento NÃO usa mais confidence (ver risk_manager: sizing
         # alinhado ao backtest, Kelly fixo).
+        from datetime import datetime, timezone
+        from trading_bot.data.approval import dataset_digest, require_dataset_approval_by_digest
+
+        d_sha = None
+        has_approval = False
+        try:
+            d_sha = dataset_digest(eng_df, self.ticker)
+            require_dataset_approval_by_digest(d_sha)
+            has_approval = True
+        except Exception as e:
+            logger.warning("MarketAnalyst dataset approval check failed for %s: %s", self.ticker, e)
+            has_approval = False
+
         return {
+            "ticker": self.ticker,
             "signal": "BUY",
+            "side": "BUY",
+            "price": float(candidate.entry_price),
+            "last_price": float(candidate.entry_price),
             "confidence": min(100, max(1, round(candidate.score * 100))),
             "target_price": float(candidate.target),
             "stop_loss": float(candidate.stop),
@@ -134,5 +159,8 @@ class MarketAnalyst:
                 f"RSI14 {candidate.rsi}, volume {candidate.volume_ratio}x, "
                 f"stop {candidate.stop} / alvo {candidate.target} (ATR)."
             ),
-            "last_price": float(candidate.entry_price),
+            "generated_at": datetime.now(timezone.utc),
+            "dataset_sha256": d_sha or ("0" * 64),
+            "dataset_approved": has_approval,
+            "strategy_id": "donchian_breakout",
         }

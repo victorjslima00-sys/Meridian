@@ -655,10 +655,10 @@ async def _run_one_scan_cycle():
         )
 
         # 2. Risk Manager (com checagem de correlação)
-        if analysis["signal"] != "HOLD":
+        if analysis.get("signal") != "HOLD":
             await broadcast_log(
                 "RiskManager",
-                f"Evaluating {analysis['signal']} on {ticker}...",
+                f"Evaluating {analysis.get('signal')} on {ticker}...",
                 "warning",
             )
             pf = get_portfolio()
@@ -683,6 +683,18 @@ async def _run_one_scan_cycle():
             finally:
                 _conn.close()
 
+            # Contract validation
+            from .agents.contracts import ApprovedExecutionIntent, TypedSignal
+            try:
+                sig = TypedSignal.model_validate(analysis)
+            except Exception as e:
+                await broadcast_log(
+                    "MarketAnalyst",
+                    f"Contract validation failed for {ticker}: {e}",
+                    "error",
+                )
+                continue
+
             # Sizing alinhado ao backtest (Fase 1 Commit 2) DENTRO da margem
             # operável (usabilidade 2e): o capital em posições entra para
             # formar o total_equity que o Kelly fixo do backtest usa, mas a
@@ -690,23 +702,32 @@ async def _run_one_scan_cycle():
             # que o usuário definiu, não pelo livre bruto.
             rm = RiskManager(saldo_livre=saldo_operavel, em_posicoes=em_posicoes)
             decision = rm.evaluate_trade(
-                analysis, ticker=ticker, open_tickers=open_tickers
+                sig, ticker=ticker, open_tickers=open_tickers
             )
 
-            if decision["approved"]:
-                await broadcast_log("RiskManager", decision["reason"], "success")
+            if decision.approved:
+                await broadcast_log("RiskManager", decision.reason, "success")
 
                 # 3. Executor
+                try:
+                    intent = ApprovedExecutionIntent(
+                        signal=sig,
+                        risk_decision=decision,
+                    )
+                except Exception as e:
+                    await broadcast_log("ExecutorAgent", f"Execution intent validation failed: {e}", "error")
+                    continue
+
                 executor = ExecutorAgent()
-                res = executor.execute_order(ticker, decision, analysis)
-                if res["status"] == "executed":
+                res = executor.execute_order(intent)
+                if res.get("status") == "executed":
                     await broadcast_log(
                         "ExecutorAgent",
                         f"Executed! {res['shares']:.6f} shares of {ticker} @ {res['price']}",
                         "success",
                     )
             else:
-                await broadcast_log("RiskManager", decision["reason"], "error")
+                await broadcast_log("RiskManager", decision.reason, "error")
 
 
 async def exit_loop():
@@ -1081,33 +1102,31 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
             ),
         )
 
-    # Simple execution via ExecutorAgent
+    # Explicit manual execution via ExecutorAgent using ManualExecutionIntent
     executor = ExecutorAgent()
+    from .agents.contracts import ManualExecutionIntent
 
-    # We create a mock decision dictionary that executor expects
-    decision = {
-        "approved": True,
-        "reason": "Ordem manual enviada via Boleta (Scalper)",
-        "confidence": 1.0,
-        "target_price": (
-            current_price * 1.05 if req.side == "BUY" else current_price * 0.95
-        ),
-        "stop_loss": (
-            current_price * 0.98 if req.side == "BUY" else current_price * 1.02
-        ),
-        "allocated_capital": current_price * req.quantity,
-        "side": req.side,
-    }
+    target_price = (
+        current_price * 1.05 if req.side == "BUY" else current_price * 0.95
+    )
+    stop_loss = (
+        current_price * 0.98 if req.side == "BUY" else current_price * 1.02
+    )
+    allocated_capital = current_price * req.quantity
+    intent = ManualExecutionIntent(
+        ticker=req.ticker,
+        side=req.side,
+        entry_price=current_price,
+        allocated_capital=allocated_capital,
+        target_price=target_price,
+        stop_loss=stop_loss,
+        reason=f"Manual order via Boleta ({req.side} {req.quantity} @ {current_price})",
+        operator="manual_operator",
+    )
 
-    analysis = {
-        "signal": req.side,
-        "reason": "Manual Execution",
-        "last_price": current_price,
-    }
+    res = executor.execute_manual_order(intent)
 
-    res = executor.execute_order(req.ticker, decision, analysis)
-
-    if res.get("status") == "error":
+    if res.get("status") in ("error", "rejected"):
         raise HTTPException(status_code=400, detail=res.get("reason"))
 
     return res

@@ -68,9 +68,7 @@ class Broker(Protocol):
 
     name: str
 
-    def execute_order(
-        self, ticker: str, decision: dict[str, Any], analysis: dict[str, Any]
-    ) -> dict[str, Any]:
+    def execute_order(self, intent: Any) -> dict[str, Any]:
         ...
 
     def close_order(

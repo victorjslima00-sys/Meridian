@@ -1,6 +1,5 @@
 """Adversarial and idempotency tests for ExecutorAgent and SQLite durable protection (NEXUS-002)."""
 import sqlite3
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 import pytest
@@ -16,6 +15,26 @@ from backend.app.data.database import init_db
 
 
 VALID_SHA256 = "0" * 64
+
+
+@pytest.fixture(autouse=True)
+def synthetic_approval(monkeypatch):
+    from trading_bot.data.approval import Approval, Evidence
+    ev = Evidence(path="synthetic.csv", sha256=VALID_SHA256)
+    appr = Approval(
+        dataset_sha256=VALID_SHA256,
+        reviewed_by="nexus-tester",
+        review_notes="synthetic fixture",
+        status="approved",
+        source=ev,
+        calendar=ev,
+        adjustments=ev,
+        point_in_time=ev,
+    )
+    monkeypatch.setattr(
+        "trading_bot.data.approval.require_dataset_approval_by_digest",
+        lambda d: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required"))
+    )
 
 
 def _create_isolated_db(db_path: Path, initial_cash: float = 1000.0):
@@ -78,19 +97,89 @@ def test_executor_rejects_raw_approved_true_without_valid_intent(tmp_path):
     assert count == 0
 
 
+def _make_intent(
+    ticker="PETR4",
+    price=30.0,
+    target_price=33.0,
+    stop_loss=28.5,
+    allocated_capital=150.0,
+    generated_at=None,
+    dataset_sha256=VALID_SHA256,
+):
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc)
+    sig = TypedSignal(
+        ticker=ticker,
+        side="BUY",
+        price=price,
+        target_price=target_price,
+        stop_loss=stop_loss,
+        confidence=70,
+        reason="Test breakout signal",
+        generated_at=generated_at,
+        dataset_sha256=dataset_sha256,
+        dataset_approved=True,
+    )
+    dec = RiskDecision(
+        signal_id=sig.signal_id,
+        approved=True,
+        allocated_capital=allocated_capital,
+        target_price=target_price,
+        stop_loss=stop_loss,
+        reason="Risk approved",
+        decision_timestamp=datetime.now(timezone.utc),
+    )
+    return ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+
+
+def test_executor_rejects_arbitrary_unbound_ids():
+    """Directive 002-R1 Section 3: ApprovedExecutionIntent rejects arbitrary formatted IDs."""
+    with pytest.raises(Exception):
+        ApprovedExecutionIntent(
+            signal_id="sig_" + "a" * 64,
+            decision_id="risk_" + "b" * 64,
+            ticker="PETR4",
+            side="BUY",
+            entry_price=30.0,
+            allocated_capital=150.0,
+            target_price=33.0,
+            stop_loss=28.5,
+            dataset_sha256=VALID_SHA256,
+        )
+
+
 def test_executor_rejects_signal_risk_mismatch(tmp_path):
     db_file = tmp_path / "test.db"
     _create_isolated_db(db_file)
     executor = ExecutorAgent(db_path=str(db_file))
 
-    # Passed intent with mismatched signal_id / risk_decision_id
-    res = executor.execute_order(
+    sig = TypedSignal(
         ticker="PETR4",
-        decision={"approved": True, "signal_id": "sig_" + "1" * 64, "decision_id": "risk_" + "1" * 64, "allocated_capital": 100.0, "target_price": 33.0, "stop_loss": 28.5},
-        analysis={"signal": "BUY", "current_price": 30.0, "reason": "Test", "target_price": 33.0, "stop_loss": 28.5, "dataset_sha256": VALID_SHA256, "dataset_approved": True, "generated_at": datetime.now(timezone.utc)},
+        side="BUY",
+        price=30.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Signal A",
+        dataset_sha256=VALID_SHA256,
+        dataset_approved=True,
+        generated_at=datetime.now(timezone.utc),
     )
+    dec_other = RiskDecision(
+        signal_id="sig_" + "f" * 64,
+        approved=True,
+        allocated_capital=100.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Decision for other signal",
+        decision_timestamp=datetime.now(timezone.utc),
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        ApprovedExecutionIntent(signal=sig, risk_decision=dec_other)
+
+    # Calling executor with arbitrary dict is rejected
+    res = executor.execute_order({"approved": True, "signal_id": "sig_" + "1" * 64})
     assert res["status"] == "rejected"
-    assert "mismatch" in res["reason"].lower() or "invalid" in res["reason"].lower()
 
 
 def test_executor_executes_valid_approved_intent(tmp_path):
@@ -98,17 +187,7 @@ def test_executor_executes_valid_approved_intent(tmp_path):
     _create_isolated_db(db_file)
     executor = ExecutorAgent(db_path=str(db_file))
 
-    intent = ApprovedExecutionIntent(
-        signal_id="sig_" + "a" * 64,
-        decision_id="risk_" + "b" * 64,
-        ticker="PETR4",
-        side="BUY",
-        entry_price=30.0,
-        allocated_capital=150.0,
-        target_price=33.0,
-        stop_loss=28.5,
-        dataset_sha256=VALID_SHA256,
-    )
+    intent = _make_intent(ticker="PETR4", price=30.0, allocated_capital=150.0)
     res = executor.execute_order(intent)
     assert res["status"] == "executed"
     assert res["shares"] == 5.0
@@ -120,7 +199,7 @@ def test_executor_executes_valid_approved_intent(tmp_path):
     assert trade[1] == "BUY"
     assert trade[2] == 5.0
     assert trade[3] == "active"
-    assert trade[4] == "sig_" + "a" * 64
+    assert trade[4] == intent.signal_id
 
 
 def test_executor_manual_intent_leaves_signal_id_null(tmp_path):
@@ -137,7 +216,7 @@ def test_executor_manual_intent_leaves_signal_id_null(tmp_path):
         stop_loss=57.0,
         reason="Manual Scalper",
     )
-    res = executor.execute_order(intent)
+    res = executor.execute_manual_order(intent)
     assert res["status"] == "executed"
 
     conn = sqlite3.connect(str(db_file))
@@ -154,18 +233,9 @@ def test_replay_protection_same_signal_id_rejected_after_close(tmp_path):
     _create_isolated_db(db_file)
     executor = ExecutorAgent(db_path=str(db_file))
 
-    signal_id = "sig_" + "c" * 64
-    intent = ApprovedExecutionIntent(
-        signal_id=signal_id,
-        decision_id="risk_" + "d" * 64,
-        ticker="PETR4",
-        side="BUY",
-        entry_price=30.0,
-        allocated_capital=150.0,
-        target_price=33.0,
-        stop_loss=28.5,
-        dataset_sha256=VALID_SHA256,
-    )
+    intent = _make_intent(ticker="PETR4", price=30.0, allocated_capital=150.0)
+    signal_id = intent.signal_id
+
     # 1. First execution succeeds
     res1 = executor.execute_order(intent)
     assert res1["status"] == "executed"
@@ -207,39 +277,21 @@ def test_new_signal_for_same_ticker_succeeds_after_close(tmp_path):
     executor = ExecutorAgent(db_path=str(db_file))
 
     # 1. First trade
-    intent1 = ApprovedExecutionIntent(
-        signal_id="sig_" + "1" * 64,
-        decision_id="risk_" + "1" * 64,
-        ticker="PETR4",
-        side="BUY",
-        entry_price=30.0,
-        allocated_capital=150.0,
-        target_price=33.0,
-        stop_loss=28.5,
-        dataset_sha256=VALID_SHA256,
-    )
+    intent1 = _make_intent(ticker="PETR4", price=30.0, target_price=33.0, stop_loss=28.5)
     res1 = executor.execute_order(intent1)
     assert res1["status"] == "executed"
 
     conn = sqlite3.connect(str(db_file))
-    trade_id = conn.execute("SELECT id FROM trades WHERE signal_id = ?", ("sig_" + "1" * 64,)).fetchone()[0]
+    trade_id = conn.execute("SELECT id FROM trades WHERE signal_id = ?", (intent1.signal_id,)).fetchone()[0]
     conn.close()
 
     # 2. Close first trade
     executor.close_order(trade_id, 33.0, reason="Take Profit")
 
-    # 3. New second signal with DIFFERENT signal_id for same ticker PETR4
-    intent2 = ApprovedExecutionIntent(
-        signal_id="sig_" + "2" * 64,
-        decision_id="risk_" + "2" * 64,
-        ticker="PETR4",
-        side="BUY",
-        entry_price=31.0,
-        allocated_capital=150.0,
-        target_price=34.0,
-        stop_loss=29.5,
-        dataset_sha256=VALID_SHA256,
-    )
+    # 3. New second signal with DIFFERENT price/stop/target/generated_at
+    intent2 = _make_intent(ticker="PETR4", price=31.0, target_price=34.0, stop_loss=29.5)
+    assert intent2.signal_id != intent1.signal_id
+
     res2 = executor.execute_order(intent2)
     assert res2["status"] == "executed"
 
@@ -248,9 +300,9 @@ def test_new_signal_for_same_ticker_succeeds_after_close(tmp_path):
     conn.close()
     assert len(trades) == 2
     assert trades[0][0] == "closed"
-    assert trades[0][1] == "sig_" + "1" * 64
+    assert trades[0][1] == intent1.signal_id
     assert trades[1][0] == "active"
-    assert trades[1][1] == "sig_" + "2" * 64
+    assert trades[1][1] == intent2.signal_id
 
 
 def test_sqlite_unique_index_integrity_error(tmp_path):

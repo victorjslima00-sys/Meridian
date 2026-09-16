@@ -32,10 +32,14 @@ class PaperBroker:
 
         return ExecutorAgent()
 
-    def execute_order(
-        self, ticker: str, decision: dict[str, Any], analysis: dict[str, Any]
-    ) -> dict[str, Any]:
-        return self._agent().execute_order(ticker, decision, analysis)
+    def execute_order(self, intent: Any, *args, **kwargs) -> dict[str, Any]:
+        from ..agents.contracts import ApprovedExecutionIntent
+        if not isinstance(intent, ApprovedExecutionIntent):
+            return {
+                "status": "rejected",
+                "reason": "PaperBroker.execute_order requires a validated ApprovedExecutionIntent",
+            }
+        return self._agent().execute_order(intent)
 
     def close_order(
         self, trade_id: int, current_price: float, reason: str

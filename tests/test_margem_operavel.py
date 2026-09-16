@@ -17,7 +17,6 @@ Ponto único de enforcement: executor.execute_order — toda entrada, do
 laço automático OU manual, afunila ali; se a alocação estourar a margem,
 a ordem é rejeitada dentro da mesma transação (nenhum efeito no banco).
 """
-import datetime
 import os
 import sqlite3
 import tempfile
@@ -115,9 +114,18 @@ class TestSetMargemOperavel:
         assert _get_portfolio(temp_db_path)['saldo_operavel'] == 0.0
 
 def _ordem_aprovada(allocated):
-    decision = {'approved': True, 'allocated_capital': allocated, 'target_price': 12.0, 'stop_loss': 9.0, 'reason': 'teste', 'signal_id': 'test_id', 'decision_timestamp': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}
-    analysis = {'signal': 'BUY', 'current_price': 10.0, 'reason': 'teste', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}
-    return (decision, analysis)
+    from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal, RiskDecision
+    from datetime import datetime, timezone
+    sig = TypedSignal(
+        ticker='PETR4.SA', side='BUY', price=10.0, target_price=12.0, stop_loss=9.0,
+        reason='teste', dataset_sha256='0'*64, dataset_approved=True,
+        generated_at=datetime.now(timezone.utc)
+    )
+    dec = RiskDecision(
+        signal_id=sig.signal_id, approved=True, allocated_capital=allocated, target_price=12.0,
+        stop_loss=9.0, reason='teste', decision_timestamp=datetime.now(timezone.utc)
+    )
+    return ApprovedExecutionIntent(signal=sig, risk_decision=dec)
 
 def _executor_para(path):
     ex = ExecutorAgent()
@@ -139,16 +147,16 @@ class TestExecutorRespeitaMargemOperavel:
     def test_alocacao_que_estoura_a_margem_e_rejeitada_sem_nenhum_efeito(self, temp_db_path):
         _set_portfolio(temp_db_path, saldo_disponivel=100.0, em_posicoes=20.0, margem_operavel=30.0)
         antes = _snapshot_banco(temp_db_path)
-        decision, analysis = _ordem_aprovada(allocated=15.0)
-        res = _executor_para(temp_db_path).execute_order('PETR4.SA', decision, analysis)
+        intent = _ordem_aprovada(allocated=15.0)
+        res = _executor_para(temp_db_path).execute_order(intent)
         assert res['status'] == 'rejected'
         assert 'margem' in res['reason'].lower()
         assert _snapshot_banco(temp_db_path) == antes
 
     def test_alocacao_dentro_da_margem_executa(self, temp_db_path):
         _set_portfolio(temp_db_path, saldo_disponivel=100.0, em_posicoes=20.0, margem_operavel=30.0)
-        decision, analysis = _ordem_aprovada(allocated=9.0)
-        res = _executor_para(temp_db_path).execute_order('PETR4.SA', decision, analysis)
+        intent = _ordem_aprovada(allocated=9.0)
+        res = _executor_para(temp_db_path).execute_order(intent)
         assert res['status'] == 'executed'
         trades, em_pos = _snapshot_banco(temp_db_path)
         assert trades == 1
@@ -156,12 +164,12 @@ class TestExecutorRespeitaMargemOperavel:
 
     def test_sem_margem_definida_comportamento_atual_preservado(self, temp_db_path):
         _set_portfolio(temp_db_path, saldo_disponivel=100.0, em_posicoes=20.0)
-        decision, analysis = _ordem_aprovada(allocated=15.0)
-        res = _executor_para(temp_db_path).execute_order('PETR4.SA', decision, analysis)
+        intent = _ordem_aprovada(allocated=15.0)
+        res = _executor_para(temp_db_path).execute_order(intent)
         assert res['status'] == 'executed'
 
     def test_exatamente_na_margem_e_aceito(self, temp_db_path):
         _set_portfolio(temp_db_path, saldo_disponivel=100.0, em_posicoes=20.0, margem_operavel=30.0)
-        decision, analysis = _ordem_aprovada(allocated=10.0)
-        res = _executor_para(temp_db_path).execute_order('PETR4.SA', decision, analysis)
+        intent = _ordem_aprovada(allocated=10.0)
+        res = _executor_para(temp_db_path).execute_order(intent)
         assert res['status'] == 'executed'

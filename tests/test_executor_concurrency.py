@@ -102,16 +102,40 @@ class TestExecuteOrderConcurrency:
     concorrentes para o mesmo ticker não podem abrir duas posições ativas."""
 
     def test_concurrent_same_ticker_only_one_position_opens(self, temp_db_path):
+        from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal, RiskDecision
+        from datetime import datetime, timezone
+
         _set_portfolio(temp_db_path, saldo_disponivel=1000.0, em_posicoes=0.0)
-        decision = {'approved': True, 'allocated_capital': 100.0, 'target_price': 65000.0, 'stop_loss': 60000.0, 'signal_id': 'test_id', 'decision_timestamp': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}
-        analysis = {'signal': 'BUY', 'current_price': 62000.0, 'reason': 'Test', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}
+        sig1 = TypedSignal(
+            ticker='BTC-USD', side='BUY', price=62000.0, target_price=65000.0, stop_loss=60000.0,
+            confidence=70, reason='Test 1', dataset_sha256='0'*64, dataset_approved=True,
+            generated_at=datetime.now(timezone.utc)
+        )
+        dec1 = RiskDecision(
+            signal_id=sig1.signal_id, approved=True, allocated_capital=100.0, target_price=65000.0,
+            stop_loss=60000.0, reason='Test reason 1', decision_timestamp=datetime.now(timezone.utc)
+        )
+        intent1 = ApprovedExecutionIntent(signal=sig1, risk_decision=dec1)
+
+        sig2 = TypedSignal(
+            ticker='BTC-USD', side='BUY', price=62000.0, target_price=65000.0, stop_loss=60000.0,
+            confidence=70, reason='Test 2', dataset_sha256='0'*64, dataset_approved=True,
+            generated_at=datetime.now(timezone.utc)
+        )
+        dec2 = RiskDecision(
+            signal_id=sig2.signal_id, approved=True, allocated_capital=100.0, target_price=65000.0,
+            stop_loss=60000.0, reason='Test reason 2', decision_timestamp=datetime.now(timezone.utc)
+        )
+        intent2 = ApprovedExecutionIntent(signal=sig2, risk_decision=dec2)
+        intents = [intent1, intent2]
+
         barrier = threading.Barrier(2)
         results = [None, None]
 
         def _worker(idx):
             barrier.wait()
             try:
-                results[idx] = ExecutorAgent().execute_order(ticker='BTC-USD', decision=decision, analysis=analysis)
+                results[idx] = ExecutorAgent(db_path=temp_db_path).execute_order(intents[idx])
             except Exception as e:
                 results[idx] = e
         with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kw: _real_connect(temp_db_path, **kw)):

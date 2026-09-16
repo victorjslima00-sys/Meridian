@@ -20,7 +20,7 @@ import logging
 import os
 from pathlib import Path
 import sqlite3
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -252,8 +252,8 @@ class PaperSessionRunner:
             except Exception as e:
                 self.journal.append_event(
                     event_type="ORDER_REJECTED",
-                    payload={"reason": f"Contract Rejection: Invalid strategy signal - {e}"},
-                    ticker=raw_sig.get("ticker", "UNKNOWN") if isinstance(raw_sig, dict) else "UNKNOWN",
+                    payload={"reason": "Contract Rejection: Invalid strategy signal", "error_type": type(e).__name__},
+                    ticker=str(raw_sig.get("ticker", "UNKNOWN")) if isinstance(raw_sig, dict) and isinstance(raw_sig.get("ticker"), str) else "UNKNOWN",
                 )
                 orders_rejected += 1
                 continue
@@ -309,10 +309,10 @@ class PaperSessionRunner:
                 )
                 continue
 
-            # Registro do sinal recebido
+            # Registro do sinal recebido (forma sanitizada e validada)
             self.journal.append_event(
                 event_type="SIGNAL_EVALUATED",
-                payload=raw_sig,
+                payload=sig.model_dump(mode="json"),
                 ticker=ticker,
             )
 
@@ -332,15 +332,8 @@ class PaperSessionRunner:
 
             if decision.approved:
                 intent = ApprovedExecutionIntent(
-                    signal_id=sig.signal_id,
-                    decision_id=decision.decision_id,
-                    ticker=sig.ticker,
-                    side=sig.side,
-                    entry_price=sig.price,
-                    allocated_capital=decision.allocated_capital,
-                    target_price=decision.target_price,
-                    stop_loss=decision.stop_loss,
-                    dataset_sha256=sig.dataset_sha256,
+                    signal=sig,
+                    risk_decision=decision,
                 )
                 exec_res = executor.execute_order(intent)
                 if exec_res.get("status") == "executed":

@@ -151,16 +151,49 @@ class TestB3MarketUniverso:
 
 
 class TestPaperBrokerDelegaParaOExecutor:
-    def test_execute_order_delega(self):
-        decisao = {"approved": True, "allocated_capital": 10.0}
-        analise = {"signal": "BUY", "last_price": 5.0}
+    def test_execute_order_rejeita_dicionarios_crus(self):
+        broker = get_broker()
+        res = broker.execute_order({"approved": True})
+        assert res["status"] == "rejected"
+        assert "ApprovedExecutionIntent" in res["reason"]
+
+    def test_execute_order_delega_intent_tipado(self):
+        from backend.app.agents.contracts import (
+            ApprovedExecutionIntent,
+            RiskDecision,
+            TypedSignal,
+        )
+        from datetime import datetime, timezone
+
+        sig = TypedSignal(
+            ticker="PETR4.SA",
+            side="BUY",
+            price=30.0,
+            target_price=33.0,
+            stop_loss=28.5,
+            reason="Test signal",
+            generated_at=datetime.now(timezone.utc),
+            dataset_sha256="0" * 64,
+            dataset_approved=True,
+        )
+        dec = RiskDecision(
+            signal_id=sig.signal_id,
+            approved=True,
+            reason="Risk approved",
+            allocated_capital=100.0,
+            target_price=33.0,
+            stop_loss=28.5,
+            decision_timestamp=datetime.now(timezone.utc),
+        )
+        intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+
         esperado = {"status": "executed"}
         with patch(
             "backend.app.agents.executor.ExecutorAgent.execute_order",
             return_value=esperado,
         ) as mock:
-            assert get_broker().execute_order("PETR4.SA", decisao, analise) is esperado
-        mock.assert_called_once_with("PETR4.SA", decisao, analise)
+            assert get_broker().execute_order(intent) is esperado
+        mock.assert_called_once_with(intent)
 
     def test_close_order_delega(self):
         esperado = {"status": "closed"}

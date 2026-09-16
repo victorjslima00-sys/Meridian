@@ -221,6 +221,9 @@ class TestExecuteManualTradeRespeitaOPortaoUnico:
         ), patch.object(
             main, "ExecutorAgent"
         ) as MockExecutor:
+            MockExecutor.return_value.execute_manual_order.return_value = {
+                "status": "success"
+            }
             MockExecutor.return_value.execute_order.return_value = {
                 "status": "success"
             }

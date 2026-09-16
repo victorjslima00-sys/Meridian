@@ -90,8 +90,8 @@ class TypedSignal(BaseModel):
     ticker: str = Field(min_length=1)
     side: Literal["BUY", "SELL", "HOLD"]
     price: float = Field(gt=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
+    target_price: float = Field(ge=0, allow_inf_nan=False)
+    stop_loss: float = Field(ge=0, allow_inf_nan=False)
     confidence: Optional[int] = Field(default=None, ge=0, le=100)
     reason: str = Field(min_length=1)
     generated_at: datetime
@@ -111,6 +111,11 @@ class TypedSignal(BaseModel):
                 obj["price"] = obj.pop("current_price")
             elif "last_price" in obj and "price" not in obj:
                 obj["price"] = obj.pop("last_price")
+            if isinstance(obj.get("generated_at"), str):
+                try:
+                    obj["generated_at"] = datetime.fromisoformat(obj["generated_at"])
+                except Exception:
+                    pass
         return super().model_validate(obj, strict=strict, from_attributes=from_attributes, context=context)
 
     @property
@@ -129,12 +134,16 @@ class TypedSignal(BaseModel):
             raise ValueError("generated_at must be timezone-aware")
 
         if self.side == "BUY":
+            if self.target_price <= 0 or self.stop_loss <= 0:
+                raise ValueError("BUY requires positive target_price and stop_loss")
             if not (self.stop_loss < self.price < self.target_price):
                 raise ValueError(
                     f"BUY requires stop_loss < price < target_price "
                     f"(stop={self.stop_loss}, price={self.price}, target={self.target_price})"
                 )
         elif self.side == "SELL":
+            if self.target_price <= 0 or self.stop_loss <= 0:
+                raise ValueError("SELL requires positive target_price and stop_loss")
             if not (self.target_price < self.price < self.stop_loss):
                 raise ValueError(
                     f"SELL requires target_price < price < stop_loss "
@@ -145,14 +154,15 @@ class TypedSignal(BaseModel):
         else:
             raise ValueError(f"Invalid side: {self.side}")
 
-        if not self.dataset_approved:
-            raise ValueError("Strategy signal dataset must be approved")
+        if self.side != "HOLD":
+            if not self.dataset_approved:
+                raise ValueError("Strategy signal dataset must be approved")
 
-        # Dataset approval verification
-        try:
-            trading_bot.data.approval.require_dataset_approval_by_digest(self.dataset_sha256)
-        except Exception as e:
-            raise ValueError("Invalid or unapproved dataset_sha256") from e
+            # Dataset approval verification
+            try:
+                trading_bot.data.approval.require_dataset_approval_by_digest(self.dataset_sha256)
+            except Exception as e:
+                raise ValueError("Invalid or unapproved dataset_sha256") from e
 
         # Recompute deterministic signal_id
         expected_id = compute_signal_id(
@@ -236,41 +246,137 @@ class RiskDecision(BaseModel):
         return getattr(self, item)
 
 
+def compute_intent_id(
+    signal_id: str,
+    decision_id: str,
+    ticker: str,
+    side: str,
+    entry_price: float,
+    allocated_capital: float,
+    target_price: float,
+    stop_loss: float,
+    dataset_sha256: str,
+) -> str:
+    """Compute deterministic canonical digest for approved execution intent.
+    
+    Format: exec_<64 hex sha256>
+    """
+    payload = {
+        "allocated_capital": float(allocated_capital),
+        "contract_version": CONTRACT_VERSION,
+        "dataset_sha256": dataset_sha256,
+        "decision_id": decision_id,
+        "entry_price": float(entry_price),
+        "side": side,
+        "signal_id": signal_id,
+        "stop_loss": float(stop_loss),
+        "target_price": float(target_price),
+        "ticker": ticker,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    return f"exec_{digest}"
+
+
 class ApprovedExecutionIntent(BaseModel):
     """Mutually bound intent for autonomous execution. Requires prior signal and risk decision."""
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    signal_id: str = Field(pattern=r"^sig_[0-9a-f]{64}$")
-    decision_id: str = Field(pattern=r"^risk_[0-9a-f]{64}$")
-    ticker: str = Field(min_length=1)
-    side: Literal["BUY", "SELL"]
-    entry_price: float = Field(gt=0, allow_inf_nan=False)
-    allocated_capital: float = Field(gt=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
-    dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    signal: TypedSignal
+    risk_decision: RiskDecision
+    intent_id: Optional[str] = Field(default=None)
 
     @classmethod
-    def model_validate(cls, obj: Any, *, strict: Optional[bool] = None, from_attributes: Optional[bool] = None, context: Optional[dict[str, Any]] = None) -> "ApprovedExecutionIntent":
-        if isinstance(obj, dict):
-            obj = dict(obj)
-            if "risk_decision_id" in obj and "decision_id" not in obj:
-                obj["decision_id"] = obj.pop("risk_decision_id")
+    def model_validate(
+        cls,
+        obj: Any,
+        *,
+        strict: Optional[bool] = None,
+        from_attributes: Optional[bool] = None,
+        context: Optional[dict[str, Any]] = None,
+    ) -> "ApprovedExecutionIntent":
         return super().model_validate(obj, strict=strict, from_attributes=from_attributes, context=context)
 
     @property
+    def signal_id(self) -> str:
+        return self.signal.signal_id or ""
+
+    @property
+    def decision_id(self) -> str:
+        return self.risk_decision.decision_id or ""
+
+    @property
     def risk_decision_id(self) -> str:
-        """Alias for backward compatibility."""
         return self.decision_id
+
+    @property
+    def ticker(self) -> str:
+        return self.signal.ticker
+
+    @property
+    def side(self) -> Literal["BUY", "SELL"]:
+        return self.signal.side  # type: ignore
+
+    @property
+    def entry_price(self) -> float:
+        return self.signal.price
+
+    @property
+    def allocated_capital(self) -> float:
+        return self.risk_decision.allocated_capital or 0.0
+
+    @property
+    def target_price(self) -> float:
+        return self.risk_decision.target_price
+
+    @property
+    def stop_loss(self) -> float:
+        return self.risk_decision.stop_loss
+
+    @property
+    def dataset_sha256(self) -> str:
+        return self.signal.dataset_sha256
 
     @model_validator(mode="after")
     def validate_invariants(self) -> "ApprovedExecutionIntent":
-        if self.side == "BUY":
-            if not (self.stop_loss < self.entry_price < self.target_price):
-                raise ValueError("BUY requires stop_loss < entry_price < target_price")
-        elif self.side == "SELL":
-            if not (self.target_price < self.entry_price < self.stop_loss):
-                raise ValueError("SELL requires target_price < entry_price < stop_loss")
+        if not self.risk_decision.approved:
+            raise ValueError("risk_decision must be approved")
+        if self.risk_decision.signal_id != self.signal.signal_id:
+            raise ValueError(
+                f"risk_decision.signal_id ({self.risk_decision.signal_id}) does not match "
+                f"signal.signal_id ({self.signal.signal_id})"
+            )
+        if self.signal.side not in ("BUY", "SELL"):
+            raise ValueError(f"signal.side must be BUY or SELL, not HOLD (got {self.signal.side})")
+        if self.risk_decision.target_price != self.signal.target_price:
+            raise ValueError(
+                f"risk target ({self.risk_decision.target_price}) does not match "
+                f"signal target ({self.signal.target_price})"
+            )
+        if self.risk_decision.stop_loss != self.signal.stop_loss:
+            raise ValueError(
+                f"risk stop ({self.risk_decision.stop_loss}) does not match "
+                f"signal stop ({self.signal.stop_loss})"
+            )
+        if self.risk_decision.allocated_capital is None or self.risk_decision.allocated_capital <= 0:
+            raise ValueError("allocated capital must be finite and > 0")
+
+        expected_intent_id = compute_intent_id(
+            signal_id=self.signal.signal_id or "",
+            decision_id=self.risk_decision.decision_id or "",
+            ticker=self.signal.ticker,
+            side=self.signal.side,
+            entry_price=self.signal.price,
+            allocated_capital=self.risk_decision.allocated_capital,
+            target_price=self.risk_decision.target_price,
+            stop_loss=self.risk_decision.stop_loss,
+            dataset_sha256=self.signal.dataset_sha256,
+        )
+
+        if self.intent_id is not None and self.intent_id != expected_intent_id:
+            raise ValueError(f"intent_id mismatch: caller provided {self.intent_id} but computed {expected_intent_id}")
+
+        self.intent_id = expected_intent_id
         return self
 
 

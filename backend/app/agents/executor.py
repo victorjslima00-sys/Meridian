@@ -16,85 +16,30 @@ class ExecutorAgent:
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
-    def execute_order(
-        self, ticker: Any = None, decision: Optional[Dict[str, Any]] = None, analysis: Optional[Dict[str, Any]] = None, intent: Any = None
-    ):
-        from backend.app.agents.contracts import (
-            ApprovedExecutionIntent,
-            ManualExecutionIntent,
-            RiskDecision,
-            TypedSignal,
-        )
+    def execute_order(self, intent: Any = None, *args, **kwargs) -> Dict[str, Any]:
+        """Execute autonomous strategy order. Strictly requires validated ApprovedExecutionIntent."""
+        from backend.app.agents.contracts import ApprovedExecutionIntent
 
-        # Compatibility mapping
-        if intent is None:
-            intent = ticker
+        if not isinstance(intent, ApprovedExecutionIntent):
+            return {
+                "status": "rejected",
+                "reason": "Autonomous execution requires a validated ApprovedExecutionIntent",
+            }
+        return self._execute_internal(intent)
 
-        if decision is not None and analysis is not None:
-            is_manual = False
-            if isinstance(decision, dict):
-                reason = decision.get("reason", "")
-                is_manual = "Ordem manual" in reason or "Manual" in reason
-            elif hasattr(decision, "reason"):
-                is_manual = "Manual" in getattr(decision, "reason", "")
+    def execute_manual_order(self, intent: Any = None) -> Dict[str, Any]:
+        """Execute authenticated manual human order. Strictly requires validated ManualExecutionIntent."""
+        from backend.app.agents.contracts import ManualExecutionIntent
 
-            if is_manual:
-                try:
-                    intent = ManualExecutionIntent(
-                        ticker=ticker,
-                        side=analysis.get("signal", "BUY") if isinstance(analysis, dict) else getattr(analysis, "side", getattr(analysis, "signal", "BUY")),
-                        entry_price=analysis.get("price", analysis.get("last_price", 1.0)) if isinstance(analysis, dict) else getattr(analysis, "price", getattr(analysis, "current_price", 1.0)),
-                        allocated_capital=decision.get("allocated_capital", 1.0) if isinstance(decision, dict) else getattr(decision, "allocated_capital", 1.0),
-                        target_price=decision.get("target_price", 1.0) if isinstance(decision, dict) else getattr(decision, "target_price", 1.0),
-                        stop_loss=decision.get("stop_loss", 1.0) if isinstance(decision, dict) else getattr(decision, "stop_loss", 1.0),
-                        reason=decision.get("reason", "Manual") if isinstance(decision, dict) else getattr(decision, "reason", "Manual"),
-                    )
-                except Exception as e:
-                    return {"status": "rejected", "reason": f"Invalid manual intent: {e}"}
-            else:
-                try:
-                    if isinstance(analysis, dict):
-                        analysis_dict = dict(analysis)
-                        if "ticker" not in analysis_dict and ticker:
-                            analysis_dict["ticker"] = ticker
-                        sig = TypedSignal.model_validate(analysis_dict)
-                    elif isinstance(analysis, TypedSignal):
-                        sig = analysis
-                    else:
-                        return {"status": "rejected", "reason": "Invalid analysis type"}
+        if not isinstance(intent, ManualExecutionIntent):
+            return {
+                "status": "rejected",
+                "reason": "Manual execution requires a validated ManualExecutionIntent",
+            }
+        return self._execute_internal(intent)
 
-                    if isinstance(decision, dict):
-                        decision_dict = dict(decision)
-                        if "signal_id" not in decision_dict or decision_dict.get("signal_id") == "test_id":
-                            decision_dict["signal_id"] = sig.signal_id
-                        if "decision_timestamp" not in decision_dict:
-                            decision_dict["decision_timestamp"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                        risk = RiskDecision.model_validate(decision_dict)
-
-                    elif isinstance(decision, RiskDecision):
-                        risk = decision
-                    else:
-                        return {"status": "rejected", "reason": "Invalid decision type"}
-
-                    if not risk.approved:
-                        return {"status": "rejected", "reason": f"Not approved by risk manager: {risk.reason}"}
-
-                    if risk.signal_id != sig.signal_id:
-                        return {"status": "rejected", "reason": "Signal ID mismatch between signal and risk decision."}
-
-                    intent = ApprovedExecutionIntent(
-                        signal_id=sig.signal_id,
-                        decision_id=risk.decision_id,
-                        ticker=sig.ticker,
-                        side=sig.side,
-                        entry_price=sig.price,
-                        allocated_capital=risk.allocated_capital,
-                        target_price=risk.target_price,
-                        stop_loss=risk.stop_loss,
-                        dataset_sha256=sig.dataset_sha256,
-                    )
-                except Exception as e:
-                    return {"status": "rejected", "reason": f"Invalid strategy intent: {e}"}
+    def _execute_internal(self, intent: Any) -> Dict[str, Any]:
+        from backend.app.agents.contracts import ApprovedExecutionIntent, ManualExecutionIntent
 
         if not isinstance(intent, (ApprovedExecutionIntent, ManualExecutionIntent)):
             return {"status": "rejected", "reason": "Invalid execution intent type"}
