@@ -24,7 +24,8 @@ import asyncio
 import logging
 from typing import Any, Dict
 
-from trading_bot.data.approval import normalize_ohlcv_to_signal_df
+from trading_bot.data import approval
+from trading_bot.signals.strategy_identity import get_active_strategy_id
 
 from ..markets import resolve_market
 from trading_bot.signals.engine import (
@@ -39,13 +40,21 @@ logger = logging.getLogger(__name__)
 _MIN_DAILY_BARS = 201
 
 
-def _signal_params() -> Dict[str, Any]:
+def _signal_params(settings_path: Any = None) -> Dict[str, Any]:
     """Parâmetros de PRODUÇÃO — a MESMA fonte que o backtest lê
     (config/settings.yaml::signals). Ler daqui, e o backtest ler daqui, é o
     que garante que ao vivo roda EXATAMENTE o que foi validado."""
     from trading_bot.core.config import AppConfig
 
-    sig = AppConfig.load().get("signals", default={}) or {}
+    try:
+        if settings_path is not None:
+            cfg = AppConfig.load(settings_path=str(settings_path))
+        else:
+            cfg = AppConfig.load()
+        sig = cfg.get("signals", default={}) or {}
+    except Exception:
+        sig = {}
+
     return {
         "breakout_period": sig.get("breakout_period", 20),
         "volume_mult": sig.get("volume_multiplier", 1.5),
@@ -61,7 +70,12 @@ class MarketAnalyst:
     def __init__(self, ticker: str):
         self.ticker = ticker
 
-    def _hold(self, reason: str, last_price: float = 0.0) -> Dict[str, Any]:
+    def _hold(
+        self,
+        reason: str,
+        last_price: float = 0.0,
+        strategy_id: str = "donchian_breakout",
+    ) -> Dict[str, Any]:
         from datetime import datetime, timezone
         return {
             "ticker": self.ticker,
@@ -76,10 +90,15 @@ class MarketAnalyst:
             "generated_at": datetime.now(timezone.utc),
             "dataset_sha256": None,
             "dataset_approved": False,
-            "strategy_id": "donchian_breakout",
+            "strategy_id": strategy_id,
         }
 
-    async def analyze(self) -> Dict[str, Any]:
+    async def analyze(
+        self,
+        registry_path: Any = None,
+        project_root: Any = None,
+        settings_path: Any = None,
+    ) -> Dict[str, Any]:
         """Devolve o sinal do ticker: BUY (com alvo/stop por ATR) ou HOLD."""
         market = resolve_market(self.ticker)
 
@@ -88,17 +107,38 @@ class MarketAnalyst:
         df = await asyncio.to_thread(
             market.fetch_ohlcv, self.ticker, period="2y", interval="1d"
         )
-        return await self.analyze_ohlcv(df)
+        return await self.analyze_ohlcv(
+            df,
+            registry_path=registry_path,
+            project_root=project_root,
+            settings_path=settings_path,
+        )
 
     async def analyze_ohlcv(
         self,
         df: Any,
         registry_path: Any = None,
         project_root: Any = None,
+        settings_path: Any = None,
     ) -> Dict[str, Any]:
-        """Deterministic analysis of pre-supplied OHLCV dataframe. Never refetches."""
+        """Deterministic analysis of pre-supplied OHLCV dataframe.
+        Never refetches.
+        """
+        try:
+            active_strategy = get_active_strategy_id(
+                settings_path=settings_path
+            )
+        except Exception as exc:
+            return self._hold(
+                f"Estratégia ativa inválida ou não suportada: {exc}",
+                0.0,
+            )
+
         if df is None or len(df) < _MIN_DAILY_BARS:
-            return self._hold("Dados diários insuficientes para o sinal Donchian.")
+            return self._hold(
+                "Dados diários insuficientes para o sinal Donchian.",
+                strategy_id=active_strategy,
+            )
 
         last_price = float(df["close"].iloc[-1])
 
@@ -106,9 +146,13 @@ class MarketAnalyst:
         # compute_signal espera (ts/adj_close/h/l/v). O feed usa
         # auto_adjust=True, então 'close' já é ajustado -> adj_close = close.
         try:
-            eng_df = normalize_ohlcv_to_signal_df(df)
+            eng_df = approval.normalize_ohlcv_to_signal_df(df)
         except Exception as exc:
-            return self._hold(f"Falha na normalização dos dados diários: {exc}", last_price)
+            return self._hold(
+                f"Falha na normalização dos dados diários: {exc}",
+                last_price,
+                strategy_id=active_strategy,
+            )
 
         # Filtro macro IBOV (mesmo do backtest): só abre entrada com IBOV >
         # SMA-50. get_ibov_data devolve None em falha e ibov_in_uptrend(None,
@@ -120,13 +164,23 @@ class MarketAnalyst:
             return self._hold(
                 "Filtro macro: IBOV abaixo da SMA-50 — sem novas entradas.",
                 last_price,
+                strategy_id=active_strategy,
             )
 
-        candidate = compute_signal(eng_df, self.ticker, **_signal_params())
+        candidate = compute_signal(
+            eng_df,
+            self.ticker,
+            registry_path=registry_path,
+            project_root=project_root,
+            settings_path=settings_path,
+            **_signal_params(settings_path=settings_path),
+        )
         if candidate is None:
             return self._hold(
-                "Sem sinal Donchian (breakout/SMA-200/volume/RSI não confirmados).",
+                "Sem sinal Donchian "
+                "(breakout/SMA-200/volume/RSI não confirmados).",
                 last_price,
+                strategy_id=active_strategy,
             )
 
         # Candidate garante, por construção, stop < entry < target (breakout
@@ -134,21 +188,26 @@ class MarketAnalyst:
         # dimensionamento NÃO usa mais confidence (ver risk_manager: sizing
         # alinhado ao backtest, Kelly fixo).
         from datetime import datetime, timezone
-        from trading_bot.data.approval import dataset_digest, require_dataset_approval_by_digest
 
         try:
-            d_sha = dataset_digest(eng_df, self.ticker)
-            if registry_path is not None or project_root is not None:
-                require_dataset_approval_by_digest(
-                    d_sha, registry_path=registry_path, project_root=project_root
-                )
-            else:
-                require_dataset_approval_by_digest(d_sha)
+            d_sha = approval.dataset_digest(eng_df, self.ticker)
+            approval.require_dataset_approval_by_digest(
+                d_sha,
+                registry_path=registry_path,
+                project_root=project_root,
+                settings_path=settings_path,
+            )
         except Exception as e:
-            logger.warning("MarketAnalyst dataset approval check failed for %s: %s", self.ticker, e)
+            logger.warning(
+                "MarketAnalyst dataset approval check failed for %s: %s",
+                self.ticker,
+                e,
+            )
             return self._hold(
-                f"Aprovação de dados ausente ou inválida ({e}) — entrada bloqueada (fail-closed).",
+                f"Aprovação de dados ausente ou inválida ({e}) — "
+                "entrada bloqueada (fail-closed).",
                 last_price,
+                strategy_id=active_strategy,
             )
 
         return {
@@ -169,5 +228,5 @@ class MarketAnalyst:
             "generated_at": datetime.now(timezone.utc),
             "dataset_sha256": d_sha,
             "dataset_approved": True,
-            "strategy_id": "donchian_breakout",
+            "strategy_id": active_strategy,
         }

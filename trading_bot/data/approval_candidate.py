@@ -25,11 +25,16 @@ from trading_bot.data.approval import (
     Approval,
     Evidence,
     Registry,
+    compute_candidate_id,
     dataset_digest,
     normalize_ohlcv_to_signal_df,
     save_registry,
 )
 from trading_bot.data.signal_input import SignalBar
+from trading_bot.signals.strategy_identity import (
+    DEFAULT_STRATEGY_ID,
+    get_active_strategy_id,
+)
 
 try:
     import yfinance as yf
@@ -37,22 +42,19 @@ try:
 except Exception:
     _YF_VERSION = "unavailable"
 
-DEFAULT_STRATEGY_ID = "donchian_breakout"
 APPROVAL_CONFIRMATION_TOKEN = "APPROVE_DATASET_FOR_PAPER_TRADING_ONLY"
 
-
-def get_active_strategy_id(settings_path: Optional[Path | str] = None) -> str:
-    """Retrieve active strategy ID from settings.yaml or fallback to DEFAULT_STRATEGY_ID."""
-    try:
-        from trading_bot.core.config import AppConfig
-        sp = str(settings_path) if settings_path else None
-        cfg = AppConfig.load(settings_path=sp)
-        strat = cfg.get("signals", "strategy")
-        if strat and isinstance(strat, str) and strat.strip():
-            return strat.strip()
-    except Exception:
-        pass
-    return DEFAULT_STRATEGY_ID
+__all__ = [
+    "APPROVAL_CONFIRMATION_TOKEN",
+    "CandidateManifest",
+    "DEFAULT_STRATEGY_ID",
+    "approve_candidate",
+    "build_candidate_bundle",
+    "compute_candidate_id",
+    "get_active_strategy_id",
+    "main",
+    "validate_candidate",
+]
 
 
 class CandidateManifest(BaseModel):
@@ -81,35 +83,6 @@ class CandidateManifest(BaseModel):
 
 def _rel_path_str(path: Path, root: Path) -> str:
     return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
-
-
-def compute_candidate_id(
-    ticker: str,
-    strategy_id: str,
-    dataset_sha256: str,
-    dataset_artifact_sha: str,
-    review_csv_sha: str,
-    source_sha: str,
-    calendar_sha: str,
-    adjustments_sha: str,
-    pit_sha: str,
-    collected_at_utc: str,
-) -> str:
-    """Deterministic content-bound hash binding all evidence artifacts and capture metadata."""
-    payload = {
-        "ticker": ticker,
-        "strategy_id": strategy_id,
-        "dataset_sha256": dataset_sha256,
-        "dataset_artifact_sha256": dataset_artifact_sha,
-        "review_csv_sha256": review_csv_sha,
-        "source_sha256": source_sha,
-        "calendar_sha256": calendar_sha,
-        "adjustments_sha256": adjustments_sha,
-        "point_in_time_sha256": pit_sha,
-        "collected_at_utc": collected_at_utc,
-    }
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
 
 
 def build_candidate_bundle(
@@ -633,14 +606,21 @@ def approve_candidate(
         raise ValueError(f"duplicate_approval: dataset {manifest.dataset_sha256} is already approved")
 
     new_approval = Approval(
+        candidate_id=manifest.candidate_id,
+        ticker=manifest.ticker,
+        strategy_id=manifest.strategy_id,
+        intended_use=manifest.intended_use,
         dataset_sha256=manifest.dataset_sha256,
-        reviewed_by=reviewed_by.strip(),
-        review_notes=review_notes.strip(),
-        status="approved",
+        collected_at_utc=manifest.collected_at_utc,
+        dataset_artifact=manifest.dataset_artifact,
+        review_csv=manifest.review_csv,
         source=manifest.source,
         calendar=manifest.calendar,
         adjustments=manifest.adjustments,
         point_in_time=manifest.point_in_time,
+        reviewed_by=reviewed_by.strip(),
+        review_notes=review_notes.strip(),
+        status="approved",
     )
 
     # Display approval summary

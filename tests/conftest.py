@@ -38,7 +38,7 @@ def synthetic_backtest_approval(monkeypatch):
     behavior is exercised separately in test_data_approval.py.
     """
     from trading_bot.signals import engine
-    def synthetic_only(df, ticker):
+    def synthetic_only(df, ticker, *args, **kwargs):
         if ticker != 'TESTE3.SA':
             raise ValueError('synthetic_fixture_only')
     monkeypatch.setattr(engine, 'require_data_approval', synthetic_only)
@@ -86,29 +86,50 @@ def mock_validate_dataset_digest(monkeypatch, request):
     if (
         'test_data_approval' in request.module.__name__
         or 'test_nexus_002' in request.module.__name__
+        or 'test_nexus_003' in request.module.__name__
         or 'sem_aprovacao' in request.node.name
     ):
         return
     import trading_bot.data.approval
-    from trading_bot.data.approval import Approval, Evidence
+    from trading_bot.data.approval import Approval, Evidence, compute_candidate_id
 
-    def _mock_require(digest):
+    def _mock_require(digest, *args, **kwargs):
         if digest == 'invalid_hash':
             raise ValueError('data_approval_required')
         ev = Evidence(path="dummy.csv", sha256="0" * 64)
-        return Approval(
+        c_id = compute_candidate_id(
+            ticker="PETR4.SA",
+            strategy_id="donchian_breakout",
+            intended_use="PAPER_TRADING",
             dataset_sha256=digest,
-            reviewed_by="test-mock",
-            review_notes="mocked for test",
-            status="approved",
+            collected_at_utc="2026-09-16T12:00:00Z",
+            dataset_artifact_sha256=ev.sha256,
+            review_csv_sha256=ev.sha256,
+            source_sha256=ev.sha256,
+            calendar_sha256=ev.sha256,
+            adjustments_sha256=ev.sha256,
+            point_in_time_sha256=ev.sha256,
+        )
+        return Approval(
+            candidate_id=c_id,
+            ticker="PETR4.SA",
+            strategy_id="donchian_breakout",
+            intended_use="PAPER_TRADING",
+            dataset_sha256=digest,
+            collected_at_utc="2026-09-16T12:00:00Z",
+            dataset_artifact=ev,
+            review_csv=ev,
             source=ev,
             calendar=ev,
             adjustments=ev,
             point_in_time=ev,
+            reviewed_by="test-mock",
+            review_notes="mocked for test",
+            status="approved",
         )
 
-    def _mock_validate(digest):
-        _mock_require(digest)
+    def _mock_validate(digest, *args, **kwargs):
+        _mock_require(digest, *args, **kwargs)
 
     monkeypatch.setattr(trading_bot.data.approval, 'validate_dataset_digest', _mock_validate)
     monkeypatch.setattr(trading_bot.data.approval, 'require_dataset_approval_by_digest', _mock_require)

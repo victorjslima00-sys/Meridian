@@ -22,11 +22,13 @@ import pandas as pd
 import pytest
 
 from scripts.paper_session_preflight import run_paper_preflight
+from backend.app.agents.market_analyst import MarketAnalyst
 from trading_bot.data import approval
 from trading_bot.data.approval import (
     Registry,
     dataset_digest,
     normalize_ohlcv_to_signal_df,
+    require_dataset_approval_by_digest,
 )
 from trading_bot.data.approval_candidate import (
     APPROVAL_CONFIRMATION_TOKEN,
@@ -570,3 +572,330 @@ def test_read_only_db_row_fingerprints_verified(synthetic_ohlcv_df, tmp_path):
     assert report.portfolio_mutations_count == 0
     assert report.trades_fingerprint_match is True
     assert report.portfolio_fingerprint_match is True
+
+
+# ===========================================================================
+# NEXUS-003-R2: PERSISTED APPROVAL AUTHORITY & REGISTRY-CONTEXT CLOSEOUT TESTS
+# ===========================================================================
+
+def test_approval_persisted_in_registry_contains_full_candidate_authority(synthetic_ohlcv_df, tmp_path):
+    """Proves Approval persisted in Registry contains candidate_id, strategy_id, intended_use, and all 6 artifacts."""
+    ticker = "PETR4.SA"
+    bundle_dir = tmp_path / "candidates" / "petr4"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=synthetic_ohlcv_df,
+    )
+    custom_reg = tmp_path / "data_approvals.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="Full authority persistence test",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    reg_data = json.loads(custom_reg.read_text(encoding="utf-8"))
+    assert len(reg_data["approvals"]) == 1
+    raw_approval = reg_data["approvals"][0]
+
+    # Verify all 14 fields
+    assert raw_approval["candidate_id"] == manifest.candidate_id
+    assert raw_approval["ticker"] == ticker
+    assert raw_approval["strategy_id"] == DEFAULT_STRATEGY_ID
+    assert raw_approval["intended_use"] == "PAPER_TRADING"
+    assert raw_approval["dataset_sha256"] == manifest.dataset_sha256
+    assert raw_approval["collected_at_utc"] == manifest.collected_at_utc
+    assert raw_approval["dataset_artifact"]["sha256"] == manifest.dataset_artifact.sha256
+    assert raw_approval["review_csv"]["sha256"] == manifest.review_csv.sha256
+    assert raw_approval["source"]["sha256"] == manifest.source.sha256
+    assert raw_approval["calendar"]["sha256"] == manifest.calendar.sha256
+    assert raw_approval["adjustments"]["sha256"] == manifest.adjustments.sha256
+    assert raw_approval["point_in_time"]["sha256"] == manifest.point_in_time.sha256
+    assert raw_approval["reviewed_by"] == "Victor"
+    assert raw_approval["review_notes"] == "Full authority persistence test"
+    assert raw_approval["status"] == "approved"
+
+    # Execution-time validation against exact persisted authority
+    validated = require_dataset_approval_by_digest(
+        manifest.dataset_sha256,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+    assert validated.candidate_id == manifest.candidate_id
+
+
+def test_tampered_candidate_artifact_after_approval_fails_closed(synthetic_ohlcv_df, tmp_path):
+    """Proves modifying dataset.json after approval causes execution validation to fail closed."""
+    ticker = "PETR4.SA"
+    bundle_dir = tmp_path / "candidates" / "petr4"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=synthetic_ohlcv_df,
+    )
+    custom_reg = tmp_path / "data_approvals.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="Tampering test",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    # Tamper dataset.json
+    dataset_json_path = bundle_dir / "dataset.json"
+    data = json.loads(dataset_json_path.read_text(encoding="utf-8"))
+    data["bars"][0]["close"] = 999.99
+    dataset_json_path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="data_approval_required"):
+        require_dataset_approval_by_digest(
+            manifest.dataset_sha256,
+            registry_path=custom_reg,
+            project_root=tmp_path,
+        )
+
+
+def test_tampered_review_csv_after_approval_fails_closed(synthetic_ohlcv_df, tmp_path):
+    """Proves modifying dataset.csv after approval causes execution validation to fail closed."""
+    ticker = "PETR4.SA"
+    bundle_dir = tmp_path / "candidates" / "petr4"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=synthetic_ohlcv_df,
+    )
+    custom_reg = tmp_path / "data_approvals.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="CSV Tampering test",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    # Tamper dataset.csv
+    review_csv_path = bundle_dir / "dataset.csv"
+    content = review_csv_path.read_text(encoding="utf-8")
+    review_csv_path.write_text(content + "\n2025-12-31,1,2,3,4,5\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="data_approval_required"):
+        require_dataset_approval_by_digest(
+            manifest.dataset_sha256,
+            registry_path=custom_reg,
+            project_root=tmp_path,
+        )
+
+
+def test_tampered_candidate_id_in_registry_fails_closed(synthetic_ohlcv_df, tmp_path):
+    """Proves forging or mismatching candidate_id in registry fails closed."""
+    ticker = "PETR4.SA"
+    bundle_dir = tmp_path / "candidates" / "petr4"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=synthetic_ohlcv_df,
+    )
+    custom_reg = tmp_path / "data_approvals.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="ID Tampering test",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    # Modify candidate_id in registry
+    reg_data = json.loads(custom_reg.read_text(encoding="utf-8"))
+    reg_data["approvals"][0]["candidate_id"] = "f" * 64
+    custom_reg.write_text(json.dumps(reg_data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="data_approval_required"):
+        require_dataset_approval_by_digest(
+            manifest.dataset_sha256,
+            registry_path=custom_reg,
+            project_root=tmp_path,
+        )
+
+
+def test_active_strategy_identity_mismatch_fails_closed(synthetic_ohlcv_df, tmp_path):
+    """Proves that if active strategy configuration changes or is unsupported, approval validation fails closed."""
+    ticker = "PETR4.SA"
+    bundle_dir = tmp_path / "candidates" / "petr4"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=synthetic_ohlcv_df,
+    )
+    custom_reg = tmp_path / "data_approvals.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="Strategy check test",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    # Create unsupported strategy config
+    bad_settings = tmp_path / "bad_settings.yaml"
+    bad_settings.write_text("strategy: unknown_experimental_strat\nsignals: {}\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="data_approval_required"):
+        require_dataset_approval_by_digest(
+            manifest.dataset_sha256,
+            registry_path=custom_reg,
+            project_root=tmp_path,
+            settings_path=bad_settings,
+        )
+
+
+@pytest.mark.asyncio
+async def test_market_analyst_custom_registry_end_to_end_buy_and_fail_closed(tmp_path, monkeypatch):
+    """Proves MarketAnalyst produces BUY with approved custom registry, and HOLD without it or when tampered."""
+    import numpy as np
+
+    ticker = "PETR4.SA"
+    # Generate 250 bars with confirmed Donchian breakout
+    rng = np.random.default_rng(0)
+    price = 85.0
+    closes = []
+    for _ in range(249):
+        price += 0.015 + rng.normal(0, 0.35)
+        closes.append(price)
+    recent_high = max(closes[-20:])
+    closes.append(recent_high * 1.02)
+    highs = [c * 1.006 if i < 249 else c * 1.001 for i, c in enumerate(closes)]
+    df = pd.DataFrame({
+        "date": pd.date_range("2023-01-02", periods=250, freq="D"),
+        "close": closes,
+        "open": [c * 0.999 for c in closes],
+        "high": highs,
+        "low": [c * 0.994 for c in closes],
+        "volume": [1000] * 249 + [2500],
+    })
+
+    bundle_dir = tmp_path / "candidates" / "petr4"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=df,
+    )
+    custom_reg = tmp_path / "custom_approvals.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="End to end test",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    # 1. Custom registry passed: BUY, dataset_approved=True
+    analyst = MarketAnalyst(ticker)
+    from unittest.mock import patch
+    with patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+        res_approved = await analyst.analyze_ohlcv(
+            df=df,
+            registry_path=custom_reg,
+            project_root=tmp_path,
+        )
+    assert res_approved["signal"] == "BUY"
+    assert res_approved["dataset_approved"] is True
+    assert res_approved["strategy_id"] == "donchian_breakout"
+
+    # 2. Production registry (empty): HOLD, dataset_approved=False
+    with patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+        res_default = await analyst.analyze_ohlcv(df=df)
+    assert res_default["signal"] == "HOLD"
+    assert res_default["dataset_approved"] is False
+
+    # 3. Tampered custom registry (empty): HOLD, dataset_approved=False
+    empty_reg = tmp_path / "empty_approvals.json"
+    empty_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+    with patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+        res_empty = await analyst.analyze_ohlcv(
+            df=df,
+            registry_path=empty_reg,
+            project_root=tmp_path,
+        )
+    assert res_empty["signal"] == "HOLD"
+    assert res_empty["dataset_approved"] is False
+
+    # Production registry remains untouched
+    assert approval.REGISTRY.read_text(encoding="utf-8").strip() == '{"version": 1, "approvals": []}'
+
+
+def test_preflight_universe_source_and_explicit_subset(tmp_path):
+    """Proves preflight reads _universe.tickers normalized and labels explicit subsets correctly."""
+    # Test explicit subset
+    rep_explicit = run_paper_preflight(
+        storage_dir=tmp_path / "storage1",
+        tickers=["PETR4", "VALE3"],
+        max_tickers=2,
+    )
+    assert rep_explicit.universe_source.startswith("Explicit subset (2 tickers)")
+    assert rep_explicit.ticker_results[0].ticker == "PETR4.SA"
+    assert rep_explicit.ticker_results[1].ticker == "VALE3.SA"
+
+    # Test configured universe
+    rep_cfg = run_paper_preflight(
+        storage_dir=tmp_path / "storage2",
+        tickers=None,
+        max_tickers=1,
+    )
+    assert rep_cfg.universe_source.startswith("Configured universe")
+
+    # Test missing universe fails closed with BLOCKED
+    missing_universe = tmp_path / "missing_universe.yaml"
+    rep_blocked = run_paper_preflight(
+        storage_dir=tmp_path / "storage3",
+        universe_path=str(missing_universe),
+        tickers=None,
+    )
+    assert rep_blocked.overall_status == "BLOCKED"
+    assert any("UNIVERSE_UNAVAILABLE" in msg for msg in rep_blocked.system_messages)
+
+
+def test_production_registry_strictly_empty_invariant():
+    """Proves config/data_approvals.json is strictly empty in production repository."""
+    raw = approval.REGISTRY.read_text(encoding="utf-8").strip()
+    data = json.loads(raw)
+    assert data["version"] == 1
+    assert data["approvals"] == []

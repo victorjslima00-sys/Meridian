@@ -27,9 +27,10 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from backend.app.agents.market_analyst import MarketAnalyst  # noqa: E402
-from backend.app.runtime_config import RuntimeConfig  # noqa: E402
 from backend.app.data.database import DB_PATH  # noqa: E402
+from backend.app.data.feed import _normalize_ticker  # noqa: E402
 from backend.app.markets import get_broker, PaperBroker, resolve_market  # noqa: E402
+from backend.app.runtime_config import RuntimeConfig  # noqa: E402
 from trading_bot.core.config import AppConfig  # noqa: E402
 from trading_bot.data.approval import (  # noqa: E402
     PROJECT_ROOT,
@@ -77,6 +78,7 @@ class PreflightReport:
     system_messages: List[str] = field(default_factory=list)
     real_broker_calls_verification: str = "UNVERIFIED"
     broker_activation: str = "NOT DETECTED"
+    universe_source: str = "configured_universe"
 
 
 def _compute_db_table_fingerprint(conn: sqlite3.Connection, table_name: str) -> str:
@@ -301,16 +303,45 @@ def run_paper_preflight(
     system_messages.append(valuation_msg)
 
     # 2. Universe tickers to check
+    universe_loaded_ok = True
     if tickers is not None:
-        eval_tickers = tickers
+        eval_tickers = [_normalize_ticker(t) for t in tickers if t.strip()]
+        universe_source = f"Explicit subset ({len(eval_tickers)} tickers)"
+        if not eval_tickers:
+            universe_loaded_ok = False
+            system_messages.append(
+                "BLOCKED: UNIVERSE_UNAVAILABLE - Explicit subset is empty"
+            )
     else:
         try:
-            app_cfg = AppConfig.load(settings_path=settings_path, universe_path=universe_path)
-            eval_tickers = app_cfg.get("watchlist", default=[]) or []
-            if not eval_tickers:
-                eval_tickers = ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]
-        except Exception:
-            eval_tickers = ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]
+            app_cfg = AppConfig.load(
+                settings_path=settings_path, universe_path=universe_path
+            )
+            raw_tickers = (
+                app_cfg.get("_universe", "tickers", default=[]) or []
+            )
+            if not raw_tickers:
+                eval_tickers = []
+                universe_loaded_ok = False
+                universe_source = "Unavailable (empty in config)"
+                system_messages.append(
+                    "BLOCKED: UNIVERSE_UNAVAILABLE - "
+                    "Universe tickers empty in config"
+                )
+            else:
+                eval_tickers = [
+                    _normalize_ticker(t) for t in raw_tickers if t.strip()
+                ]
+                universe_source = (
+                    f"Configured universe ({len(eval_tickers)} tickers)"
+                )
+        except Exception as exc:
+            eval_tickers = []
+            universe_loaded_ok = False
+            universe_source = f"Unavailable ({exc})"
+            system_messages.append(
+                f"BLOCKED: UNIVERSE_UNAVAILABLE - Failed to load universe: {exc}"
+            )
 
     if max_tickers and max_tickers > 0:
         eval_tickers = eval_tickers[:max_tickers]
@@ -355,6 +386,7 @@ def run_paper_preflight(
                             dataset_sha256=digest,
                             registry_path=resolved_registry,
                             project_root=resolved_root,
+                            settings_path=settings_path,
                         )
                         approval_verdict = "PASS"
                         approval_reason = f"Approved (reviewer={approval_obj.reviewed_by})"
@@ -373,6 +405,7 @@ def run_paper_preflight(
                                 df=raw_df,
                                 registry_path=resolved_registry,
                                 project_root=resolved_root,
+                                settings_path=settings_path,
                             )
                         )
                         analyst_result = analysis.get("signal", "UNKNOWN")
@@ -450,6 +483,7 @@ def run_paper_preflight(
         and cb_can_trade_ok
         and storage_ok
         and valuation_ok
+        and universe_loaded_ok
         and (trade_mutations == 0)
         and (portfolio_mutations == 0)
         and trades_fp_match
@@ -461,7 +495,9 @@ def run_paper_preflight(
         and all(t.preflight_verdict == "PASS" for t in ticker_results)
     )
 
-    if system_all_ok and tickers_all_pass:
+    if not universe_loaded_ok:
+        overall = "BLOCKED"
+    elif system_all_ok and tickers_all_pass:
         overall = "PASS"
     elif any(t.preflight_verdict == "BLOCKED" for t in ticker_results) or not system_all_ok:
         overall = "BLOCKED"
@@ -492,17 +528,19 @@ def run_paper_preflight(
         system_messages=system_messages,
         real_broker_calls_verification="UNVERIFIED",
         broker_activation=broker_act,
+        universe_source=universe_source,
     )
 
 
 def format_report(report: PreflightReport) -> str:
     lines = []
     lines.append("=" * 80)
-    lines.append("MERIDIAN PAPER SESSION PREFLIGHT REPORT (NEXUS-003-R1)")
+    lines.append("MERIDIAN PAPER SESSION PREFLIGHT REPORT (NEXUS-003-R2)")
     lines.append("=" * 80)
     lines.append(f"Started at (UTC):  {report.started_at_utc}")
     lines.append(f"Ended at (UTC):    {report.ended_at_utc}")
     lines.append(f"Overall Status:    {report.overall_status}")
+    lines.append(f"Universe Source:   {report.universe_source}")
 
     tm_status = " (ZERO MUTATION VERIFIED)" if (
         report.trade_mutations_count == 0 and report.trades_fingerprint_match

@@ -19,21 +19,41 @@ VALID_SHA256 = "0" * 64
 
 @pytest.fixture(autouse=True)
 def synthetic_approval(monkeypatch):
-    from trading_bot.data.approval import Approval, Evidence
+    from trading_bot.data.approval import Approval, Evidence, compute_candidate_id
     ev = Evidence(path="synthetic.csv", sha256=VALID_SHA256)
-    appr = Approval(
+    c_id = compute_candidate_id(
+        ticker="PETR4",
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
         dataset_sha256=VALID_SHA256,
-        reviewed_by="nexus-tester",
-        review_notes="synthetic fixture",
-        status="approved",
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact_sha256=ev.sha256,
+        review_csv_sha256=ev.sha256,
+        source_sha256=ev.sha256,
+        calendar_sha256=ev.sha256,
+        adjustments_sha256=ev.sha256,
+        point_in_time_sha256=ev.sha256,
+    )
+    appr = Approval(
+        candidate_id=c_id,
+        ticker="PETR4",
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
+        dataset_sha256=VALID_SHA256,
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact=ev,
+        review_csv=ev,
         source=ev,
         calendar=ev,
         adjustments=ev,
         point_in_time=ev,
+        reviewed_by="nexus-tester",
+        review_notes="synthetic fixture",
+        status="approved",
     )
     monkeypatch.setattr(
         "trading_bot.data.approval.require_dataset_approval_by_digest",
-        lambda d: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required"))
+        lambda d, *a, **kw: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required"))
     )
 
 

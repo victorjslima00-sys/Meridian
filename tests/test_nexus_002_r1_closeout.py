@@ -28,7 +28,12 @@ from backend.app.agents.executor import ExecutorAgent
 from backend.app.agents.market_analyst import MarketAnalyst
 from backend.app.agents.risk_manager import RiskManager
 from backend.app.markets.paper_broker import PaperBroker
-from trading_bot.data.approval import Approval, Evidence, dataset_digest
+from trading_bot.data.approval import (
+    Approval,
+    Evidence,
+    compute_candidate_id,
+    dataset_digest,
+)
 from trading_bot.execution.paper_session import PaperSessionRunner
 
 
@@ -58,19 +63,39 @@ VALID_SHA256 = "a" * 64
 @pytest.fixture
 def synthetic_approval(monkeypatch):
     ev = Evidence(path="synthetic.csv", sha256=VALID_SHA256)
-    appr = Approval(
+    c_id = compute_candidate_id(
+        ticker="PETR4",
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
         dataset_sha256=VALID_SHA256,
-        reviewed_by="nexus-tester",
-        review_notes="synthetic closeout fixture",
-        status="approved",
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact_sha256=ev.sha256,
+        review_csv_sha256=ev.sha256,
+        source_sha256=ev.sha256,
+        calendar_sha256=ev.sha256,
+        adjustments_sha256=ev.sha256,
+        point_in_time_sha256=ev.sha256,
+    )
+    appr = Approval(
+        candidate_id=c_id,
+        ticker="PETR4",
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
+        dataset_sha256=VALID_SHA256,
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact=ev,
+        review_csv=ev,
         source=ev,
         calendar=ev,
         adjustments=ev,
         point_in_time=ev,
+        reviewed_by="nexus-tester",
+        review_notes="synthetic closeout fixture",
+        status="approved",
     )
     monkeypatch.setattr(
         "trading_bot.data.approval.require_dataset_approval_by_digest",
-        lambda d: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required")),
+        lambda d, *a, **kw: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required")),
     )
     return appr
 
@@ -160,19 +185,39 @@ async def test_a_real_market_analyst_autonomous_path_with_valid_approval(
 
     # Register temporary approval for this exact real digest
     ev = Evidence(path="synthetic_evidence.csv", sha256=real_digest)
-    real_approval = Approval(
+    c_id = compute_candidate_id(
+        ticker=ticker,
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
         dataset_sha256=real_digest,
-        reviewed_by="nexus-002-r2-auditor",
-        review_notes="temporary fixture for real market analyst integration",
-        status="approved",
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact_sha256=ev.sha256,
+        review_csv_sha256=ev.sha256,
+        source_sha256=ev.sha256,
+        calendar_sha256=ev.sha256,
+        adjustments_sha256=ev.sha256,
+        point_in_time_sha256=ev.sha256,
+    )
+    real_approval = Approval(
+        candidate_id=c_id,
+        ticker=ticker,
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
+        dataset_sha256=real_digest,
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact=ev,
+        review_csv=ev,
         source=ev,
         calendar=ev,
         adjustments=ev,
         point_in_time=ev,
+        reviewed_by="nexus-002-r2-auditor",
+        review_notes="temporary fixture for real market analyst integration",
+        status="approved",
     )
     monkeypatch.setattr(
         "trading_bot.data.approval.require_dataset_approval_by_digest",
-        lambda d: real_approval if d == real_digest else (_ for _ in ()).throw(ValueError("data_approval_required")),
+        lambda d, *a, **kw: real_approval if d == real_digest else (_ for _ in ()).throw(ValueError("data_approval_required")),
     )
 
     # Execute actual MarketAnalyst.analyze()

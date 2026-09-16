@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -159,6 +159,9 @@ def compute_signal(
     stop_atr_mult: float = 2.0,        # Stop baseado no ATR
     stop_pct: float = 0.04,            # Stop de segurança (hard cap)
     target_atr_mult: float = 4.0,      # Target dinâmico (ATR * 4, R:R 1:2)
+    registry_path: Any = None,
+    project_root: Any = None,
+    settings_path: Any = None,
     **kwargs,                          # Ignora argumentos adicionais para evitar TypeErrors
 ) -> Optional[Candidate]:
     """
@@ -182,7 +185,14 @@ def compute_signal(
 
     try:
         validate_signal_input(df)
-        require_data_approval(df, ticker)
+        approval_kwargs = {}
+        if registry_path is not None:
+            approval_kwargs["registry_path"] = registry_path
+        if project_root is not None:
+            approval_kwargs["project_root"] = project_root
+        if settings_path is not None:
+            approval_kwargs["settings_path"] = settings_path
+        require_data_approval(df, ticker, **approval_kwargs)
     except ValueError:
         logger.warning("[%s] Histórico inválido ou sem aprovação; sinal bloqueado", ticker)
         return None
