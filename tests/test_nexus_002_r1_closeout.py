@@ -24,6 +24,7 @@ from backend.app.agents.contracts import (
     RiskDecision,
     TypedSignal,
 )
+from tests.conftest import make_test_evidenced_quote
 from backend.app.agents.executor import ExecutorAgent
 from backend.app.agents.market_analyst import MarketAnalyst
 from backend.app.agents.risk_manager import RiskManager
@@ -252,7 +253,11 @@ async def test_a_real_market_analyst_autonomous_path_with_valid_approval(
     assert decision.signal_id == sig.signal_id
 
     # 3. ApprovedExecutionIntent construction
-    intent = ApprovedExecutionIntent(signal=sig, risk_decision=decision)
+    intent = ApprovedExecutionIntent(
+        signal=sig,
+        risk_decision=decision,
+        execution_quote=make_test_evidenced_quote(ticker, float(sig.price)),
+    )
     assert intent.intent_id.startswith("exec_")
     assert intent.signal_id == sig.signal_id
     assert intent.decision_id == decision.decision_id
@@ -307,7 +312,11 @@ async def test_a2_real_market_analyst_unapproved_dataset_results_in_hold_and_no_
 
     # ApprovedExecutionIntent cannot be formed for HOLD (rejected risk decision)
     with pytest.raises((ValidationError, ValueError)):
-        ApprovedExecutionIntent(signal=hold_sig, risk_decision=hold_decision)
+        ApprovedExecutionIntent(
+            signal=hold_sig,
+            risk_decision=hold_decision,
+            execution_quote=make_test_evidenced_quote(ticker, 30.0),
+        )
 
     # Even with forged approved=True decision, HOLD is rejected by signal.side invariant
     forged_approved_dec = RiskDecision(
@@ -320,7 +329,11 @@ async def test_a2_real_market_analyst_unapproved_dataset_results_in_hold_and_no_
         decision_timestamp=datetime.now(timezone.utc),
     )
     with pytest.raises((ValidationError, ValueError), match="must be BUY or SELL"):
-        ApprovedExecutionIntent(signal=hold_sig, risk_decision=forged_approved_dec)
+        ApprovedExecutionIntent(
+            signal=hold_sig,
+            risk_decision=forged_approved_dec,
+            execution_quote=make_test_evidenced_quote(ticker, 30.0),
+        )
 
     # Zero DB mutation
     trades_after, pf_after = _get_db_state(isolated_db)
@@ -506,7 +519,11 @@ def test_f_signal_risk_mismatch_rejected_before_transaction(isolated_db, synthet
 
     # Combining Signal A with Decision for Signal B must be rejected by validator
     with pytest.raises(ValueError, match="does not match"):
-        ApprovedExecutionIntent(signal=sig_a, risk_decision=dec_b)
+        ApprovedExecutionIntent(
+            signal=sig_a,
+            risk_decision=dec_b,
+            execution_quote=make_test_evidenced_quote(sig_a.ticker, 30.0),
+        )
 
     trades_after, pf_after = _get_db_state(isolated_db)
     assert trades_after == 0
@@ -548,7 +565,11 @@ def test_g_paperbroker_rejects_raw_dicts_accepts_typed_intent(isolated_db, synth
         reason="Approved",
         decision_timestamp=datetime.now(timezone.utc),
     )
-    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+    intent = ApprovedExecutionIntent(
+        signal=sig,
+        risk_decision=dec,
+        execution_quote=make_test_evidenced_quote(sig.ticker, 30.0),
+    )
 
     # Use isolated_db for executor agent
     from unittest.mock import patch
@@ -603,7 +624,8 @@ def test_h_journal_sanitized_validated_signal(tmp_path, synthetic_approval, mock
     }
 
     runner = PaperSessionRunner(session_id="session_h", db_path=str(db_file), storage_dir=str(storage_dir))
-    report = runner.run_cycle(signals=[raw_signal])
+    with patch("backend.app.data.feed.get_evidenced_quote", return_value=make_test_evidenced_quote("PETR4", 30.0)):
+        report = runner.run_cycle(signals=[raw_signal])
     assert report.orders_executed == 1
 
     # Inspect journal events
@@ -648,7 +670,11 @@ def test_mutation_a_signal_tampering_rejected_no_db_mutation(
         stop_loss=28.5,
         decision_timestamp=now,
     )
-    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+    intent = ApprovedExecutionIntent(
+        signal=sig,
+        risk_decision=dec,
+        execution_quote=make_test_evidenced_quote(sig.ticker, 30.0),
+    )
 
     # Post-validation mutation of price
     intent.signal.price = 31.0
@@ -690,7 +716,11 @@ def test_mutation_b_allocated_capital_tampering_rejected(
         stop_loss=28.5,
         decision_timestamp=now,
     )
-    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+    intent = ApprovedExecutionIntent(
+        signal=sig,
+        risk_decision=dec,
+        execution_quote=make_test_evidenced_quote(sig.ticker, 30.0),
+    )
 
     # Post-validation mutation of allocated_capital on decision
     intent.risk_decision.allocated_capital = 5000.0
@@ -731,7 +761,11 @@ def test_mutation_c_target_stop_tampering_rejected(
         stop_loss=28.5,
         decision_timestamp=now,
     )
-    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+    intent = ApprovedExecutionIntent(
+        signal=sig,
+        risk_decision=dec,
+        execution_quote=make_test_evidenced_quote(sig.ticker, 30.0),
+    )
 
     # Post-validation mutation of target price
     intent.risk_decision.target_price = 45.0

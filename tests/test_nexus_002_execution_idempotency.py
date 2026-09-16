@@ -12,6 +12,7 @@ from backend.app.agents.contracts import (
 )
 from backend.app.agents.executor import ExecutorAgent
 from backend.app.data.database import init_db
+from tests.conftest import make_test_evidenced_quote
 
 
 VALID_SHA256 = "0" * 64
@@ -149,7 +150,8 @@ def _make_intent(
         reason="Risk approved",
         decision_timestamp=datetime.now(timezone.utc),
     )
-    return ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+    quote = make_test_evidenced_quote(ticker=ticker, price=price)
+    return ApprovedExecutionIntent(signal=sig, risk_decision=dec, execution_quote=quote)
 
 
 def test_executor_rejects_arbitrary_unbound_ids():
@@ -195,7 +197,11 @@ def test_executor_rejects_signal_risk_mismatch(tmp_path):
     )
 
     with pytest.raises(ValueError, match="does not match"):
-        ApprovedExecutionIntent(signal=sig, risk_decision=dec_other)
+        ApprovedExecutionIntent(
+            signal=sig,
+            risk_decision=dec_other,
+            execution_quote=make_test_evidenced_quote("PETR4", 30.0),
+        )
 
     # Calling executor with arbitrary dict is rejected
     res = executor.execute_order({"approved": True, "signal_id": "sig_" + "1" * 64})

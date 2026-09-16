@@ -387,8 +387,9 @@ def get_evidenced_quote(ticker: str, ttl: Optional[float] = None) -> Optional[Ev
             return None
 
         observed_at = datetime.fromisoformat(raw_evidence["observed_at"])
+        quote_ticker = raw_evidence.get("ticker", normalized).upper()
         return EvidencedQuote(
-            ticker=ticker.upper(),
+            ticker=quote_ticker,
             price=close_val,
             currency="BRL",
             source="yfinance",

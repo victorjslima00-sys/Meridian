@@ -30,6 +30,22 @@ def mock_circuit_breaker():
     with patch('trading_bot.risk.circuit_breaker.CircuitBreaker.from_config', return_value=breaker):
         yield breaker
 
+
+@pytest.fixture(autouse=True)
+def mock_feed_quotes():
+    from tests.conftest import make_test_evidenced_quote
+    from unittest.mock import patch
+    def _quote_side_effect(ticker, *args, **kwargs):
+        t_clean = ticker.replace(".SA", "").upper()
+        if t_clean == "PETR4":
+            return make_test_evidenced_quote("PETR4", 30.0)
+        elif t_clean == "VALE3":
+            return make_test_evidenced_quote("VALE3", 60.0)
+        return make_test_evidenced_quote(t_clean, 50.0)
+
+    with patch("backend.app.data.feed.get_evidenced_quote", side_effect=_quote_side_effect):
+        yield
+
 def test_paper_session_executes_signal_and_reconciles(tmp_path, mock_circuit_breaker):
     db_file = tmp_path / 'paper_test.db'
     storage_dir = tmp_path / 'paper_sessions'

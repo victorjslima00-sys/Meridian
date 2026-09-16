@@ -20,7 +20,7 @@ import os
 import sqlite3
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -40,7 +40,7 @@ def _make_price_row(close, open_=None, high=None, low=None):
         low = close
     return pd.DataFrame({
         "open": [open_], "high": [high], "low": [low], "close": [close],
-        "volume": [1000], "date": [datetime.now()],
+        "volume": [1000], "date": [datetime.now(timezone.utc)],
     })
 
 

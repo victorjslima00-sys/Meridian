@@ -187,7 +187,28 @@ class TestPaperBrokerDelegaParaOExecutor:
             stop_loss=28.5,
             decision_timestamp=datetime.now(timezone.utc),
         )
-        intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+        from tests.conftest import make_test_evidenced_quote
+        from backend.app.markets.b3_session import (
+            AutonomousSessionAuthority,
+            B3DayType,
+            B3SessionPhase,
+            override_session_authority,
+        )
+
+        test_auth = AutonomousSessionAuthority(
+            override_fn=lambda dt=None: (
+                True,
+                "Authorized in test suite",
+                B3DayType.NORMAL_TRADING_DAY,
+                B3SessionPhase.CONTINUOUS,
+            )
+        )
+        with override_session_authority(test_auth):
+            intent = ApprovedExecutionIntent(
+                signal=sig,
+                risk_decision=dec,
+                execution_quote=make_test_evidenced_quote("PETR4", 30.0),
+            )
 
         esperado = {"status": "executed"}
         with patch(

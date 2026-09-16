@@ -95,6 +95,8 @@ class PreflightReport:
     real_broker_calls_verification: str = "UNVERIFIED"
     broker_activation: str = "NOT DETECTED"
     universe_source: str = "configured_universe"
+    entry_quote_path_status: str = "READY"
+    exit_quote_path_status: str = "READY"
 
 
 def _compute_db_table_fingerprint(conn: sqlite3.Connection, table_name: str) -> str:
@@ -287,19 +289,38 @@ def check_single_paper_writer(project_root: Optional[Path] = None) -> tuple[bool
 
 
 def check_b3_session_calendar(now: Optional[datetime] = None) -> tuple[bool, str, str, bool, str]:
-    """Verify B3 official calendar and determine current session phase (NEXUS-004)."""
+    """Verify B3 official calendar and determine current session phase (NEXUS-004-R1)."""
     current_dt = now or datetime.now(timezone.utc)
-    day_type = get_b3_day_type(current_dt)
+    day_type = get_b3_day_type(current_dt.date())
     phase = get_b3_session_phase(current_dt)
-    can_enter = can_enter_new_position(current_dt)
+    from backend.app.markets.b3_session import get_session_authority
+    can_enter, session_reason, _, _ = get_session_authority().check_authority(current_dt)
     can_exit = can_manage_exits(current_dt)
 
     calendar_ok = (day_type != B3DayType.UNKNOWN)
     msg = (
         f"B3 Session: day_type={day_type.value}, phase={phase.value}, "
-        f"can_enter={can_enter}, can_exit={can_exit}"
+        f"can_enter={can_enter} ({session_reason}), can_exit={can_exit}"
     )
     return calendar_ok, day_type.value, phase.value, can_enter, msg
+
+
+def check_entry_quote_path() -> tuple[bool, str, str]:
+    """Inspect read-only entry quote retrieval contract (NEXUS-004-R1)."""
+    try:
+        from backend.app.data.feed import get_evidenced_quote
+        return True, "READY", "Entry quote contract (get_evidenced_quote) verified available"
+    except Exception as e:
+        return False, "BLOCKED", f"Entry quote path unavailable: {e}"
+
+
+def check_exit_quote_path() -> tuple[bool, str, str]:
+    """Inspect read-only exit quote extraction contract (NEXUS-004-R1)."""
+    try:
+        from backend.app.main import extract_exit_evidenced_quote, _price_is_trustworthy
+        return True, "READY", "Exit quote contract (extract_exit_evidenced_quote) verified available"
+    except Exception as e:
+        return False, "BLOCKED", f"Exit quote path unavailable: {e}"
 
 
 def check_valuation_subsystem() -> tuple[bool, str, str]:
@@ -376,6 +397,12 @@ def run_paper_preflight(
 
     valuation_ok, val_honesty, valuation_msg = check_valuation_subsystem()
     system_messages.append(valuation_msg)
+
+    entry_qp_ok, entry_qp_status, entry_qp_msg = check_entry_quote_path()
+    system_messages.append(entry_qp_msg)
+
+    exit_qp_ok, exit_qp_status, exit_qp_msg = check_exit_quote_path()
+    system_messages.append(exit_qp_msg)
 
     # 2. Universe tickers to check
     universe_loaded_ok = True
@@ -492,6 +519,7 @@ def run_paper_preflight(
                                 registry_path=resolved_registry,
                                 project_root=resolved_root,
                                 settings_path=settings_path,
+                                as_of=now_dt,
                             )
                         )
                         analyst_result = analysis.get("signal", "UNKNOWN")
@@ -569,6 +597,8 @@ def run_paper_preflight(
         and cb_cfg_ok
         and storage_ok
         and valuation_ok
+        and entry_qp_ok
+        and exit_qp_ok
         and universe_loaded_ok
         and (trade_mutations == 0)
         and (portfolio_mutations == 0)
@@ -624,6 +654,8 @@ def run_paper_preflight(
         circuit_breaker_can_trade_check=cb_can_trade_ok,
         storage_writable_check=storage_ok,
         valuation_subsystem_check=valuation_ok,
+        entry_quote_path_status=entry_qp_status,
+        exit_quote_path_status=exit_qp_status,
         trade_mutations_count=trade_mutations,
         portfolio_mutations_count=portfolio_mutations,
         trades_fingerprint_match=trades_fp_match,
@@ -674,6 +706,8 @@ def format_report(report: PreflightReport) -> str:
     lines.append(f"  [ {cb_gate_str} ] Circuit Breaker Entry Gate (can_trade)")
     lines.append(f"  [ {'PASS' if report.storage_writable_check else 'FAIL'} ] Storage Path Writable")
     lines.append(f"  [ {'PASS' if report.valuation_subsystem_check else 'FAIL'} ] Valuation Subsystem ({report.valuation_honesty_status})")
+    lines.append(f"  [ {report.entry_quote_path_status} ] Entry Quote Path (get_evidenced_quote)")
+    lines.append(f"  [ {report.exit_quote_path_status} ] Exit Quote Path (extract_exit_evidenced_quote)")
     lines.append("-" * 80)
     lines.append("TICKER EVALUATION:")
     lines.append(f"{'Ticker':<10} | {'Resolve':<8} | {'Digest':<18} | {'Approval':<10} | {'Verdict':<10} | {'Reason'}")

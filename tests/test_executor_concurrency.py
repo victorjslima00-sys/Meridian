@@ -115,7 +115,12 @@ class TestExecuteOrderConcurrency:
             signal_id=sig1.signal_id, approved=True, allocated_capital=100.0, target_price=65000.0,
             stop_loss=60000.0, reason='Test reason 1', decision_timestamp=datetime.now(timezone.utc)
         )
-        intent1 = ApprovedExecutionIntent(signal=sig1, risk_decision=dec1)
+        from tests.conftest import make_test_evidenced_quote
+        intent1 = ApprovedExecutionIntent(
+            signal=sig1,
+            risk_decision=dec1,
+            execution_quote=make_test_evidenced_quote("BTC-USD", 62000.0),
+        )
 
         sig2 = TypedSignal(
             ticker='BTC-USD', side='BUY', price=62000.0, target_price=65000.0, stop_loss=60000.0,
@@ -126,7 +131,11 @@ class TestExecuteOrderConcurrency:
             signal_id=sig2.signal_id, approved=True, allocated_capital=100.0, target_price=65000.0,
             stop_loss=60000.0, reason='Test reason 2', decision_timestamp=datetime.now(timezone.utc)
         )
-        intent2 = ApprovedExecutionIntent(signal=sig2, risk_decision=dec2)
+        intent2 = ApprovedExecutionIntent(
+            signal=sig2,
+            risk_decision=dec2,
+            execution_quote=make_test_evidenced_quote("BTC-USD", 62000.0),
+        )
         intents = [intent1, intent2]
 
         barrier = threading.Barrier(2)

@@ -245,6 +245,9 @@ def _formatar_posicoes_abertas_para_alerta() -> str:
     return "\n".join(linhas)
 
 
+PAPER_EXIT_MAX_OBSERVATION_AGE_SECONDS: float = 300.0
+
+
 def _price_is_trustworthy(
     price: Any,
     open_: Any = None,
@@ -255,7 +258,7 @@ def _price_is_trustworthy(
     max_age_seconds: Optional[float] = None,
     now: Optional[datetime.datetime] = None,
 ) -> bool:
-    """FAIL-CLOSED para decisões de saída (NEXUS-004):
+    """FAIL-CLOSED para decisões de saída (NEXUS-004-R1):
     Rejeita:
     - None
     - bool (isinstance(price, bool) == True não é preço numérico)
@@ -264,8 +267,9 @@ def _price_is_trustworthy(
     - +Inf / -Inf (valores não finitos)
     - price <= 0
     - velas com Open, High e Low todos zerados (candle incompleto do yfinance)
-    - timestamp futuro ou sem fuso
+    - timestamp sem fuso (naive) ou futuro (> 5s tolerância)
     - cotação com idade superior a max_age_seconds (stale price)
+    - observed_at posterior a collected_at (inconsistência causal)
     """
     if price is None or isinstance(price, bool):
         return False
@@ -301,31 +305,111 @@ def _price_is_trustworthy(
         if current_time.tzinfo is None:
             current_time = current_time.replace(tzinfo=tz_b3)
 
-        ts_to_check = observed_at if observed_at is not None else collected_at
-        if ts_to_check is not None:
-            if not isinstance(ts_to_check, datetime.datetime):
-                try:
-                    ts_to_check = pd.to_datetime(ts_to_check)
-                    if isinstance(ts_to_check, pd.Timestamp):
-                        ts_to_check = ts_to_check.to_pydatetime()
-                except Exception:
+        # Naive provider timestamps: REJECT. Do not invent timezone semantics (NEXUS-004-R1).
+        parsed_dates = []
+        for ts_cand in (observed_at, collected_at):
+            if ts_cand is not None:
+                if not isinstance(ts_cand, datetime.datetime):
+                    try:
+                        ts_cand = pd.to_datetime(ts_cand)
+                        if isinstance(ts_cand, pd.Timestamp):
+                            ts_cand = ts_cand.to_pydatetime()
+                    except Exception:
+                        return False
+                if ts_cand.tzinfo is None:
                     return False
-
-            if ts_to_check.tzinfo is None:
-                ts_tz = ts_to_check.replace(tzinfo=tz_b3)
+                parsed_dates.append(ts_cand.astimezone(tz_b3))
             else:
-                ts_tz = ts_to_check.astimezone(tz_b3)
+                parsed_dates.append(None)
 
-            # Future timestamp check (tolerance of 5s)
-            if (ts_tz - current_time).total_seconds() > 5.0:
+        obs_tz, col_tz = parsed_dates[0], parsed_dates[1]
+
+        # Non-causal check if both timestamps provided
+        if obs_tz is not None and col_tz is not None:
+            if obs_tz > col_tz + datetime.timedelta(seconds=1.0):
                 return False
 
-            limit = max_age_seconds if max_age_seconds is not None else 3600.0
-            age = (current_time - ts_tz).total_seconds()
+        ts_to_check = obs_tz if obs_tz is not None else col_tz
+        if ts_to_check is not None:
+            # Future timestamp check (tolerance of 5s)
+            if (ts_to_check - current_time).total_seconds() > 5.0:
+                return False
+
+            limit = max_age_seconds if max_age_seconds is not None else PAPER_EXIT_MAX_OBSERVATION_AGE_SECONDS
+            age = (current_time - ts_to_check).total_seconds()
             if age > limit:
                 return False
 
     return True
+
+
+def extract_exit_evidenced_quote(
+    ticker: str,
+    df: Any,
+    collected_at: Optional[datetime.datetime] = None,
+) -> Optional[Any]:
+    """Extract and strictly validate EvidencedQuote from exit OHLCV data (NEXUS-004-R1)."""
+    if df is None or getattr(df, "empty", True):
+        return None
+    try:
+        from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
+        import pandas as pd
+        from zoneinfo import ZoneInfo
+
+        tz_b3 = ZoneInfo("America/Sao_Paulo")
+        candle = df.iloc[-1]
+        date_val = candle.get("date") if "date" in candle else (
+            candle.get("datetime") if "datetime" in candle else candle.get("index")
+        )
+        if date_val is None:
+            return None
+
+        if not isinstance(date_val, datetime.datetime):
+            date_val = pd.to_datetime(date_val)
+            if isinstance(date_val, pd.Timestamp):
+                date_val = date_val.to_pydatetime()
+
+        if date_val.tzinfo is None:
+            return None  # Naive timestamp rejected
+
+        obs_tz = date_val.astimezone(tz_b3)
+        col_tz = collected_at or datetime.datetime.now(tz_b3)
+        if col_tz.tzinfo is None:
+            return None
+        col_tz = col_tz.astimezone(tz_b3)
+
+        close_p = float(candle["close"])
+        if not math.isfinite(close_p) or close_p <= 0.0:
+            return None
+
+        raw_ev = {
+            "ticker": ticker.upper(),
+            "close": close_p,
+            "source": "exit_scan",
+            "price_kind": "bar_close",
+            "interval": "15m",
+            "vendor_symbol": ticker.upper(),
+            "observed_at": obs_tz.isoformat(),
+            "collected_at": col_tz.isoformat(),
+        }
+        sha = compute_evidence_sha256(raw_ev)
+        return EvidencedQuote(
+            ticker=ticker.upper(),
+            price=close_p,
+            currency="BRL",
+            source="exit_scan",
+            price_kind="bar_close",
+            interval="15m",
+            vendor_symbol=ticker.upper(),
+            observed_at=obs_tz,
+            collected_at=col_tz,
+            source_ref=f"exit_scan://{ticker}",
+            source_sha256=sha,
+            raw_evidence=raw_ev,
+        )
+    except Exception as exc:
+        logger.warning("[%s] Failed to extract exit EvidencedQuote: %s", ticker, exc)
+        return None
 
 
 async def _run_exit_scan() -> bool:
@@ -421,6 +505,16 @@ async def _run_exit_scan() -> bool:
                     f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
                     f"({current_price!r}) — posição mantida (fail-closed).",
                 )
+            all_trustworthy = False
+            continue
+
+        # Extract NEXUS-001-grade exit evidence binding (NEXUS-004-R1)
+        exit_quote = extract_exit_evidenced_quote(ticker, df_recent)
+        if exit_quote is None:
+            logger.warning(
+                "Exit scan: evidência estruturada de saída indisponível para %s — mantendo posição (fail-closed)",
+                ticker,
+            )
             all_trustworthy = False
             continue
 
@@ -522,7 +616,7 @@ async def _run_exit_scan() -> bool:
                 "warning",
             )
             executor = ExecutorAgent()
-            res = executor.close_order(trade_id, current_price, close_reason)
+            res = executor.close_order(trade_id, current_price, close_reason, evidence=exit_quote)
             await broadcast_log(
                 "ExecutorAgent",
                 f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
@@ -672,6 +766,18 @@ async def _run_one_scan_cycle():
     if not tickers_to_watch:
         logger.error("Universo configurado vazio ou indisponível — ciclo abortado (fail-closed)")
         await broadcast_log("System", "Universo configurado vazio — ciclo de entrada abortado", "warning")
+        return
+
+    # Autonomous session authority gate (NEXUS-004-R1)
+    from backend.app.markets.b3_session import get_session_authority
+    session_allowed, session_reason, _, _ = get_session_authority().check_authority()
+    if not session_allowed:
+        logger.info("Autonomous entry gate closed: %s — skipping scan cycle", session_reason)
+        await broadcast_log(
+            "System",
+            f"Sessão B3 não autorizada para novas entradas autônomas ({session_reason}) — gestão de saídas segue normal.",
+            "info",
+        )
         return
 
     for ticker in tickers_to_watch:

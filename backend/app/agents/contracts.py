@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -343,7 +343,7 @@ class ApprovedExecutionIntent(BaseModel):
 
     signal: TypedSignal
     risk_decision: RiskDecision
-    execution_quote: Optional[EvidencedQuote] = None
+    execution_quote: EvidencedQuote
     intent_id: Optional[str] = Field(default=None)
 
     @classmethod
@@ -383,9 +383,7 @@ class ApprovedExecutionIntent(BaseModel):
 
     @property
     def execution_price(self) -> float:
-        if self.execution_quote is not None:
-            return float(self.execution_quote.price)
-        return float(self.signal.price)
+        return float(self.execution_quote.price)
 
     @property
     def entry_price(self) -> float:
@@ -437,37 +435,11 @@ class ApprovedExecutionIntent(BaseModel):
         if self.risk_decision.allocated_capital is None or self.risk_decision.allocated_capital <= 0:
             raise ValueError("allocated capital must be finite and > 0")
 
-        # Synthesize fallback EvidencedQuote if not provided (ensures backward compatibility)
-        if self.execution_quote is None:
-            t_str = self.signal.ticker.strip().upper()
-            now_ts = self.signal.generated_at
-            raw = {
-                "ticker": t_str,
-                "close": float(self.signal.price),
-                "source": "synthetic_test_fallback",
-                "price_kind": "bar_close",
-                "interval": "1m",
-                "vendor_symbol": t_str,
-                "observed_at": now_ts.isoformat(),
-                "collected_at": now_ts.isoformat(),
-            }
-            raw_sha = compute_evidence_sha256(raw)
-            self.execution_quote = EvidencedQuote(
-                ticker=t_str,
-                price=float(self.signal.price),
-                currency="BRL",
-                source="synthetic_test_fallback",
-                price_kind="bar_close",
-                interval="1m",
-                vendor_symbol=t_str,
-                observed_at=now_ts,
-                collected_at=now_ts,
-                source_ref="contracts:synthetic_fallback",
-                source_sha256=raw_sha,
-                raw_evidence=raw,
-            )
-
+        # execution_quote is mandatory (NEXUS-004-R1)
         quote = self.execution_quote
+        if quote is None:
+            raise ValueError("execution_quote is mandatory for ApprovedExecutionIntent")
+
         sig_t = self.signal.ticker.upper().replace(".SA", "")
         q_t = quote.ticker.upper().replace(".SA", "")
         if sig_t != q_t:
@@ -482,22 +454,35 @@ class ApprovedExecutionIntent(BaseModel):
                 f"execution_quote source_sha256 ({quote.source_sha256}) mismatch with raw_evidence ({expected_raw_sha})"
             )
 
-        # Freshness verification (when not synthetic test fallback)
-        if quote.source != "synthetic_test_fallback":
-            now_utc = datetime.now(timezone.utc)
-            if quote.observed_at.tzinfo is None or quote.collected_at.tzinfo is None:
-                raise ValueError("execution_quote timestamps must be timezone-aware")
+        # Freshness verification (NEXUS-004-R1)
+        now_utc = datetime.now(timezone.utc)
+        if quote.observed_at.tzinfo is None or quote.collected_at.tzinfo is None:
+            raise ValueError("execution_quote timestamps must be timezone-aware")
 
-            obs_utc = quote.observed_at.astimezone(timezone.utc)
-            col_utc = quote.collected_at.astimezone(timezone.utc)
-            if (obs_utc - now_utc).total_seconds() > 5.0 or (col_utc - now_utc).total_seconds() > 5.0:
-                raise ValueError("execution_quote timestamp is in the future")
+        obs_utc = quote.observed_at.astimezone(timezone.utc)
+        col_utc = quote.collected_at.astimezone(timezone.utc)
 
-            quote_age = (now_utc - col_utc).total_seconds()
-            if quote_age > PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS:
-                raise ValueError(
-                    f"execution_quote is stale ({quote_age:.1f}s old > max {PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS}s)"
-                )
+        # Non-causal observation check: observed_at <= collected_at
+        if obs_utc > col_utc + timedelta(seconds=1.0):
+            raise ValueError(f"execution_quote observed_at ({obs_utc}) cannot be after collected_at ({col_utc})")
+
+        tolerated_skew = 5.0
+        if (obs_utc - now_utc).total_seconds() > tolerated_skew:
+            raise ValueError("execution_quote observed_at timestamp is in the future")
+        if (col_utc - now_utc).total_seconds() > tolerated_skew:
+            raise ValueError("execution_quote collected_at timestamp is in the future")
+
+        observation_age = (now_utc - obs_utc).total_seconds()
+        if observation_age > PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS:
+            raise ValueError(
+                f"execution_quote observed_at is stale ({observation_age:.1f}s old > max {PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS}s)"
+            )
+
+        collection_age = (now_utc - col_utc).total_seconds()
+        if collection_age > PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS:
+            raise ValueError(
+                f"execution_quote collected_at is stale ({collection_age:.1f}s old > max {PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS}s)"
+            )
 
         # Gap geometry check (NEXUS-004)
         exec_p = float(quote.price)
@@ -513,6 +498,12 @@ class ApprovedExecutionIntent(BaseModel):
                     f"Gap geometry violation: execution_price {exec_p} outside bounds "
                     f"(stop_loss={self.signal.stop_loss}, target_price={self.signal.target_price})"
                 )
+
+        # Defense-in-depth: Autonomous session authority check (NEXUS-004-R1)
+        from backend.app.markets.b3_session import get_session_authority
+        session_allowed, session_reason, _, _ = get_session_authority().check_authority(quote.observed_at)
+        if not session_allowed:
+            raise ValueError(f"Autonomous session rejected: {session_reason}")
 
         expected_intent_id = compute_intent_id(
             signal_id=self.signal.signal_id or "",

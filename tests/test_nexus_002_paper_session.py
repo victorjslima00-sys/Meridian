@@ -51,6 +51,20 @@ def synthetic_approval(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def mock_feed_quotes():
+    from tests.conftest import make_test_evidenced_quote
+    from unittest.mock import patch
+    def _quote_side_effect(ticker, *args, **kwargs):
+        t_clean = ticker.replace(".SA", "").upper()
+        if t_clean == "PETR4":
+            return make_test_evidenced_quote("PETR4", 30.0)
+        return make_test_evidenced_quote(t_clean, 50.0)
+
+    with patch("backend.app.data.feed.get_evidenced_quote", side_effect=_quote_side_effect):
+        yield
+
+
 def _init_paper_test_db(db_path: Path, initial_cash: float = 1000.0):
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()

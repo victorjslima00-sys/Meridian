@@ -134,3 +134,71 @@ def mock_validate_dataset_digest(monkeypatch, request):
     monkeypatch.setattr(trading_bot.data.approval, 'validate_dataset_digest', _mock_validate)
     monkeypatch.setattr(trading_bot.data.approval, 'require_dataset_approval_by_digest', _mock_require)
 
+
+def make_test_evidenced_quote(
+    ticker: str = "PETR4.SA",
+    price: float = 30.0,
+    age_seconds: float = 0.0,
+):
+    import datetime
+    from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
+    obs = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age_seconds)
+    t_clean = ticker.upper()
+    raw = {
+        "ticker": t_clean,
+        "close": float(price),
+        "source": "yfinance",
+        "price_kind": "bar_close",
+        "interval": "1m",
+        "vendor_symbol": t_clean,
+        "observed_at": obs.isoformat(),
+        "collected_at": obs.isoformat(),
+    }
+    return EvidencedQuote(
+        ticker=t_clean,
+        price=float(price),
+        currency="BRL",
+        source="yfinance",
+        price_kind="bar_close",
+        interval="1m",
+        vendor_symbol=t_clean,
+        observed_at=obs,
+        collected_at=obs,
+        source_ref="test_quote",
+        source_sha256=compute_evidence_sha256(raw),
+        raw_evidence=raw,
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_session_authority(request):
+    """Ensure autonomous session is CONTINUOUS by default for general tests.
+    
+    Excludes test_nexus_004* and test_market_abstraction* so they test the real B3 calendar.
+    """
+    if (
+        "test_nexus_004" in request.module.__name__
+        or "test_market_abstraction" in request.module.__name__
+    ):
+        yield
+        return
+
+    from backend.app.markets.b3_session import (
+        AutonomousSessionAuthority,
+        B3DayType,
+        B3SessionPhase,
+        override_session_authority,
+    )
+
+    test_authority = AutonomousSessionAuthority(
+        override_fn=lambda dt=None: (
+            True,
+            "Authorized in test suite",
+            B3DayType.NORMAL_TRADING_DAY,
+            B3SessionPhase.CONTINUOUS,
+        )
+    )
+    with override_session_authority(test_authority):
+        yield
+
+

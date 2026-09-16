@@ -131,7 +131,13 @@ def test_b3_ash_wednesday_special_hours():
     ash_continuous = datetime.datetime(2026, 2, 18, 13, 30, tzinfo=B3_TIMEZONE)
     assert get_session_phase(ash_continuous) == B3SessionPhase.CONTINUOUS
     assert can_enter_new_position(ash_continuous) is True
-    assert get_session_phase(datetime.datetime(2026, 2, 18, 16, 56, tzinfo=B3_TIMEZONE)) == B3SessionPhase.CLOSING_CALL
+    # Ash Wednesday continuous session runs until 17:55, closing call 17:55-18:00 (B3 OC 003/2026-VNC)
+    ash_late = datetime.datetime(2026, 2, 18, 16, 56, tzinfo=B3_TIMEZONE)
+    assert get_session_phase(ash_late) == B3SessionPhase.CONTINUOUS
+    assert can_enter_new_position(ash_late) is True
+    ash_closing = datetime.datetime(2026, 2, 18, 17, 56, tzinfo=B3_TIMEZONE)
+    assert get_session_phase(ash_closing) == B3SessionPhase.CLOSING_CALL
+    assert can_enter_new_position(ash_closing) is False
 
 
 def test_b3_session_phases_normal_day():
@@ -451,17 +457,32 @@ def test_valid_quote_distinguishes_decision_from_execution_price(tmp_path):
     )
     exec_quote = _create_synthetic_quote("PETR4.SA", 30.80)  # EXECUTION PRICE
 
-    intent = ApprovedExecutionIntent(
-        signal=sig,
-        risk_decision=decision,
-        execution_quote=exec_quote,
+    from backend.app.markets.b3_session import (
+        AutonomousSessionAuthority,
+        B3DayType,
+        B3SessionPhase,
+        override_session_authority,
     )
+    auth = AutonomousSessionAuthority(
+        override_fn=lambda dt=None: (
+            True,
+            "Authorized in test",
+            B3DayType.NORMAL_TRADING_DAY,
+            B3SessionPhase.CONTINUOUS,
+        )
+    )
+    with override_session_authority(auth):
+        intent = ApprovedExecutionIntent(
+            signal=sig,
+            risk_decision=decision,
+            execution_quote=exec_quote,
+        )
 
-    executor = ExecutorAgent(db_path=str(db_file))
-    res = executor.execute_order(intent)
-    assert res["status"] == "executed"
-    assert res["entry_price"] == 30.80
-    assert res["decision_price"] == 30.0
+        executor = ExecutorAgent(db_path=str(db_file))
+        res = executor.execute_order(intent)
+        assert res["status"] == "executed"
+        assert res["entry_price"] == 30.80
+        assert res["decision_price"] == 30.0
 
     conn = sqlite3.connect(str(db_file))
     row = conn.execute("SELECT entry_price, decision_price, status FROM trades WHERE signal_id = ?", (sig.signal_id,)).fetchone()

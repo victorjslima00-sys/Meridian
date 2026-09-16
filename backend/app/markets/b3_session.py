@@ -13,8 +13,9 @@ Rules:
 from __future__ import annotations
 
 import datetime
+from contextlib import contextmanager
 from enum import Enum
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 # Official B3 Timezone
@@ -75,22 +76,38 @@ B3_2026_SPECIAL_DAYS = {
 }
 
 
-def get_day_type(market_date: datetime.date) -> B3DayType:
+def get_day_type(market_date: datetime.date | datetime.datetime) -> B3DayType:
     """Classify the day type for a given date on B3.
     
-    Fail-closed: Returns UNKNOWN for any year without an auditable calendar.
+    Fail-closed: Returns UNKNOWN for any year or date without an auditable calendar.
+    Effective date for Circular 005/2026 PRE normal trading schedule is 2026-03-09.
+    Dates in 2026 before 2026-03-09 (except explicitly modeled special days like
+    Ash Wednesday 2026-02-18) return UNKNOWN (fail-closed).
     """
-    if market_date.year != B3_CALENDAR_YEAR:
+    if isinstance(market_date, datetime.datetime):
+        if market_date.tzinfo is None:
+            market_date = market_date.replace(tzinfo=B3_TIMEZONE)
+        else:
+            market_date = market_date.astimezone(B3_TIMEZONE)
+        d = market_date.date()
+    else:
+        d = market_date
+
+    if d.year != B3_CALENDAR_YEAR:
         return B3DayType.UNKNOWN
 
-    if market_date.weekday() >= 5:  # Saturday=5, Sunday=6
+    if d.weekday() >= 5:  # Saturday=5, Sunday=6
         return B3DayType.NO_SESSION
 
-    if market_date in B3_2026_CLOSURES:
+    if d in B3_2026_CLOSURES:
         return B3DayType.NO_SESSION
 
-    if market_date in B3_2026_SPECIAL_DAYS:
+    if d in B3_2026_SPECIAL_DAYS:
         return B3DayType.SPECIAL_HOURS
+
+    # Normal schedule under Circular 005/2026 PRE is effective 2026-03-09
+    if d < datetime.date(2026, 3, 9):
+        return B3DayType.UNKNOWN
 
     return B3DayType.NORMAL_TRADING_DAY
 
@@ -116,27 +133,25 @@ def get_session_phase(dt: Optional[datetime.datetime] = None) -> B3SessionPhase:
     t = dt.time()
 
     if day_type == B3DayType.SPECIAL_HOURS:
-        # Ash Wednesday (2026-02-18) special schedule
+        # Ash Wednesday (2026-02-18) official schedule (B3 OC 003/2026-VNC):
+        # 12:30–12:45 order cancellation
+        # 12:45–13:00 pre-open
+        # 13:00–17:55 continuous
+        # 17:55–18:00 closing call
         if t < datetime.time(12, 30):
             return B3SessionPhase.CLOSED
         elif t < datetime.time(12, 45):
             return B3SessionPhase.ORDER_CANCELLATION
         elif t < datetime.time(13, 0):
             return B3SessionPhase.PRE_OPEN
-        elif t < datetime.time(16, 55):
+        elif t < datetime.time(17, 55):
             return B3SessionPhase.CONTINUOUS
-        elif t < datetime.time(17, 0):
-            return B3SessionPhase.CLOSING_CALL
-        elif t < datetime.time(17, 25):
-            return B3SessionPhase.POST_REGULAR
-        elif t < datetime.time(17, 30):
-            return B3SessionPhase.AFTER_MARKET_ORDER_CANCELLATION
         elif t < datetime.time(18, 0):
-            return B3SessionPhase.AFTER_MARKET
+            return B3SessionPhase.CLOSING_CALL
         elif t < datetime.time(18, 25):
             return B3SessionPhase.POST_REGULAR
         elif t < datetime.time(18, 45):
-            return B3SessionPhase.POST_AFTER_MARKET
+            return B3SessionPhase.AFTER_MARKET
         else:
             return B3SessionPhase.CLOSED
 
@@ -175,9 +190,42 @@ def get_session_phase(dt: Optional[datetime.datetime] = None) -> B3SessionPhase:
         return B3SessionPhase.CLOSED
 
 
+def check_autonomous_session_authority(
+    dt: Optional[datetime.datetime] = None,
+) -> tuple[bool, str, B3DayType, B3SessionPhase]:
+    """Central authority for autonomous strategy entry (NEXUS-004-R1).
+    
+    Verifies that:
+    1. B3 calendar is known and auditable for the date
+    2. Date is a valid trading session (not weekend or exchange holiday)
+    3. Current session phase is strictly CONTINUOUS.
+    
+    Returns:
+        (allowed, reason, day_type, session_phase)
+    """
+    if dt is None:
+        dt = datetime.datetime.now(B3_TIMEZONE)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=B3_TIMEZONE)
+    else:
+        dt = dt.astimezone(B3_TIMEZONE)
+
+    day_type = get_day_type(dt.date())
+    phase = get_session_phase(dt)
+
+    if day_type == B3DayType.UNKNOWN:
+        return False, f"B3 calendar unknown/unverified for date {dt.date()}", day_type, phase
+    if day_type == B3DayType.NO_SESSION:
+        return False, f"No B3 trading session on {dt.date()} (holiday/weekend)", day_type, phase
+    if phase != B3SessionPhase.CONTINUOUS:
+        return False, f"B3 session phase is {phase.value} (CONTINUOUS required for entry)", day_type, phase
+
+    return True, "CONTINUOUS trading session authorized", day_type, phase
+
+
 def can_enter_new_position(dt: Optional[datetime.datetime] = None) -> bool:
     """Autonomous entry gate: allowed ONLY during CONTINUOUS session phase."""
-    return get_session_phase(dt) == B3SessionPhase.CONTINUOUS
+    return check_autonomous_session_authority(dt)[0]
 
 
 def can_manage_exits(dt: Optional[datetime.datetime] = None) -> bool:
@@ -188,3 +236,62 @@ def can_manage_exits(dt: Optional[datetime.datetime] = None) -> bool:
 # Explicit aliases
 get_b3_day_type = get_day_type
 get_b3_session_phase = get_session_phase
+
+
+class AutonomousSessionAuthority:
+    """Central authority governing autonomous strategy entry into market sessions."""
+
+    def __init__(
+        self,
+        override_fn: Optional[
+            Callable[[Optional[datetime.datetime]], tuple[bool, str, B3DayType, B3SessionPhase]]
+        ] = None,
+    ):
+        self._override_fn = override_fn
+
+    def check_authority(
+        self, dt: Optional[datetime.datetime] = None
+    ) -> tuple[bool, str, B3DayType, B3SessionPhase]:
+        """Check whether autonomous strategy entry is authorized.
+        
+        Default delegates to check_autonomous_session_authority(dt).
+        """
+        if self._override_fn is not None:
+            return self._override_fn(dt)
+        return check_autonomous_session_authority(dt)
+
+    def can_enter(self, dt: Optional[datetime.datetime] = None) -> bool:
+        """Boolean check whether entry is authorized."""
+        return self.check_authority(dt)[0]
+
+
+_CURRENT_SESSION_AUTHORITY: AutonomousSessionAuthority = AutonomousSessionAuthority()
+
+
+def get_session_authority() -> AutonomousSessionAuthority:
+    """Get the active AutonomousSessionAuthority singleton."""
+    return _CURRENT_SESSION_AUTHORITY
+
+
+def set_session_authority(authority: AutonomousSessionAuthority) -> None:
+    """Set the active AutonomousSessionAuthority singleton."""
+    global _CURRENT_SESSION_AUTHORITY
+    _CURRENT_SESSION_AUTHORITY = authority
+
+
+@contextmanager
+def override_session_authority(
+    authority_or_fn: AutonomousSessionAuthority | Callable[[Optional[datetime.datetime]], tuple[bool, str, B3DayType, B3SessionPhase]],
+):
+    """Context manager for temporarily overriding autonomous session authority."""
+    global _CURRENT_SESSION_AUTHORITY
+    old_authority = _CURRENT_SESSION_AUTHORITY
+    if isinstance(authority_or_fn, AutonomousSessionAuthority):
+        _CURRENT_SESSION_AUTHORITY = authority_or_fn
+    else:
+        _CURRENT_SESSION_AUTHORITY = AutonomousSessionAuthority(override_fn=authority_or_fn)
+    try:
+        yield _CURRENT_SESSION_AUTHORITY
+    finally:
+        _CURRENT_SESSION_AUTHORITY = old_authority
+

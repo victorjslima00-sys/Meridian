@@ -5,8 +5,9 @@ from ..data.database import DB_PATH
 
 
 class ExecutorAgent:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, session_authority: Optional[Any] = None):
         self.db_path = db_path or DB_PATH
+        self.session_authority = session_authority
 
     def _connect(self) -> sqlite3.Connection:
         """Conexão padrão do executor: IMMEDIATE (escreve logo na primeira
@@ -95,6 +96,19 @@ class ExecutorAgent:
         is_strategy = isinstance(intent, ApprovedExecutionIntent)
         signal_id = intent.signal_id if is_strategy else None
         rationale = f"Strategy Intent (Signal {signal_id})" if is_strategy else f"Manual: {intent.reason}"
+
+        # Autonomous session gate check before write (NEXUS-004-R1 defense in depth)
+        if is_strategy:
+            from backend.app.markets.b3_session import get_session_authority
+            authority = self.session_authority or get_session_authority()
+            quote = getattr(intent, "execution_quote", None)
+            now_check = getattr(quote, "observed_at", None) if quote else None
+            session_allowed, session_reason, _, _ = authority.check_authority(now_check)
+            if not session_allowed:
+                return {
+                    "status": "rejected",
+                    "reason": f"Autonomous session gate violation: {session_reason}",
+                }
 
         # Gap geometry check before write (NEXUS-004)
         if is_strategy and side == "BUY":
@@ -219,10 +233,35 @@ class ExecutorAgent:
             "total_value": allocated,
         }
 
-    def close_order(self, trade_id: int, current_price: float, reason: str):
+    def close_order(
+        self,
+        trade_id: int,
+        current_price: float,
+        reason: str,
+        evidence: Optional[Any] = None,
+    ):
         """
-        Closes an active order.
+        Closes an active order with finite/positive price validation (NEXUS-004-R1).
         """
+        import math
+        if current_price is None or isinstance(current_price, bool):
+            return {"status": "rejected", "reason": "Exit price cannot be None or bool"}
+        try:
+            px_val = float(current_price)
+        except (TypeError, ValueError):
+            return {"status": "rejected", "reason": "Exit price must be real numeric"}
+        if not math.isfinite(px_val) or px_val <= 0.0:
+            return {"status": "rejected", "reason": f"Exit price must be finite and > 0 (got {current_price})"}
+
+        if evidence is not None:
+            from trading_bot.data.valuation_snapshot import compute_evidence_sha256
+            if hasattr(evidence, "source_sha256") and hasattr(evidence, "raw_evidence"):
+                expected_sha = compute_evidence_sha256(evidence.raw_evidence)
+                if evidence.source_sha256 != expected_sha:
+                    return {"status": "rejected", "reason": "Exit quote evidence hash mismatch"}
+            if hasattr(evidence, "observed_at") and getattr(evidence.observed_at, "tzinfo", None) is None:
+                return {"status": "rejected", "reason": "Exit quote timestamp cannot be naive"}
+
         conn = self._connect()
         try:
             cursor = conn.cursor()
@@ -240,13 +279,13 @@ class ExecutorAgent:
             # Calculate PnL
             if entry_price > 0:
                 if side == "BUY":
-                    pnl_pct = ((current_price - entry_price) / entry_price) * 100
+                    pnl_pct = ((px_val - entry_price) / entry_price) * 100
                 else:
-                    pnl_pct = ((entry_price - current_price) / entry_price) * 100
+                    pnl_pct = ((entry_price - px_val) / entry_price) * 100
             else:
                 pnl_pct = 0.0
 
-            gross_value = shares * current_price
+            gross_value = shares * px_val
 
             # CAS: só transiciona quem está 'active' agora, dentro desta
             # mesma transação IMMEDIATE. rowcount é a fonte de verdade —
@@ -259,7 +298,7 @@ class ExecutorAgent:
             SET status = 'closed', exit_price = ?, exit_date = ?, pnl_pct = ?, exit_reason = ?
             WHERE id = ? AND status = 'active'
             """,
-                (current_price, datetime.datetime.now(), pnl_pct, reason, trade_id),
+                (px_val, datetime.datetime.now(), pnl_pct, reason, trade_id),
             )
             if cursor.rowcount == 0:
                 # Perdemos a corrida (ou já estava fechado antes desta

@@ -18,8 +18,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import date, datetime, time, timezone
+from typing import Any, Dict, Optional, Union
 
 from trading_bot.data import approval
 from trading_bot.data.closed_frame import closed_daily_signal_frame
@@ -133,6 +133,7 @@ class MarketAnalyst:
         registry_path: Any = None,
         project_root: Any = None,
         settings_path: Any = None,
+        as_of: Optional[Union[datetime, date]] = None,
     ) -> Dict[str, Any]:
         """Devolve o sinal do ticker: BUY (com alvo/stop por ATR) ou HOLD."""
         market = resolve_market(self.ticker)
@@ -145,6 +146,7 @@ class MarketAnalyst:
             registry_path=registry_path,
             project_root=project_root,
             settings_path=settings_path,
+            as_of=as_of,
         )
 
     async def analyze_ohlcv(
@@ -153,6 +155,7 @@ class MarketAnalyst:
         registry_path: Any = None,
         project_root: Any = None,
         settings_path: Any = None,
+        as_of: Optional[Union[datetime, date]] = None,
     ) -> Dict[str, Any]:
         """Deterministic analysis of pre-supplied OHLCV dataframe.
         Never refetches.
@@ -178,7 +181,11 @@ class MarketAnalyst:
             )
 
         # 1. Transformação de barras estritamente FECHADAS (NEXUS-004)
-        closed_res = closed_daily_signal_frame(df)
+        as_of_dt = as_of
+        if isinstance(as_of, date) and not isinstance(as_of, datetime):
+            from backend.app.markets.b3_session import B3_TIMEZONE
+            as_of_dt = datetime.combine(as_of, time(12, 0), tzinfo=B3_TIMEZONE)
+        closed_res = closed_daily_signal_frame(df, as_of=as_of_dt, ticker=self.ticker)
         closed_df = closed_res.df
         mkt_date_str = str(closed_res.market_date)
         dec_bar_str = str(closed_res.decision_bar_date) if closed_res.decision_bar_date else None

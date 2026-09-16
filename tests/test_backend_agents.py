@@ -259,7 +259,12 @@ class TestExecutorAgent:
                 reason="Test reason",
                 decision_timestamp=datetime.now(timezone.utc),
             )
-            intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+            from tests.conftest import make_test_evidenced_quote
+            intent = ApprovedExecutionIntent(
+                signal=sig,
+                risk_decision=dec,
+                execution_quote=make_test_evidenced_quote("BTC-USD", 62000.0),
+            )
 
             with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kwargs: _real_connect(db_path)):
                 executor = ExecutorAgent(db_path=db_path)

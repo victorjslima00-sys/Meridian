@@ -18,6 +18,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -163,12 +164,14 @@ class PaperSessionRunner:
         storage_dir: Optional[str] = None,
         risk_manager_cls=RiskManager,
         executor_cls=ExecutorAgent,
+        session_authority: Optional[Any] = None,
     ):
         self.session_id = session_id or datetime.datetime.now(datetime.timezone.utc).strftime("session_%Y%m%d_%H%M%S")
         self.db_path = db_path or DB_PATH
         self.storage_dir = Path(storage_dir or "data/paper_sessions")
         self.risk_manager_cls = risk_manager_cls
         self.executor_cls = executor_cls
+        self.session_authority = session_authority
 
         self.journal = PaperSessionJournal(self.session_id, self.storage_dir)
         self.executed_signals: set[str] = set()
@@ -254,8 +257,14 @@ class PaperSessionRunner:
         session_realized_pnl = 0.0
 
         executor = self.executor_cls(db_path=self.db_path)
+        if hasattr(executor, "session_authority") and self.session_authority is not None:
+            executor.session_authority = self.session_authority
         
         from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal
+        from backend.app.markets.b3_session import get_session_authority
+
+        authority = self.session_authority or get_session_authority()
+        session_allowed, session_reason, _, _ = authority.check_authority()
 
         # 2. Avaliação de Sinais e Execução
         for raw_sig in signals:
@@ -271,6 +280,16 @@ class PaperSessionRunner:
                 continue
 
             ticker = sig.ticker
+
+            # Central session authority check (NEXUS-004-R1)
+            if not session_allowed:
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={"reason": f"Autonomous session closed: {session_reason}", "ticker": ticker},
+                    ticker=ticker,
+                )
+                continue
 
             # Idempotência de Sessão e Banco: se o signal_id já foi executado, pula
             if sig.signal_id in self.executed_signals:
@@ -352,7 +371,7 @@ class PaperSessionRunner:
             )
 
             if decision.approved:
-                # Obter cotação fresca evidenciada se disponível (NEXUS-004)
+                # Obter cotação fresca evidenciada (NEXUS-004-R1: sem fabricação de evidência a partir de escalar)
                 from backend.app.data.feed import get_evidenced_quote
                 quote = None
                 try:
@@ -360,35 +379,14 @@ class PaperSessionRunner:
                 except Exception:
                     quote = None
 
-                # Fallback controlado para current_prices em simulações/testes
-                if quote is None and current_prices and ticker in current_prices:
-                    from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
-                    px = float(current_prices[ticker])
-                    now_utc = datetime.datetime.now(datetime.timezone.utc)
-                    raw_ev = {
-                        "ticker": ticker.upper(),
-                        "close": px,
-                        "source": "session_current_prices",
-                        "price_kind": "bar_close",
-                        "interval": "1m",
-                        "vendor_symbol": ticker.upper(),
-                        "observed_at": now_utc.isoformat(),
-                        "collected_at": now_utc.isoformat(),
-                    }
-                    quote = EvidencedQuote(
-                        ticker=ticker.upper(),
-                        price=px,
-                        currency="BRL",
-                        source="session_current_prices",
-                        price_kind="bar_close",
-                        interval="1m",
-                        vendor_symbol=ticker.upper(),
-                        observed_at=now_utc,
-                        collected_at=now_utc,
-                        source_ref="session:current_prices",
-                        source_sha256=compute_evidence_sha256(raw_ev),
-                        raw_evidence=raw_ev,
+                if quote is None:
+                    orders_rejected += 1
+                    self.journal.append_event(
+                        event_type="ORDER_REJECTED",
+                        payload={"reason": "no_evidenced_quote_available", "ticker": ticker},
+                        ticker=ticker,
                     )
+                    continue
 
                 try:
                     intent = ApprovedExecutionIntent(
@@ -453,28 +451,34 @@ class PaperSessionRunner:
             for trade_row in rows:
                 tid, t_ticker, side, entry_p, target_p, stop_l, shares = trade_row
                 curr_p = current_prices.get(t_ticker)
-                if curr_p is None or curr_p <= 0:
+                if curr_p is None or isinstance(curr_p, bool):
+                    continue
+                try:
+                    curr_p_val = float(curr_p)
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(curr_p_val) or curr_p_val <= 0.0:
                     continue
 
                 should_close = False
                 close_reason = ""
 
                 if side == "BUY":
-                    if target_p > 0 and curr_p >= target_p:
+                    if target_p > 0 and curr_p_val >= target_p:
                         should_close = True
-                        close_reason = f"Take Profit hit at {curr_p}"
-                    elif stop_l > 0 and curr_p <= stop_l:
+                        close_reason = f"Take Profit hit at {curr_p_val}"
+                    elif stop_l > 0 and curr_p_val <= stop_l:
                         should_close = True
-                        close_reason = f"Stop Loss hit at {curr_p}"
+                        close_reason = f"Stop Loss hit at {curr_p_val}"
 
                 if should_close:
-                    close_res = executor.close_order(tid, curr_p, close_reason)
+                    close_res = executor.close_order(tid, curr_p_val, close_reason)
                     if close_res.get("status") == "closed":
                         orders_closed += 1
                         if side == "BUY":
-                            pnl_mon = float((curr_p - entry_p) * shares)
+                            pnl_mon = float((curr_p_val - entry_p) * shares)
                         else:
-                            pnl_mon = float((entry_p - curr_p) * shares)
+                            pnl_mon = float((entry_p - curr_p_val) * shares)
                         allocated_ret = float(shares * entry_p)
                         session_returned_capital += allocated_ret
                         session_realized_pnl += pnl_mon

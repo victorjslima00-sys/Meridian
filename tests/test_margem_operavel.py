@@ -125,7 +125,12 @@ def _ordem_aprovada(allocated):
         signal_id=sig.signal_id, approved=True, allocated_capital=allocated, target_price=12.0,
         stop_loss=9.0, reason='teste', decision_timestamp=datetime.now(timezone.utc)
     )
-    return ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+    from tests.conftest import make_test_evidenced_quote
+    return ApprovedExecutionIntent(
+        signal=sig,
+        risk_decision=dec,
+        execution_quote=make_test_evidenced_quote('PETR4.SA', 10.0),
+    )
 
 def _executor_para(path):
     ex = ExecutorAgent()
