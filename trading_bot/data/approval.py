@@ -1,9 +1,10 @@
-"""Local reviewed allowlist. Hashes bind evidence, not economic truth."""
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Literal
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from .signal_input import SignalBar, validate_signal_input
@@ -49,7 +50,11 @@ def dataset_digest(df, ticker):
 
 def require_dataset_approval_by_digest(dataset_sha256: str) -> Approval:
     """Exact 64-hex digest, exact one registry match, revalidated evidence hashes. Fail closed."""
-    if not isinstance(dataset_sha256, str) or len(dataset_sha256) != 64 or not all(c in '0123456789abcdef' for c in dataset_sha256):
+    if (
+        not isinstance(dataset_sha256, str)
+        or len(dataset_sha256) != 64
+        or not all(c in '0123456789abcdef' for c in dataset_sha256)
+    ):
         raise ValueError("data_approval_required")
     try:
         registry = Registry.model_validate_json(REGISTRY.read_bytes())
@@ -83,3 +88,77 @@ def require_data_approval(df, ticker) -> Approval:
         return require_dataset_approval_by_digest(digest)
     except Exception:
         raise ValueError('data_approval_required') from None
+
+
+def normalize_ohlcv_to_signal_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize raw market OHLCV DataFrame into exact signal dataframe for compute_signal and dataset_digest.
+
+    Shared production transformation between MarketAnalyst and approval candidate builder.
+    Expected raw columns: 'date' (or 'datetime'), 'open', 'high', 'low', 'close', 'volume'.
+    Target schema: 'ts' (date), 'adj_close' (float), 'o' (float), 'c' (float), 'h' (float), 'l' (float), 'v' (float).
+    Idempotent: if already in signal schema ('ts', 'adj_close', 'o', 'c', 'h', 'l', 'v'), validates and returns it.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        raise ValueError("empty_or_invalid_ohlcv_dataframe")
+
+    signal_fields = ["ts", "adj_close", "o", "c", "h", "l", "v"]
+    if all(col in df.columns for col in signal_fields):
+        eng_df = df[signal_fields].copy()
+        eng_df["ts"] = pd.to_datetime(eng_df["ts"]).dt.date
+        for c in ("adj_close", "o", "c", "h", "l", "v"):
+            eng_df[c] = eng_df[c].astype(float)
+        validate_signal_input(eng_df)
+        return eng_df
+
+    date_col = None
+    for cand in ("date", "Date", "datetime", "Datetime"):
+        if cand in df.columns:
+            date_col = cand
+            break
+    if date_col is None:
+        raise ValueError("missing_date_column")
+
+    col_map = {}
+    for standard in ("open", "high", "low", "close", "volume"):
+        found = None
+        for cand in (standard, standard.capitalize(), standard.upper()):
+            if cand in df.columns:
+                found = cand
+                break
+        if found is None:
+            raise ValueError(f"missing_{standard}_column")
+        col_map[standard] = found
+
+    eng_df = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(df[date_col]).dt.date,
+            "adj_close": df[col_map["close"]].astype(float),
+            "o": df[col_map["open"]].astype(float),
+            "c": df[col_map["close"]].astype(float),
+            "h": df[col_map["high"]].astype(float),
+            "l": df[col_map["low"]].astype(float),
+            "v": df[col_map["volume"]].astype(float),
+        }
+    )
+    validate_signal_input(eng_df)
+    return eng_df
+
+
+def save_registry(registry: Registry, registry_path: Path = REGISTRY) -> None:
+    """Atomic write of registry JSON with fsync and safe tempfile replacement."""
+    registry_path = Path(registry_path)
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = registry_path.with_name(f"{registry_path.name}.tmp.{os.getpid()}")
+    try:
+        content = registry.model_dump_json(indent=2) + "\n"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_file, registry_path)
+    finally:
+        if temp_file.exists():
+            try:
+                temp_file.unlink()
+            except OSError:
+                pass

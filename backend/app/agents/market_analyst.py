@@ -24,7 +24,7 @@ import asyncio
 import logging
 from typing import Any, Dict
 
-import pandas as pd
+from trading_bot.data.approval import normalize_ohlcv_to_signal_df
 
 from ..markets import resolve_market
 from trading_bot.signals.engine import (
@@ -96,17 +96,10 @@ class MarketAnalyst:
         # Adapta o schema do feed (date/open/high/low/close/volume) ao que o
         # compute_signal espera (ts/adj_close/h/l/v). O feed usa
         # auto_adjust=True, então 'close' já é ajustado -> adj_close = close.
-        eng_df = pd.DataFrame(
-            {
-                "ts": pd.to_datetime(df["date"]).dt.date,
-                "adj_close": df["close"].astype(float),
-                "o": df["open"].astype(float),
-                "c": df["close"].astype(float),
-                "h": df["high"].astype(float),
-                "l": df["low"].astype(float),
-                "v": df["volume"].astype(float),
-            }
-        )
+        try:
+            eng_df = normalize_ohlcv_to_signal_df(df)
+        except Exception as exc:
+            return self._hold(f"Falha na normalização dos dados diários: {exc}", last_price)
 
         # Filtro macro IBOV (mesmo do backtest): só abre entrada com IBOV >
         # SMA-50. get_ibov_data devolve None em falha e ibov_in_uptrend(None,
