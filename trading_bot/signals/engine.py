@@ -127,21 +127,88 @@ def get_ibov_data(start: date) -> Optional[pd.DataFrame]:
         logger.warning("Falha ao carregar IBOV: %s", e)
         return None
 
-def ibov_in_uptrend(ibov_df: Optional[pd.DataFrame], ref_date: date) -> bool:
+def ibov_in_uptrend(
+    ibov_df: Optional[pd.DataFrame],
+    ref_date: date,
+    current_market_date: Optional[date] = None,
+) -> bool:
     """
-    Retorna True se o IBOV está acima da SMA-50 no dia de referência.
-    Em caso de falha (sem dados), retorna True (não bloqueia por default).
+    Retorna True se o IBOV está acima da SMA-50 no dia de referência (FECHADO).
+    FAIL-CLOSED (NEXUS-004): Em caso de ausência de dados, dados insuficientes para SMA-50,
+    barra parcial de hoje ou data futura, retorna False (bloqueia novas entradas autônomas).
     """
-    if ibov_df is None:
-        return True  # Sem dado → não bloquear
-    row = ibov_df[ibov_df["ts"] <= ref_date]
+    if ibov_df is None or ibov_df.empty:
+        logger.warning("Filtro macro: IBOV ausente ou vazio (fail-closed)")
+        return False
+
+    import math
+    import datetime
+    from backend.app.markets.b3_session import B3_TIMEZONE
+
+    mkt_date = current_market_date
+    if mkt_date is None:
+        mkt_date = datetime.datetime.now(B3_TIMEZONE).date()
+
+    # Barra em formação ou data futura não autoriza entrada
+    if ref_date >= mkt_date:
+        logger.warning(
+            "Filtro macro: ref_date (%s) >= current_market_date (%s) — barra em formação/futura rejeitada",
+            ref_date,
+            mkt_date,
+        )
+        return False
+
+    df = ibov_df.copy()
+    if "ts" not in df.columns:
+        if "date" in df.columns:
+            df["ts"] = pd.to_datetime(df["date"]).dt.date
+        elif isinstance(df.index, pd.DatetimeIndex):
+            df["ts"] = df.index.date
+        elif "datetime" in df.columns:
+            df["ts"] = pd.to_datetime(df["datetime"]).dt.date
+        else:
+            logger.warning("Filtro macro: IBOV sem coluna ou índice temporal reconhecido (fail-closed)")
+            return False
+    else:
+        df["ts"] = pd.to_datetime(df["ts"]).dt.date
+
+    c_col = "c" if "c" in df.columns else ("close" if "close" in df.columns else None)
+    if c_col is None:
+        logger.warning("Filtro macro: IBOV sem coluna de fechamento (fail-closed)")
+        return False
+
+    if "sma50" not in df.columns:
+        df["sma50"] = _sma(df[c_col], 50)
+
+    # Filtra apenas barras fechadas anteriores à data do pregão
+    closed_ibov = df[df["ts"] < mkt_date]
+    if closed_ibov.empty:
+        logger.warning("Filtro macro: sem barras IBOV fechadas anteriores a %s", mkt_date)
+        return False
+
+    row = closed_ibov[closed_ibov["ts"] <= ref_date]
     if row.empty:
-        return True
+        logger.warning("Filtro macro: sem histórico IBOV até ref_date %s", ref_date)
+        return False
+
     last = row.iloc[-1]
-    c = float(last["c"])
-    s = float(last["sma50"]) if not pd.isna(last["sma50"]) else None
-    if s is None:
-        return True
+    raw_c = last.get("c") if "c" in last else last.get("close")
+    raw_s = last.get("sma50")
+
+    if raw_c is None or isinstance(raw_c, bool):
+        return False
+    if raw_s is None or isinstance(raw_s, bool) or pd.isna(raw_s):
+        return False
+
+    try:
+        c = float(raw_c)
+        s = float(raw_s)
+    except (TypeError, ValueError):
+        return False
+
+    if not math.isfinite(c) or not math.isfinite(s) or c <= 0 or s <= 0:
+        return False
+
     return c > s
 
 
@@ -166,20 +233,31 @@ def compute_signal(
 ) -> Optional[Candidate]:
     """
     Sinal de Breakout de 20 dias + Filtro SMA-200 + Volume.
-
-    Regras de entrada (TODAS obrigatórias):
-      1. Preço > SMA-200 (uptrend estrutural)
-      2. Fechamento de hoje > máxima dos últimos 20 dias (breakout confirmado)
-      3. Volume > 2.0× média 20d (confirmação de interesse institucional)
-      4. RSI(14) entre 50 e 75 (momentum presente, não sobrecomprado)
-
-    Stop: mínima dos últimos 10 dias (natural stop abaixo do pivot)
-    Target: 10% (leva tempo, mas wins são grandes quando o breakout é real)
-
-    R:R esperado: stop ~4-6% abaixo, target 10% → R:R de 2:1 a 3:1
-    Win rate esperado: 38-48% → expectancy positiva contra Selic
     """
-    min_rows = max(breakout_period + 1, sma_trend_period + 1, 22)
+    import math
+
+    # Validação estrita fail-closed dos parâmetros
+    for param_name, param_val in [
+        ("breakout_period", breakout_period),
+        ("volume_mult", volume_mult),
+        ("sma_trend_period", sma_trend_period),
+        ("rsi_max", rsi_max),
+        ("stop_atr_mult", stop_atr_mult),
+        ("stop_pct", stop_pct),
+        ("target_atr_mult", target_atr_mult),
+    ]:
+        if param_val is None or isinstance(param_val, bool):
+            logger.warning("[%s] Parâmetro %s inválido: %r (fail-closed)", ticker, param_name, param_val)
+            return None
+        try:
+            val_f = float(param_val)
+            if not math.isfinite(val_f) or val_f <= 0.0:
+                logger.warning("[%s] Parâmetro %s não finito ou <= 0: %r", ticker, param_name, param_val)
+                return None
+        except (TypeError, ValueError):
+            return None
+
+    min_rows = max(int(breakout_period) + 1, int(sma_trend_period) + 1, 22)
     if len(df) < min_rows:
         return None
 

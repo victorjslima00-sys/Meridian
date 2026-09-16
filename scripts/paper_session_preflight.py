@@ -30,6 +30,14 @@ from backend.app.agents.market_analyst import MarketAnalyst  # noqa: E402
 from backend.app.data.database import DB_PATH  # noqa: E402
 from backend.app.data.feed import _normalize_ticker  # noqa: E402
 from backend.app.markets import get_broker, PaperBroker, resolve_market  # noqa: E402
+from backend.app.markets.b3_session import (  # noqa: E402
+    B3DayType,
+    B3SessionPhase,
+    can_enter_new_position,
+    can_manage_exits,
+    get_b3_day_type,
+    get_b3_session_phase,
+)
 from backend.app.runtime_config import RuntimeConfig  # noqa: E402
 from trading_bot.core.config import AppConfig  # noqa: E402
 from trading_bot.data.approval import (  # noqa: E402
@@ -39,6 +47,7 @@ from trading_bot.data.approval import (  # noqa: E402
     normalize_ohlcv_to_signal_df,
     require_dataset_approval_by_digest,
 )
+from trading_bot.data.closed_frame import closed_daily_signal_frame  # noqa: E402
 from trading_bot.risk.circuit_breaker import CircuitBreaker  # noqa: E402
 
 logger = logging.getLogger("paper_session_preflight")
@@ -60,7 +69,14 @@ class TickerPreflightStatus:
 class PreflightReport:
     started_at_utc: str
     ended_at_utc: str
-    overall_status: str  # PASS / BLOCKED / UNVERIFIED
+    overall_status: str  # PASS / BLOCKED / BLOCKED_SESSION_PHASE / UNVERIFIED
+    infrastructure_ready: str  # PASS / BLOCKED
+    entry_ready: str  # PASS / BLOCKED_SESSION_PHASE / BLOCKED
+    single_writer_check: bool
+    b3_calendar_status: str
+    session_phase: str
+    b3_entry_allowed: bool
+    valuation_honesty_status: str
     paper_mode_check: bool
     broker_isolation_check: bool
     db_schema_check: bool
@@ -235,16 +251,68 @@ def check_storage_writable(storage_dir: Path) -> tuple[bool, str]:
         return False, f"Storage directory not writable: {storage_dir} ({e})"
 
 
-def check_valuation_subsystem() -> tuple[bool, str]:
-    """Verify valuation snapshot store and DB table integrity."""
+def check_single_paper_writer(project_root: Optional[Path] = None) -> tuple[bool, str]:
+    """Verify default runtime exposes exactly ONE Paper execution authority (NEXUS-004)."""
+    root = (project_root or PROJECT_ROOT).resolve()
+    dockerfile = root / "Dockerfile"
+    docker_compose = root / "docker-compose.yml"
+
+    # Check Dockerfile for active cron job running legacy script
+    if dockerfile.is_file():
+        content = dockerfile.read_text(encoding="utf-8")
+        for line in content.splitlines():
+            line_str = line.strip()
+            if line_str.startswith("#"):
+                continue
+            if "cron" in line_str.lower() and "fase2_paper_trading.py" in line_str:
+                return False, "BLOCKED: Alternate Paper order writer active in Dockerfile (cron fase2_paper_trading.py)"
+
+    # Check docker-compose.yml for bot service active in default profile
+    if docker_compose.is_file():
+        content = docker_compose.read_text(encoding="utf-8")
+        import yaml
+        try:
+            compose_data = yaml.safe_load(content)
+            services = compose_data.get("services", {}) if isinstance(compose_data, dict) else {}
+            bot_svc = services.get("bot", {})
+            if bot_svc:
+                profiles = bot_svc.get("profiles", [])
+                restart = bot_svc.get("restart", "")
+                if "legacy" not in profiles and restart != "no":
+                    return False, "BLOCKED: Alternate Paper order writer active in docker-compose.yml ('bot' service default active)"
+        except Exception:
+            pass
+
+    return True, "Single Paper execution authority verified (legacy cron disabled)"
+
+
+def check_b3_session_calendar(now: Optional[datetime] = None) -> tuple[bool, str, str, bool, str]:
+    """Verify B3 official calendar and determine current session phase (NEXUS-004)."""
+    current_dt = now or datetime.now(timezone.utc)
+    day_type = get_b3_day_type(current_dt)
+    phase = get_b3_session_phase(current_dt)
+    can_enter = can_enter_new_position(current_dt)
+    can_exit = can_manage_exits(current_dt)
+
+    calendar_ok = (day_type != B3DayType.UNKNOWN)
+    msg = (
+        f"B3 Session: day_type={day_type.value}, phase={phase.value}, "
+        f"can_enter={can_enter}, can_exit={can_exit}"
+    )
+    return calendar_ok, day_type.value, phase.value, can_enter, msg
+
+
+def check_valuation_subsystem() -> tuple[bool, str, str]:
+    """Inspect valuation subsystem truthfully (NEXUS-004)."""
     try:
         import trading_bot.data.valuation_snapshot as vs
         assert hasattr(vs, "ValuationSnapshot")
         assert hasattr(vs, "get_latest_valuation_snapshot")
         assert hasattr(vs, "save_valuation_snapshot")
-        return True, "Valuation subsystem verified (valuation_snapshot contracts ready)"
+        honesty = "VALUATION_CONTRACT_AVAILABLE / VALUATION_STORE_UNVERIFIED"
+        return True, honesty, f"Valuation subsystem: {honesty}"
     except Exception as e:
-        return False, f"Valuation subsystem check failed: {e}"
+        return False, "VALUATION_UNAVAILABLE", f"Valuation subsystem check failed: {e}"
 
 
 def run_paper_preflight(
@@ -256,6 +324,7 @@ def run_paper_preflight(
     project_root: Optional[Path] = None,
     tickers: Optional[List[str]] = None,
     max_tickers: Optional[int] = None,
+    now_dt: Optional[datetime] = None,
 ) -> PreflightReport:
     """Run full read-only preflight suite without trade or portfolio mutations."""
     start_utc = datetime.now(timezone.utc).isoformat()
@@ -284,6 +353,12 @@ def run_paper_preflight(
             conn_pre.close()
 
     # 1. System checks
+    single_writer_ok, single_writer_msg = check_single_paper_writer(resolved_root)
+    system_messages.append(single_writer_msg)
+
+    calendar_ok, day_type_val, phase_val, b3_entry_allowed, session_msg = check_b3_session_calendar(now_dt)
+    system_messages.append(session_msg)
+
     paper_mode_ok, paper_msg = check_paper_mode(settings_path, universe_path)
     system_messages.append(paper_msg)
 
@@ -299,7 +374,7 @@ def run_paper_preflight(
     storage_ok, storage_msg = check_storage_writable(resolved_storage)
     system_messages.append(storage_msg)
 
-    valuation_ok, valuation_msg = check_valuation_subsystem()
+    valuation_ok, val_honesty, valuation_msg = check_valuation_subsystem()
     system_messages.append(valuation_msg)
 
     # 2. Universe tickers to check
@@ -368,17 +443,28 @@ def run_paper_preflight(
             ticker_verdict = "BLOCKED"
 
         if market_resolved:
-            if raw_df is None or len(raw_df) < 201:
-                bars_cnt = len(raw_df) if raw_df is not None else 0
-                approval_reason = f"Insufficient OHLCV data ({bars_cnt} bars)"
+            if raw_df is None:
+                approval_reason = "No OHLCV data fetched"
                 approval_verdict = "UNVERIFIED"
                 ticker_verdict = "UNVERIFIED"
             else:
                 try:
-                    norm_df = normalize_ohlcv_to_signal_df(raw_df)
-                    digest = dataset_digest(norm_df, t)
-                    details["digest"] = digest
-                    details["bars_count"] = len(norm_df)
+                    closed_res = closed_daily_signal_frame(raw_df, ticker=t, as_of=now_dt)
+                    details["market_date"] = str(closed_res.market_date)
+                    details["decision_bar_date"] = str(closed_res.decision_bar_date)
+                    details["today_bar_removed"] = closed_res.today_bar_removed
+                    details["session_phase"] = closed_res.session_phase
+
+                    if len(closed_res.closed_df) < 201:
+                        bars_cnt = len(closed_res.closed_df)
+                        approval_reason = f"Insufficient closed OHLCV data ({bars_cnt} bars)"
+                        approval_verdict = "UNVERIFIED"
+                        ticker_verdict = "UNVERIFIED"
+                    else:
+                        norm_df = normalize_ohlcv_to_signal_df(closed_res.closed_df)
+                        digest = dataset_digest(norm_df, t)
+                        details["digest"] = digest
+                        details["bars_count"] = len(norm_df)
 
                     # Check dataset approval against target registry
                     try:
@@ -473,14 +559,14 @@ def run_paper_preflight(
     if not trades_fp_match and trade_mutations == 0:
         trade_mutations = 1
 
-    system_all_ok = (
-        paper_mode_ok
+    infrastructure_all_ok = (
+        single_writer_ok
+        and paper_mode_ok
         and broker_iso_ok
         and db_ok
         and signal_idx_ok
         and active_idx_ok
         and cb_cfg_ok
-        and cb_can_trade_ok
         and storage_ok
         and valuation_ok
         and universe_loaded_ok
@@ -495,14 +581,25 @@ def run_paper_preflight(
         and all(t.preflight_verdict == "PASS" for t in ticker_results)
     )
 
-    if not universe_loaded_ok:
+    if infrastructure_all_ok:
+        infrastructure_ready = "PASS"
+    else:
+        infrastructure_ready = "BLOCKED"
+
+    any_ticker_blocked = any(t.preflight_verdict == "BLOCKED" for t in ticker_results)
+
+    if infrastructure_ready != "PASS" or not calendar_ok or not universe_loaded_ok or any_ticker_blocked:
+        entry_ready = "BLOCKED"
         overall = "BLOCKED"
-    elif system_all_ok and tickers_all_pass:
-        overall = "PASS"
-    elif any(t.preflight_verdict == "BLOCKED" for t in ticker_results) or not system_all_ok:
+    elif not b3_entry_allowed:
+        entry_ready = "BLOCKED_SESSION_PHASE"
+        overall = "BLOCKED_SESSION_PHASE"
+    elif not cb_can_trade_ok or not tickers_all_pass:
+        entry_ready = "BLOCKED"
         overall = "BLOCKED"
     else:
-        overall = "UNVERIFIED"
+        entry_ready = "PASS"
+        overall = "PASS"
 
     end_utc = datetime.now(timezone.utc).isoformat()
     broker_act = "NOT DETECTED" if broker_iso_ok else "UNVERIFIED (isolation failed)"
@@ -511,6 +608,13 @@ def run_paper_preflight(
         started_at_utc=start_utc,
         ended_at_utc=end_utc,
         overall_status=overall,
+        infrastructure_ready=infrastructure_ready,
+        entry_ready=entry_ready,
+        single_writer_check=single_writer_ok,
+        b3_calendar_status=day_type_val,
+        session_phase=phase_val,
+        b3_entry_allowed=b3_entry_allowed,
+        valuation_honesty_status=val_honesty,
         paper_mode_check=paper_mode_ok,
         broker_isolation_check=broker_iso_ok,
         db_schema_check=db_ok,
@@ -535,11 +639,15 @@ def run_paper_preflight(
 def format_report(report: PreflightReport) -> str:
     lines = []
     lines.append("=" * 80)
-    lines.append("MERIDIAN PAPER SESSION PREFLIGHT REPORT (NEXUS-003-R2)")
+    lines.append("MERIDIAN PAPER SESSION PREFLIGHT REPORT (NEXUS-004)")
     lines.append("=" * 80)
-    lines.append(f"Started at (UTC):  {report.started_at_utc}")
-    lines.append(f"Ended at (UTC):    {report.ended_at_utc}")
-    lines.append(f"Overall Status:    {report.overall_status}")
+    lines.append(f"Started at (UTC):       {report.started_at_utc}")
+    lines.append(f"Ended at (UTC):         {report.ended_at_utc}")
+    lines.append(f"Overall Status:         {report.overall_status}")
+    lines.append(f"Infrastructure Ready:   {report.infrastructure_ready}")
+    lines.append(f"Entry Ready:            {report.entry_ready}")
+    lines.append(f"B3 Session Phase:       {report.session_phase} (Entry Allowed: {report.b3_entry_allowed})")
+    lines.append(f"B3 Calendar Status:     {report.b3_calendar_status}")
     lines.append(f"Universe Source:   {report.universe_source}")
 
     tm_status = " (ZERO MUTATION VERIFIED)" if (
@@ -555,6 +663,7 @@ def format_report(report: PreflightReport) -> str:
     lines.append(f"Broker Activation: {report.broker_activation}")
     lines.append("-" * 80)
     lines.append("SYSTEM CHECKS:")
+    lines.append(f"  [ {'PASS' if report.single_writer_check else 'FAIL'} ] Single Paper Execution Authority")
     lines.append(f"  [ {'PASS' if report.paper_mode_check else 'FAIL'} ] Paper Mode Active (PaperBroker bound)")
     lines.append(f"  [ {'PASS' if report.broker_isolation_check else 'FAIL'} ] Broker Isolation")
     lines.append(f"  [ {'PASS' if report.db_schema_check else 'FAIL'} ] Database Schema Inspection (read-only)")
@@ -564,7 +673,7 @@ def format_report(report: PreflightReport) -> str:
     cb_gate_str = "PASS" if report.circuit_breaker_can_trade_check else "BLOCKED"
     lines.append(f"  [ {cb_gate_str} ] Circuit Breaker Entry Gate (can_trade)")
     lines.append(f"  [ {'PASS' if report.storage_writable_check else 'FAIL'} ] Storage Path Writable")
-    lines.append(f"  [ {'PASS' if report.valuation_subsystem_check else 'FAIL'} ] Valuation Integrity Subsystem")
+    lines.append(f"  [ {'PASS' if report.valuation_subsystem_check else 'FAIL'} ] Valuation Subsystem ({report.valuation_honesty_status})")
     lines.append("-" * 80)
     lines.append("TICKER EVALUATION:")
     lines.append(f"{'Ticker':<10} | {'Resolve':<8} | {'Digest':<18} | {'Approval':<10} | {'Verdict':<10} | {'Reason'}")

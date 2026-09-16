@@ -830,7 +830,11 @@ async def test_market_analyst_custom_registry_end_to_end_buy_and_fail_closed(tmp
     # 1. Custom registry passed: BUY, dataset_approved=True
     analyst = MarketAnalyst(ticker)
     from unittest.mock import patch
-    with patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+    uptrend_ibov = pd.DataFrame(
+        {"close": [100.0 + i for i in range(60)]},
+        index=pd.date_range("2023-01-01", periods=60),
+    )
+    with patch("backend.app.agents.market_analyst.get_ibov_data", return_value=uptrend_ibov):
         res_approved = await analyst.analyze_ohlcv(
             df=df,
             registry_path=custom_reg,

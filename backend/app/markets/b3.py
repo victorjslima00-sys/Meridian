@@ -1,18 +1,7 @@
-"""
-B3 — implementação de Market (Fase 1, Commit 1).
+"""B3 — implementação de Market integrada ao B3SessionPhase e Calendário Oficial (NEXUS-004).
 
-REFATORAÇÃO PURA: cada método DELEGA para o código que já roda em
-produção (backend/app/data/feed.py, database.hoje_b3). Nenhuma regra de
-trading nasce aqui. Isso é o que sustenta a promessa de "zero mudança de
-comportamento" deste commit.
-
-A delegação é feita por ATRIBUTO DE MÓDULO (`feed.fetch_recent_data(...)`,
-não `from ...feed import fetch_recent_data`) de propósito: os testes que
-já existem monkeypatcham `backend.app.data.feed.fetch_recent_data` e
-`...get_current_price`, e a busca do atributo em tempo de chamada faz
-esses patches continuarem valendo através da abstração. Um `from ...
-import` congelaria a referência no import e quebraria esses testes — e
-um teste que para de exercer o caminho real é pior que nenhum teste.
+Utiliza o calendário oficial de 2026 (OC 003-2026-VNC) e a grade horária
+vigente para ações (Circular 005/2026 PRE, a partir de 2026-03-09).
 """
 from __future__ import annotations
 
@@ -24,43 +13,33 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from ..data import feed
+from .b3_session import (
+    B3_CALENDAR_SOURCE,
+    B3_SCHEDULE_EFFECTIVE_DATE,
+    B3_SCHEDULE_SOURCE,
+    B3_TIMEZONE,
+    B3_TIMEZONE_STR,
+    B3DayType,
+    B3SessionPhase,
+    can_enter_new_position,
+    can_manage_exits,
+    get_day_type,
+    get_session_phase,
+)
 
 logger = logging.getLogger(__name__)
 
-# Fallbacks alinhados ao config/settings.yaml (scheduler). Só entram em
-# ação se o YAML não puder ser lido — nunca "inventam" um pregão diferente
-# do configurado.
-_DEFAULT_TZ = "America/Sao_Paulo"
-_DEFAULT_OPEN = "10:00"
-_DEFAULT_CLOSE = "17:30"
-
-
-def _hhmm(valor: str, fallback: str) -> datetime.time:
-    try:
-        h, m = str(valor).split(":")
-        return datetime.time(int(h), int(m))
-    except Exception:
-        h, m = fallback.split(":")
-        return datetime.time(int(h), int(m))
-
 
 class B3Market:
-    """Bolsa brasileira via yfinance (sufixo .SA), fuso de Brasília."""
+    """Bolsa brasileira via yfinance (sufixo .SA), fuso de Brasília e sessões oficiais."""
 
     name = "b3"
 
     def __init__(self) -> None:
-        sched: dict[str, Any] = {}
-        try:
-            from trading_bot.core.config import AppConfig
-
-            sched = AppConfig.load().get("scheduler", default={}) or {}
-        except Exception as exc:  # config ausente/ilegível não derruba o app
-            logger.warning("scheduler do settings.yaml indisponível (%s); usando padrões B3", exc)
-
-        self.timezone = ZoneInfo(sched.get("timezone", _DEFAULT_TZ))
-        self._open = _hhmm(sched.get("market_open", _DEFAULT_OPEN), _DEFAULT_OPEN)
-        self._close = _hhmm(sched.get("market_close", _DEFAULT_CLOSE), _DEFAULT_CLOSE)
+        self.timezone = B3_TIMEZONE
+        self.schedule_source = B3_SCHEDULE_SOURCE
+        self.schedule_effective_date = B3_SCHEDULE_EFFECTIVE_DATE
+        self.calendar_source = B3_CALENDAR_SOURCE
 
     # --- símbolos ---------------------------------------------------------
 
@@ -91,27 +70,32 @@ class B3Market:
     def current_price(self, ticker: str) -> float:
         return feed.get_current_price(ticker)
 
-    # --- calendário -------------------------------------------------------
+    # --- calendário e sessões ---------------------------------------------
 
     def today(self) -> datetime.date:
         return datetime.datetime.now(self.timezone).date()
 
+    def get_session_phase(self, now: Optional[datetime.datetime] = None) -> B3SessionPhase:
+        """Retorna a fase atual da sessão da B3 segundo a Circular 005/2026 PRE."""
+        return get_session_phase(now)
+
+    def get_day_type(self, market_date: Optional[datetime.date] = None) -> B3DayType:
+        """Classifica o dia de acordo com o calendário oficial da B3."""
+        d = market_date or self.today()
+        return get_day_type(d)
+
     def is_open(self, now: Optional[datetime.datetime] = None) -> bool:
-        """Pregão regular: dia útil, entre market_open e market_close
-        (limites inclusivos), no fuso do mercado.
-
-        NÃO considera feriados da B3 (exigiria calendário externo) — está
-        registrado no BACKLOG. E, importante: este método NÃO é chamado
-        pelo laço de trading neste commit. Ligá-lo mudaria comportamento
-        (hoje o bot opera fora do pregão), e este commit é refatoração de
-        comportamento zero. Fica disponível para uma decisão explícita.
+        """Retorna True se o mercado está em fase CONTINUOUS (aberto para novas ordens).
+        
+        Substitui a semântica ingênua de dia de semana + 10:00-17:30 pela fase
+        oficial CONTINUOUS da B3 (10:00-16:55 em dias normais).
         """
-        agora = now or datetime.datetime.now(self.timezone)
-        if agora.tzinfo is None:
-            agora = agora.replace(tzinfo=self.timezone)
-        else:
-            agora = agora.astimezone(self.timezone)
+        return can_enter_new_position(now)
 
-        if agora.weekday() >= 5:  # 5=sábado, 6=domingo
-            return False
-        return self._open <= agora.time() <= self._close
+    def can_enter_new_position(self, now: Optional[datetime.datetime] = None) -> bool:
+        """Novas entradas autônomas são permitidas ESTRITAMENTE em fase CONTINUOUS."""
+        return can_enter_new_position(now)
+
+    def can_manage_exits(self) -> bool:
+        """Proteção de saída opera independentemente do fechamento de novas entradas."""
+        return can_manage_exits()

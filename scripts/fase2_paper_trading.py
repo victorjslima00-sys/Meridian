@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Fase 2 — Orquestrador de Paper Trading
-Roda a verificação diária, gera sinais, pede aprovação via Telegram e envia para a corretora (Mock).
+[LEGACY / REFERENCE ONLY - NEXUS-004]
+Fase 2 — Orquestrador de Paper Trading Histórico.
+Desabilitado do runtime operacional padrão do Meridian.
+A autoridade única de execução Paper é o caminho tipado moderno:
+MarketAnalyst -> TypedSignal -> RiskDecision -> ApprovedExecutionIntent -> ExecutorAgent.
 """
 import sys
 import logging

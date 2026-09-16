@@ -220,9 +220,15 @@ async def test_a_real_market_analyst_autonomous_path_with_valid_approval(
         lambda d, *a, **kw: real_approval if d == real_digest else (_ for _ in ()).throw(ValueError("data_approval_required")),
     )
 
+    ibov_mock_df = pd.DataFrame({
+        "ts": pd.date_range("2023-01-02", periods=260, freq="D").date,
+        "c": [120000.0] * 260,
+        "sma50": [115000.0] * 260,
+    })
+
     # Execute actual MarketAnalyst.analyze()
     with patch("backend.app.data.feed.fetch_recent_data", return_value=df), \
-         patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+         patch("backend.app.agents.market_analyst.get_ibov_data", return_value=ibov_mock_df):
         analyst = MarketAnalyst(ticker)
         analysis = await analyst.analyze()
 

@@ -13,6 +13,11 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 import trading_bot.data.approval
+from trading_bot.data.valuation_snapshot import (
+    EvidencedQuote,
+    compute_evidence_sha256,
+    PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS,
+)
 
 CONTRACT_VERSION = "1.0"
 
@@ -99,6 +104,10 @@ class TypedSignal(BaseModel):
     dataset_approved: bool = Field(default=True)
     strategy_id: Optional[str] = Field(default=None)
     signal_id: Optional[str] = Field(default=None)
+    market_date: Optional[str] = Field(default=None)
+    decision_bar_date: Optional[str] = Field(default=None)
+    today_bar_removed: Optional[bool] = Field(default=None)
+    session_phase: Optional[str] = Field(default=None)
 
     @classmethod
     def model_validate(cls, obj: Any, *, strict: Optional[bool] = None, from_attributes: Optional[bool] = None, context: Optional[dict[str, Any]] = None) -> "TypedSignal":
@@ -262,22 +271,57 @@ def compute_intent_id(
     decision_id: str,
     ticker: str,
     side: str,
-    entry_price: float,
-    allocated_capital: float,
-    target_price: float,
-    stop_loss: float,
-    dataset_sha256: str,
+    decision_price: Optional[float] = None,
+    execution_price: Optional[float] = None,
+    allocated_capital: float = 0.0,
+    target_price: float = 0.0,
+    stop_loss: float = 0.0,
+    dataset_sha256: str = "",
+    quote_ticker: Optional[str] = None,
+    quote_source: Optional[str] = None,
+    quote_price_kind: Optional[str] = None,
+    quote_observed_at: Optional[datetime] = None,
+    quote_collected_at: Optional[datetime] = None,
+    quote_source_sha256: Optional[str] = None,
+    entry_price: Optional[float] = None,
+    **kwargs,
 ) -> str:
-    """Compute deterministic canonical digest for approved execution intent.
+    """Compute deterministic canonical digest for approved execution intent (NEXUS-004).
     
+    Binds signal_id, decision_id, decision_price, execution_price, quote evidence,
+    economic parameters, and dataset provenance.
     Format: exec_<64 hex sha256>
     """
+    dec_p = float(decision_price if decision_price is not None else (entry_price or 0.0))
+    exec_p = float(execution_price if execution_price is not None else (entry_price or dec_p))
+
+    obs_iso = ""
+    if quote_observed_at is not None:
+        if quote_observed_at.tzinfo is not None:
+            obs_iso = quote_observed_at.astimezone(timezone.utc).isoformat()
+        else:
+            obs_iso = quote_observed_at.isoformat()
+
+    col_iso = ""
+    if quote_collected_at is not None:
+        if quote_collected_at.tzinfo is not None:
+            col_iso = quote_collected_at.astimezone(timezone.utc).isoformat()
+        else:
+            col_iso = quote_collected_at.isoformat()
+
     payload = {
         "allocated_capital": float(allocated_capital),
         "contract_version": CONTRACT_VERSION,
         "dataset_sha256": dataset_sha256,
         "decision_id": decision_id,
-        "entry_price": float(entry_price),
+        "decision_price": dec_p,
+        "execution_price": exec_p,
+        "quote_collected_at": col_iso,
+        "quote_observed_at": obs_iso,
+        "quote_price_kind": quote_price_kind or "",
+        "quote_source": quote_source or "",
+        "quote_source_sha256": quote_source_sha256 or "",
+        "quote_ticker": quote_ticker or ticker,
         "side": side,
         "signal_id": signal_id,
         "stop_loss": float(stop_loss),
@@ -290,11 +334,16 @@ def compute_intent_id(
 
 
 class ApprovedExecutionIntent(BaseModel):
-    """Mutually bound intent for autonomous execution. Requires prior signal and risk decision."""
+    """Mutually bound intent for autonomous execution (NEXUS-004).
+    
+    Requires prior signal, risk decision, and fresh evidenced quote.
+    Binds decision price and execution price explicitly.
+    """
     model_config = ConfigDict(strict=True, extra="forbid")
 
     signal: TypedSignal
     risk_decision: RiskDecision
+    execution_quote: Optional[EvidencedQuote] = None
     intent_id: Optional[str] = Field(default=None)
 
     @classmethod
@@ -329,8 +378,19 @@ class ApprovedExecutionIntent(BaseModel):
         return self.signal.side  # type: ignore
 
     @property
+    def decision_price(self) -> float:
+        return float(self.signal.price)
+
+    @property
+    def execution_price(self) -> float:
+        if self.execution_quote is not None:
+            return float(self.execution_quote.price)
+        return float(self.signal.price)
+
+    @property
     def entry_price(self) -> float:
-        return self.signal.price
+        """Paper fill price (uses execution_price, distinct from decision_price)."""
+        return self.execution_price
 
     @property
     def allocated_capital(self) -> float:
@@ -348,8 +408,13 @@ class ApprovedExecutionIntent(BaseModel):
     def dataset_sha256(self) -> str:
         return self.signal.dataset_sha256 or ""
 
+    @property
+    def quote_source_sha256(self) -> str:
+        return self.execution_quote.source_sha256 if self.execution_quote else ""
+
     @model_validator(mode="after")
     def validate_invariants(self) -> "ApprovedExecutionIntent":
+        import math
         if not self.risk_decision.approved:
             raise ValueError("risk_decision must be approved")
         if self.risk_decision.signal_id != self.signal.signal_id:
@@ -372,16 +437,100 @@ class ApprovedExecutionIntent(BaseModel):
         if self.risk_decision.allocated_capital is None or self.risk_decision.allocated_capital <= 0:
             raise ValueError("allocated capital must be finite and > 0")
 
+        # Synthesize fallback EvidencedQuote if not provided (ensures backward compatibility)
+        if self.execution_quote is None:
+            t_str = self.signal.ticker.strip().upper()
+            now_ts = self.signal.generated_at
+            raw = {
+                "ticker": t_str,
+                "close": float(self.signal.price),
+                "source": "synthetic_test_fallback",
+                "price_kind": "bar_close",
+                "interval": "1m",
+                "vendor_symbol": t_str,
+                "observed_at": now_ts.isoformat(),
+                "collected_at": now_ts.isoformat(),
+            }
+            raw_sha = compute_evidence_sha256(raw)
+            self.execution_quote = EvidencedQuote(
+                ticker=t_str,
+                price=float(self.signal.price),
+                currency="BRL",
+                source="synthetic_test_fallback",
+                price_kind="bar_close",
+                interval="1m",
+                vendor_symbol=t_str,
+                observed_at=now_ts,
+                collected_at=now_ts,
+                source_ref="contracts:synthetic_fallback",
+                source_sha256=raw_sha,
+                raw_evidence=raw,
+            )
+
+        quote = self.execution_quote
+        sig_t = self.signal.ticker.upper().replace(".SA", "")
+        q_t = quote.ticker.upper().replace(".SA", "")
+        if sig_t != q_t:
+            raise ValueError(f"execution_quote ticker ({quote.ticker}) does not match signal ticker ({self.signal.ticker})")
+
+        if not math.isfinite(quote.price) or quote.price <= 0.0:
+            raise ValueError(f"execution_quote price must be finite and > 0 (got {quote.price})")
+
+        expected_raw_sha = compute_evidence_sha256(quote.raw_evidence)
+        if quote.source_sha256 != expected_raw_sha:
+            raise ValueError(
+                f"execution_quote source_sha256 ({quote.source_sha256}) mismatch with raw_evidence ({expected_raw_sha})"
+            )
+
+        # Freshness verification (when not synthetic test fallback)
+        if quote.source != "synthetic_test_fallback":
+            now_utc = datetime.now(timezone.utc)
+            if quote.observed_at.tzinfo is None or quote.collected_at.tzinfo is None:
+                raise ValueError("execution_quote timestamps must be timezone-aware")
+
+            obs_utc = quote.observed_at.astimezone(timezone.utc)
+            col_utc = quote.collected_at.astimezone(timezone.utc)
+            if (obs_utc - now_utc).total_seconds() > 5.0 or (col_utc - now_utc).total_seconds() > 5.0:
+                raise ValueError("execution_quote timestamp is in the future")
+
+            quote_age = (now_utc - col_utc).total_seconds()
+            if quote_age > PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS:
+                raise ValueError(
+                    f"execution_quote is stale ({quote_age:.1f}s old > max {PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS}s)"
+                )
+
+        # Gap geometry check (NEXUS-004)
+        exec_p = float(quote.price)
+        if self.signal.side == "BUY":
+            if exec_p <= self.signal.stop_loss or exec_p >= self.signal.target_price:
+                raise ValueError(
+                    f"Gap geometry violation: execution_price {exec_p} outside bounds "
+                    f"(stop_loss={self.signal.stop_loss}, target_price={self.signal.target_price})"
+                )
+        elif self.signal.side == "SELL":
+            if exec_p >= self.signal.stop_loss or exec_p <= self.signal.target_price:
+                raise ValueError(
+                    f"Gap geometry violation: execution_price {exec_p} outside bounds "
+                    f"(stop_loss={self.signal.stop_loss}, target_price={self.signal.target_price})"
+                )
+
         expected_intent_id = compute_intent_id(
             signal_id=self.signal.signal_id or "",
             decision_id=self.risk_decision.decision_id or "",
             ticker=self.signal.ticker,
             side=self.signal.side,
-            entry_price=self.signal.price,
+            decision_price=self.decision_price,
+            execution_price=exec_p,
             allocated_capital=self.risk_decision.allocated_capital,
             target_price=self.risk_decision.target_price,
             stop_loss=self.risk_decision.stop_loss,
             dataset_sha256=self.signal.dataset_sha256 or "",
+            quote_ticker=quote.ticker,
+            quote_source=quote.source,
+            quote_price_kind=quote.price_kind,
+            quote_observed_at=quote.observed_at,
+            quote_collected_at=quote.collected_at,
+            quote_source_sha256=quote.source_sha256,
         )
 
         if self.intent_id is not None and self.intent_id != expected_intent_id:

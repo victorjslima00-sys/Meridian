@@ -163,7 +163,7 @@ from .agents.executor import ExecutorAgent
 
 import math
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 
 # -----------------------------------------------------------------------
@@ -245,34 +245,85 @@ def _formatar_posicoes_abertas_para_alerta() -> str:
     return "\n".join(linhas)
 
 
-def _price_is_trustworthy(price, open_=None, high=None, low=None) -> bool:
-    """FAIL-CLOSED para decisões de saída: um preço não confiável nunca deve
-    disparar (nem impedir) o fechamento de uma posição por engano. A decisão
-    certa diante de dado ruim é NÃO decidir nada — manter a posição como
-    está, nunca 'vender por precaução'.
-
-    Rejeita: None, não numérico, <= 0, NaN — e o artefato conhecido do
-    yfinance de o candle do dia corrente vir com Open/High/Low zerados (ver
-    também o patch cosmético em get_candles). Mesmo com um close que pareça
-    válido, um candle com O/H/L zerados é sinal de dado incompleto — não
-    confiável o bastante para decidir um stop-loss/take-profit.
+def _price_is_trustworthy(
+    price: Any,
+    open_: Any = None,
+    high: Any = None,
+    low: Any = None,
+    observed_at: Optional[datetime.datetime] = None,
+    collected_at: Optional[datetime.datetime] = None,
+    max_age_seconds: Optional[float] = None,
+    now: Optional[datetime.datetime] = None,
+) -> bool:
+    """FAIL-CLOSED para decisões de saída (NEXUS-004):
+    Rejeita:
+    - None
+    - bool (isinstance(price, bool) == True não é preço numérico)
+    - não numérico
+    - NaN
+    - +Inf / -Inf (valores não finitos)
+    - price <= 0
+    - velas com Open, High e Low todos zerados (candle incompleto do yfinance)
+    - timestamp futuro ou sem fuso
+    - cotação com idade superior a max_age_seconds (stale price)
     """
-    if price is None:
+    if price is None or isinstance(price, bool):
         return False
     try:
-        price = float(price)
+        price_f = float(price)
     except (TypeError, ValueError):
         return False
-    if math.isnan(price) or price <= 0:
+    if not math.isfinite(price_f) or price_f <= 0.0:
         return False
 
-    if open_ is not None and high is not None and low is not None:
-        try:
-            o, h, low_ = float(open_), float(high), float(low)
-        except (TypeError, ValueError):
-            return False
-        if o == 0 and h == 0 and low_ == 0:
-            return False
+    if open_ is not None or high is not None or low is not None:
+        for val in (open_, high, low):
+            if val is not None:
+                if isinstance(val, bool):
+                    return False
+                try:
+                    vf = float(val)
+                    if not math.isfinite(vf) or vf < 0.0:
+                        return False
+                except (TypeError, ValueError):
+                    return False
+
+        if open_ is not None and high is not None and low is not None:
+            if float(open_) == 0.0 and float(high) == 0.0 and float(low) == 0.0:
+                return False
+
+    # Validação de frescor temporal se fornecido
+    if observed_at is not None or collected_at is not None:
+        from zoneinfo import ZoneInfo
+        import pandas as pd
+        tz_b3 = ZoneInfo("America/Sao_Paulo")
+        current_time = now or datetime.datetime.now(tz_b3)
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=tz_b3)
+
+        ts_to_check = observed_at if observed_at is not None else collected_at
+        if ts_to_check is not None:
+            if not isinstance(ts_to_check, datetime.datetime):
+                try:
+                    ts_to_check = pd.to_datetime(ts_to_check)
+                    if isinstance(ts_to_check, pd.Timestamp):
+                        ts_to_check = ts_to_check.to_pydatetime()
+                except Exception:
+                    return False
+
+            if ts_to_check.tzinfo is None:
+                ts_tz = ts_to_check.replace(tzinfo=tz_b3)
+            else:
+                ts_tz = ts_to_check.astimezone(tz_b3)
+
+            # Future timestamp check (tolerance of 5s)
+            if (ts_tz - current_time).total_seconds() > 5.0:
+                return False
+
+            limit = max_age_seconds if max_age_seconds is not None else 3600.0
+            age = (current_time - ts_tz).total_seconds()
+            if age > limit:
+                return False
 
     return True
 
@@ -348,12 +399,14 @@ async def _run_exit_scan() -> bool:
 
         last_row = df_recent.iloc[-1]
         current_price = last_row["close"]
+        observed_time = last_row.get("date") or last_row.get("datetime") or last_row.get("index")
 
         if not _price_is_trustworthy(
             current_price,
             open_=last_row.get("open"),
             high=last_row.get("high"),
             low=last_row.get("low"),
+            observed_at=observed_time,
         ):
             logger.warning(
                 "Exit scan: preço não confiável para %s (%r) — mantendo "
@@ -554,10 +607,13 @@ async def _run_one_scan_cycle():
     try:
         from trading_bot.core.config import AppConfig
         cfg = AppConfig.load()
-        raw_tickers = cfg.get("_universe", "tickers", default=["PETR4", "VALE3", "ITUB4"])
-        tickers_to_watch = [f"{t}.SA" if not t.endswith(".SA") else t for t in raw_tickers]
-    except Exception:
-        tickers_to_watch = ["PETR4.SA", "VALE3.SA"]
+        raw_tickers = cfg.get("_universe", "tickers", default=[]) or []
+        tickers_to_watch = [f"{t}.SA" if not str(t).endswith(".SA") else str(t) for t in raw_tickers if t and str(t).strip()]
+    except Exception as exc:
+        logger.error("Falha ao carregar universo de produção (%s) — ciclo abortado (fail-closed)", exc)
+        await broadcast_log("System", f"Falha ao carregar universo: {exc} — ciclo de entrada abortado", "error")
+        return
+
 
     # Snapshot diário de equity (data do pregão) — base do circuit breaker.
     # Fase 1 Commit 1: a data vem do CALENDÁRIO DO MERCADO, não de um
@@ -612,6 +668,11 @@ async def _run_one_scan_cycle():
                     "esgotados), entradas bloqueadas até reinício manual do "
                     f"processo. Posições sem avaliação de stop:\n{posicoes}",
                 )
+
+    if not tickers_to_watch:
+        logger.error("Universo configurado vazio ou indisponível — ciclo abortado (fail-closed)")
+        await broadcast_log("System", "Universo configurado vazio — ciclo de entrada abortado", "warning")
+        return
 
     for ticker in tickers_to_watch:
         print(f"Scanning {ticker}...", flush=True)
@@ -708,11 +769,23 @@ async def _run_one_scan_cycle():
             if decision.approved:
                 await broadcast_log("RiskManager", decision.reason, "success")
 
+                # Obtain fresh EvidencedQuote (NEXUS-004)
+                from .data.feed import get_evidenced_quote
+                quote = await asyncio.to_thread(get_evidenced_quote, ticker)
+                if quote is None:
+                    await broadcast_log(
+                        "ExecutorAgent",
+                        f"EvidencedQuote fresca indisponível para {ticker} — entrada bloqueada (fail-closed)",
+                        "error",
+                    )
+                    continue
+
                 # 3. Executor
                 try:
                     intent = ApprovedExecutionIntent(
                         signal=sig,
                         risk_decision=decision,
+                        execution_quote=quote,
                     )
                 except Exception as e:
                     await broadcast_log("ExecutorAgent", f"Execution intent validation failed: {e}", "error")

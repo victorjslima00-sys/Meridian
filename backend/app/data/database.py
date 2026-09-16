@@ -115,7 +115,8 @@ def init_db():
             exit_reason TEXT,
             ai_rationale TEXT,
             status TEXT,
-            signal_id TEXT
+            signal_id TEXT,
+            decision_price REAL
         )
         """
         )
@@ -125,6 +126,8 @@ def init_db():
         }
         if "signal_id" not in trades_cols:
             cursor.execute("ALTER TABLE trades ADD COLUMN signal_id TEXT")
+        if "decision_price" not in trades_cols:
+            cursor.execute("ALTER TABLE trades ADD COLUMN decision_price REAL")
 
         cursor.execute(
             "SELECT signal_id, COUNT(*) FROM trades WHERE signal_id IS NOT NULL "

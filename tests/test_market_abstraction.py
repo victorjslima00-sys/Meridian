@@ -126,12 +126,14 @@ class TestB3MarketCalendario:
     @pytest.mark.parametrize(
         "momento,aberto",
         [
-            # 2026-07-22 é uma quarta-feira.
+            # 2026-07-22 é uma quarta-feira (dia normal de negociação).
             (datetime.datetime(2026, 7, 22, 9, 59), False),   # antes da abertura
-            (datetime.datetime(2026, 7, 22, 10, 0), True),    # abertura
-            (datetime.datetime(2026, 7, 22, 14, 0), True),    # meio do pregão
-            (datetime.datetime(2026, 7, 22, 17, 30), True),   # fechamento (inclusive)
-            (datetime.datetime(2026, 7, 22, 17, 31), False),  # depois do fechamento
+            (datetime.datetime(2026, 7, 22, 10, 0), True),    # abertura continuous
+            (datetime.datetime(2026, 7, 22, 14, 0), True),    # meio do pregão continuous
+            (datetime.datetime(2026, 7, 22, 16, 54), True),   # fim da negociação contínua
+            (datetime.datetime(2026, 7, 22, 16, 55), False),  # início do call de fechamento
+            (datetime.datetime(2026, 7, 22, 17, 30), False),  # after-market (não é continuous)
+            (datetime.datetime(2026, 7, 22, 17, 31), False),  # depois do fechamento regular
             (datetime.datetime(2026, 7, 25, 14, 0), False),   # sábado
             (datetime.datetime(2026, 7, 26, 14, 0), False),   # domingo
         ],

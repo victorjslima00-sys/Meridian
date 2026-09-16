@@ -29,13 +29,9 @@ COPY . .
 # Cria os diretorios de dados persistentes caso nao existam
 RUN mkdir -p /app/data /app/logs
 
-# Define o cron job dentro do container para rodar a cada 45 minutos (*/45)
-# O cron precisa ler as env vars, entao salvamos as env vars num arquivo pro script ler
-RUN echo "*/45 * * * * root cd /app && /usr/local/bin/python scripts/fase2_paper_trading.py >> /var/log/cron.log 2>&1" > /etc/cron.d/bot-cron
-RUN chmod 0644 /etc/cron.d/bot-cron
-RUN crontab /etc/cron.d/bot-cron
-RUN touch /var/log/cron.log
+# Legacy cron order writer disabled (NEXUS-004: single paper execution authority).
+# Default Meridian runtime exposes exactly ONE Paper order authority: the modern typed path in backend.app.main.
+# The legacy scripts/fase2_paper_trading.py is preserved as reference/historical code only.
 
-# O Entrypoint garante que as variaveis do docker-compose vao pro crontab
-# e inicia o servico do cron em foreground
-CMD env > /etc/environment && cron -f
+CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+

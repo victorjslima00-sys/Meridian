@@ -1,30 +1,28 @@
 """
-MarketAnalyst — gerador de sinal de ENTRADA (Fase 1, Commit 2).
+MarketAnalyst — gerador de sinal de ENTRADA (Fase 1, Commit 2, Hardening NEXUS-004).
 
 MUDANÇA ESTRUTURAL: o sinal volta a ser a estratégia DETERMINÍSTICA que
 foi backtestada — Donchian breakout de 20 dias + filtro estrutural
 SMA-200 + confirmação de volume + RSI, com stop/alvo por ATR, no
 timeframe DIÁRIO, e filtro macro IBOV (> SMA-50). É exatamente
 `trading_bot/signals/engine.py::compute_signal`, com os MESMOS parâmetros
-que o backtest lê (config/settings.yaml::signals) — é isso que faz o
-sinal ao vivo reproduzir o Sharpe medido no backtest.
+que o backtest lê (config/settings.yaml::signals).
 
-O LLM SAIU COMPLETAMENTE do caminho de decisão de entrada. Não há
-nenhuma chamada a generate_text aqui — nenhum import de ResilientLLMClient.
-(Motivo raiz do que começou tudo: 47 chamadas Gemini/ciclo -> rate-limit
-constante -> HOLD; timeframe 15min "parecia scalp"; e o sinal nunca fora
-backtestado. Os três resolvidos ao voltar ao determinístico.) O LLM
-retornará numa fase futura como CAMADA DE INTELIGÊNCIA (sentimento/regime)
-— nunca como gatilho de trade.
-
-Long-only: compute_signal é um breakout de COMPRA; devolve um Candidate
-ou None. None -> HOLD. Não há mais SELL/short (o backtest é long-only).
+NEXUS-004 HARDENING:
+- Configuração fail-closed: sem fallbacks silenciosos se config estiver corrompida/ausente.
+- Barras estritamente fechadas: a barra em formação do dia corrente é excluída.
+- Filtro IBOV fail-closed: sem autorização de entrada se IBOV ausente, insuficiente ou <= SMA-50.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
-from typing import Any, Dict
+import math
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
 from trading_bot.data import approval
+from trading_bot.data.closed_frame import closed_daily_signal_frame
 from trading_bot.signals.strategy_identity import get_active_strategy_id
 
 from ..markets import resolve_market
@@ -36,37 +34,67 @@ from trading_bot.signals.engine import (
 
 logger = logging.getLogger(__name__)
 
-# Mínimo de barras diárias: SMA-200 exige 200 de histórico + a barra atual.
+# Mínimo de barras diárias fechadas: SMA-200 exige 200 de histórico + a barra de decisão.
 _MIN_DAILY_BARS = 201
 
 
 def _signal_params(settings_path: Any = None) -> Dict[str, Any]:
     """Parâmetros de PRODUÇÃO — a MESMA fonte que o backtest lê
-    (config/settings.yaml::signals). Ler daqui, e o backtest ler daqui, é o
-    que garante que ao vivo roda EXATAMENTE o que foi validado."""
+    (config/settings.yaml::signals).
+    
+    FAIL-CLOSED (NEXUS-004): Sem fallbacks silenciosos. Se a configuração
+    estiver ausente, corrompida ou contiver parâmetros não-finitos/inválidos,
+    lança ValueError.
+    """
     from trading_bot.core.config import AppConfig
 
-    try:
-        if settings_path is not None:
-            cfg = AppConfig.load(settings_path=str(settings_path))
-        else:
-            cfg = AppConfig.load()
-        sig = cfg.get("signals", default={}) or {}
-    except Exception:
-        sig = {}
+    if settings_path is not None:
+        cfg = AppConfig.load(settings_path=str(settings_path))
+    else:
+        cfg = AppConfig.load()
+
+    sig = cfg.get("signals")
+    if sig is None or not isinstance(sig, dict) or not sig:
+        raise ValueError("Seção 'signals' ausente ou inválida nas configurações (fail-closed)")
+
+    vol = sig.get("volume_multiplier", sig.get("volume_mult"))
+
+    params = {
+        "breakout_period": sig.get("breakout_period"),
+        "volume_mult": vol,
+        "sma_trend_period": sig.get("sma_trend_period"),
+        "rsi_max": sig.get("rsi_max"),
+        "stop_atr_mult": sig.get("stop_atr_mult"),
+        "stop_pct": sig.get("stop_pct"),
+        "target_atr_mult": sig.get("target_atr_mult"),
+    }
+
+    for k, v in params.items():
+        if v is None:
+            raise ValueError(f"Parâmetro obrigatório '{k}' ausente na configuração 'signals'")
+        if isinstance(v, bool):
+            raise ValueError(f"Parâmetro '{k}' não pode ser booleano: {v}")
+        try:
+            vf = float(v)
+            if not math.isfinite(vf) or vf <= 0.0:
+                raise ValueError(f"Parâmetro '{k}' deve ser finito e > 0: {v}")
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"Parâmetro '{k}' numérico inválido: {v}") from err
 
     return {
-        "breakout_period": sig.get("breakout_period", 20),
-        "volume_mult": sig.get("volume_multiplier", 1.5),
-        "sma_trend_period": sig.get("sma_trend_period", 200),
-        "rsi_max": sig.get("rsi_max", 75.0),
-        "stop_atr_mult": sig.get("stop_atr_mult", 1.5),
-        "stop_pct": sig.get("stop_pct", 0.04),
-        "target_atr_mult": sig.get("target_atr_mult", 3.0),
+        "breakout_period": int(params["breakout_period"]),
+        "volume_mult": float(params["volume_mult"]),
+        "sma_trend_period": int(params["sma_trend_period"]),
+        "rsi_max": float(params["rsi_max"]),
+        "stop_atr_mult": float(params["stop_atr_mult"]),
+        "stop_pct": float(params["stop_pct"]),
+        "target_atr_mult": float(params["target_atr_mult"]),
     }
 
 
 class MarketAnalyst:
+    _signal_params = staticmethod(_signal_params)
+
     def __init__(self, ticker: str):
         self.ticker = ticker
 
@@ -75,8 +103,11 @@ class MarketAnalyst:
         reason: str,
         last_price: float = 0.0,
         strategy_id: str = "donchian_breakout",
+        market_date: Optional[str] = None,
+        decision_bar_date: Optional[str] = None,
+        today_bar_removed: bool = False,
+        session_phase: Optional[str] = None,
     ) -> Dict[str, Any]:
-        from datetime import datetime, timezone
         return {
             "ticker": self.ticker,
             "signal": "HOLD",
@@ -91,6 +122,10 @@ class MarketAnalyst:
             "dataset_sha256": None,
             "dataset_approved": False,
             "strategy_id": strategy_id,
+            "market_date": market_date,
+            "decision_bar_date": decision_bar_date,
+            "today_bar_removed": today_bar_removed,
+            "session_phase": session_phase,
         }
 
     async def analyze(
@@ -102,8 +137,6 @@ class MarketAnalyst:
         """Devolve o sinal do ticker: BUY (com alvo/stop por ATR) ou HOLD."""
         market = resolve_market(self.ticker)
 
-        # Barras DIÁRIAS com histórico para SMA-200 + Donchian-20. O I/O de
-        # rede roda numa thread (fetch_recent_data é síncrono/bloqueante).
         df = await asyncio.to_thread(
             market.fetch_ohlcv, self.ticker, period="2y", interval="1d"
         )
@@ -134,37 +167,62 @@ class MarketAnalyst:
                 0.0,
             )
 
-        if df is None or len(df) < _MIN_DAILY_BARS:
+        # 0. Parâmetros de estratégia fail-closed (NEXUS-004)
+        try:
+            params = _signal_params(settings_path=settings_path)
+        except Exception as exc:
             return self._hold(
-                "Dados diários insuficientes para o sinal Donchian.",
+                f"Configuração de estratégia ausente ou inválida ({exc}) — fail-closed.",
+                0.0,
                 strategy_id=active_strategy,
             )
 
-        last_price = float(df["close"].iloc[-1])
+        # 1. Transformação de barras estritamente FECHADAS (NEXUS-004)
+        closed_res = closed_daily_signal_frame(df)
+        closed_df = closed_res.df
+        mkt_date_str = str(closed_res.market_date)
+        dec_bar_str = str(closed_res.decision_bar_date) if closed_res.decision_bar_date else None
+        phase_str = closed_res.session_phase.value
 
-        # Adapta o schema do feed (date/open/high/low/close/volume) ao que o
-        # compute_signal espera (ts/adj_close/h/l/v). O feed usa
-        # auto_adjust=True, então 'close' já é ajustado -> adj_close = close.
+        if closed_df is None or len(closed_df) < _MIN_DAILY_BARS:
+            return self._hold(
+                f"Dados diários insuficientes para o sinal Donchian (obtido {len(closed_df) if closed_df is not None else 0}, mínimo {_MIN_DAILY_BARS}).",
+                0.0,
+                strategy_id=active_strategy,
+                market_date=mkt_date_str,
+                decision_bar_date=dec_bar_str,
+                today_bar_removed=closed_res.today_bar_removed,
+                session_phase=phase_str,
+            )
+
+        last_price = float(closed_df["close"].iloc[-1])
+
+        # Adapta o schema do feed (date/open/high/low/close/volume) para o engine
         try:
-            eng_df = approval.normalize_ohlcv_to_signal_df(df)
+            eng_df = approval.normalize_ohlcv_to_signal_df(closed_df)
         except Exception as exc:
             return self._hold(
                 f"Falha na normalização dos dados diários: {exc}",
                 last_price,
                 strategy_id=active_strategy,
+                market_date=mkt_date_str,
+                decision_bar_date=dec_bar_str,
+                today_bar_removed=closed_res.today_bar_removed,
+                session_phase=phase_str,
             )
 
-        # Filtro macro IBOV (mesmo do backtest): só abre entrada com IBOV >
-        # SMA-50. get_ibov_data devolve None em falha e ibov_in_uptrend(None,
-        # ...) == True -> fail-OPEN por falta de dado MACRO (não trava o bot
-        # por falta de um índice), comportamento idêntico ao backtest.
-        ref_date = eng_df["ts"].iloc[-1]
+        # Filtro macro IBOV (NEXUS-004 fail-closed)
+        ref_date = closed_res.decision_bar_date
         ibov_df = await asyncio.to_thread(get_ibov_data, eng_df["ts"].iloc[0])
-        if not ibov_in_uptrend(ibov_df, ref_date):
+        if not ibov_in_uptrend(ibov_df, ref_date, current_market_date=closed_res.market_date):
             return self._hold(
-                "Filtro macro: IBOV abaixo da SMA-50 — sem novas entradas.",
+                "Filtro macro: IBOV indisponível, insuficiente ou abaixo da SMA-50 — sem novas entradas.",
                 last_price,
                 strategy_id=active_strategy,
+                market_date=mkt_date_str,
+                decision_bar_date=dec_bar_str,
+                today_bar_removed=closed_res.today_bar_removed,
+                session_phase=phase_str,
             )
 
         candidate = compute_signal(
@@ -173,21 +231,18 @@ class MarketAnalyst:
             registry_path=registry_path,
             project_root=project_root,
             settings_path=settings_path,
-            **_signal_params(settings_path=settings_path),
+            **params,
         )
         if candidate is None:
             return self._hold(
-                "Sem sinal Donchian "
-                "(breakout/SMA-200/volume/RSI não confirmados).",
+                "Sem sinal Donchian (breakout/SMA-200/volume/RSI não confirmados).",
                 last_price,
                 strategy_id=active_strategy,
+                market_date=mkt_date_str,
+                decision_bar_date=dec_bar_str,
+                today_bar_removed=closed_res.today_bar_removed,
+                session_phase=phase_str,
             )
-
-        # Candidate garante, por construção, stop < entry < target (breakout
-        # de compra). score (0-1) vira 'confidence' só para exibição/log — o
-        # dimensionamento NÃO usa mais confidence (ver risk_manager: sizing
-        # alinhado ao backtest, Kelly fixo).
-        from datetime import datetime, timezone
 
         try:
             d_sha = approval.dataset_digest(eng_df, self.ticker)
@@ -204,10 +259,13 @@ class MarketAnalyst:
                 e,
             )
             return self._hold(
-                f"Aprovação de dados ausente ou inválida ({e}) — "
-                "entrada bloqueada (fail-closed).",
+                f"Aprovação de dados ausente ou inválida ({e}) — entrada bloqueada (fail-closed).",
                 last_price,
                 strategy_id=active_strategy,
+                market_date=mkt_date_str,
+                decision_bar_date=dec_bar_str,
+                today_bar_removed=closed_res.today_bar_removed,
+                session_phase=phase_str,
             )
 
         return {
@@ -229,4 +287,8 @@ class MarketAnalyst:
             "dataset_sha256": d_sha,
             "dataset_approved": True,
             "strategy_id": active_strategy,
+            "market_date": mkt_date_str,
+            "decision_bar_date": dec_bar_str,
+            "today_bar_removed": closed_res.today_bar_removed,
+            "session_phase": phase_str,
         }

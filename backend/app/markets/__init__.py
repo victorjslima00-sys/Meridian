@@ -1,30 +1,38 @@
 """
-Camada de Mercado/Corretora (Fase 1, Commit 1).
+Camada de Mercado/Corretora (Fase 1, Commit 1, Hardening NEXUS-004).
 
 Ponto de entrada único: `get_market(nome)` e `get_broker(nome)`. O laço
 de trading fala com estas fábricas, não com yfinance/ExecutorAgent
 direto — é isso que torna um mercado novo (cripto) uma implementação
 nova em vez de uma cirurgia no laço.
 
-Hoje só existe B3 + paper. Adicionar cripto = criar `crypto.py` com um
-Market (feed próprio, calendário 24/7, sem sufixo .SA) e registrá-lo em
-_MARKETS. Ver BACKLOG.md para o que mais falta.
-
-Fail-closed: pedir um mercado inexistente levanta ValueError. Cair para
-a B3 silenciosamente faria um bot de cripto operar ações — exatamente o
-tipo de "default conveniente" que a regra de segredos/defaults do
-CLAUDE.md existe para proibir.
+Exporta também os contratos de fase de sessão (B3SessionPhase) e calendário oficial.
 """
 from __future__ import annotations
 
 import re
 
 from .b3 import B3Market
+from .b3_session import (
+    B3_CALENDAR_SOURCE,
+    B3_CALENDAR_YEAR,
+    B3_SCHEDULE_EFFECTIVE_DATE,
+    B3_SCHEDULE_SOURCE,
+    B3_TIMEZONE,
+    B3_TIMEZONE_STR,
+    B3DayType,
+    B3SessionPhase,
+    can_enter_new_position,
+    can_manage_exits,
+    get_day_type,
+    get_session_phase,
+    get_b3_day_type,
+    get_b3_session_phase,
+)
 from .base import Broker, Market
 from .paper_broker import PaperBroker
 
-# Instâncias únicas: são objetos sem estado mutável (só configuração lida
-# no init), então compartilhá-las evita reler o YAML a cada chamada.
+# Instâncias únicas
 _MARKETS: dict[str, Market] = {}
 _BROKERS: dict[str, Broker] = {}
 
@@ -42,36 +50,11 @@ def get_market(name: str = "b3") -> Market:
     return _MARKETS[chave]
 
 
-# Forma de ticker da B3: sufixo .SA (após normalização) OU o padrão cru
-# AAAA9/AAAA99 (PETR4, VALE3, SANB11, BBSE3). Cobre o universo B3; NÃO
-# casa cripto (BTC-USD tem hífen e "USD"), índices (^BVSP) nem ETFs
-# estrangeiros (SPY).
 _B3_TICKER = re.compile(r"[A-Z]{4}\d{1,2}$")
 
 
 def resolve_market(symbol: str) -> Market:
-    """Descobre a QUE mercado um ticker TRADEÁVEL pertence.
-
-    ⚠️ ESTRATÉGIA ATUAL — mapeamento por FORMA/sufixo do ticker. É
-    pragmática e deliberada: só a B3 existe hoje, então não vale construir
-    o registry de cripto antes de cripto existir. MAS esta função é o ponto
-    onde o "conserto rápido" errado vai tentar entrar no futuro.
-
-    QUANDO CRIPTO ENTRAR, a forma CERTA de estender é resolução EXPLÍCITA:
-    o mercado de cada ticker declarado em CONFIG (ex.: um mapa
-    ticker→mercado, ou por padrão/prefixo registrado), NUNCA um `if
-    symbol in {"BTC-USD", "ETH-USD"}` hardcoded aqui. Símbolo hardcoded é
-    exatamente o bug que só aparece quando o segundo mercado chega.
-
-    FAIL-CLOSED (condição travada pelo usuário): um ticker que não casa
-    nenhum mercado conhecido levanta ValueError — NUNCA cai em B3 por
-    default. Um ticker de cripto virando silenciosamente ação seria a
-    classe de bug que só se manifesta em produção com dinheiro (mesmo
-    espírito da proibição de defaults inseguros no CLAUDE.md).
-
-    Fora de escopo: símbolos de DADO, não de trade (^BVSP para o filtro
-    macro, câmbio) — não são instrumentos operáveis e não passam por aqui.
-    """
+    """Descobre a QUE mercado um ticker TRADEÁVEL pertence."""
     s = (symbol or "").strip().upper()
     if s.endswith(".SA") or _B3_TICKER.fullmatch(s):
         return get_market("b3")
@@ -103,4 +86,18 @@ __all__ = [
     "resolve_market",
     "B3Market",
     "PaperBroker",
+    "B3SessionPhase",
+    "B3DayType",
+    "get_session_phase",
+    "get_day_type",
+    "get_b3_session_phase",
+    "get_b3_day_type",
+    "can_enter_new_position",
+    "can_manage_exits",
+    "B3_TIMEZONE",
+    "B3_TIMEZONE_STR",
+    "B3_SCHEDULE_SOURCE",
+    "B3_SCHEDULE_EFFECTIVE_DATE",
+    "B3_CALENDAR_SOURCE",
+    "B3_CALENDAR_YEAR",
 ]

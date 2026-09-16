@@ -85,15 +85,24 @@ class ExecutorAgent:
         intent = validated_intent
 
         ticker = intent.ticker
-        current_price = intent.entry_price
+        decision_price = getattr(intent, "decision_price", intent.entry_price)
+        execution_price = getattr(intent, "execution_price", intent.entry_price)
         allocated = intent.allocated_capital
-        shares = allocated / current_price if current_price > 0 else 0
+        shares = allocated / execution_price if execution_price > 0 else 0
         target_price = intent.target_price
         stop_loss = intent.stop_loss
         side = intent.side
         is_strategy = isinstance(intent, ApprovedExecutionIntent)
         signal_id = intent.signal_id if is_strategy else None
         rationale = f"Strategy Intent (Signal {signal_id})" if is_strategy else f"Manual: {intent.reason}"
+
+        # Gap geometry check before write (NEXUS-004)
+        if is_strategy and side == "BUY":
+            if execution_price <= stop_loss or execution_price >= target_price:
+                return {
+                    "status": "rejected",
+                    "reason": f"Gap geometry violation: execution_price {execution_price} outside (stop {stop_loss}, target {target_price})",
+                }
 
         conn = self._connect()
         try:
@@ -121,16 +130,30 @@ class ExecutorAgent:
                 }
 
             try:
-                cursor.execute(
-                    """
-                INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status, signal_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
-                """,
-                    (
-                        ticker, side, shares, current_price, target_price, stop_loss,
-                        datetime.datetime.now(), rationale, signal_id
-                    ),
-                )
+                cursor.execute("PRAGMA table_info(trades)")
+                cols = {row[1] for row in cursor.fetchall()}
+                if "decision_price" in cols:
+                    cursor.execute(
+                        """
+                    INSERT INTO trades (ticker, side, shares, entry_price, decision_price, target_price, stop_loss, entry_date, ai_rationale, status, signal_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                    """,
+                        (
+                            ticker, side, shares, execution_price, decision_price, target_price, stop_loss,
+                            datetime.datetime.now(), rationale, signal_id
+                        ),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                    INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status, signal_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)
+                    """,
+                        (
+                            ticker, side, shares, execution_price, target_price, stop_loss,
+                            datetime.datetime.now(), rationale, signal_id
+                        ),
+                    )
             except sqlite3.IntegrityError:
                 conn.rollback()
                 return {
@@ -190,7 +213,9 @@ class ExecutorAgent:
             "status": "executed",
             "ticker": ticker,
             "shares": shares,
-            "price": current_price,
+            "price": execution_price,
+            "decision_price": decision_price,
+            "entry_price": execution_price,
             "total_value": allocated,
         }
 

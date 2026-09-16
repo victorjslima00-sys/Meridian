@@ -115,12 +115,17 @@ def build_candidate_bundle(
         market = resolve_market(ticker)
         df = market.fetch_ohlcv(ticker, period=period, interval=interval)
 
-    if df is None or len(df) < 201:
-        count = len(df) if df is not None else 0
+    # 1b. Deterministic closed daily frame transformation (NEXUS-004)
+    from trading_bot.data.closed_frame import closed_daily_signal_frame
+    closed_res = closed_daily_signal_frame(df)
+    closed_df = closed_res.df
+
+    if closed_df is None or len(closed_df) < 201:
+        count = len(closed_df) if closed_df is not None else 0
         raise ValueError(f"insufficient_ohlcv_data: got {count} bars, minimum 201 required")
 
     # 2. Extract deterministic signal dataframe using shared helper
-    eng_df = normalize_ohlcv_to_signal_df(df)
+    eng_df = normalize_ohlcv_to_signal_df(closed_df)
 
     # 3. Calculate canonical dataset digest
     d_sha = dataset_digest(eng_df, ticker)

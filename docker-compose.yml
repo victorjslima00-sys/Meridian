@@ -1,19 +1,22 @@
 version: "3.8"
 
 services:
-  # Container 1: O Bot de Paper Trading (cron)
+  # Container 1: Legacy Paper Trading Bot (desabilitado do runtime padrao - NEXUS-004)
+  # Apenas uma autoridade de execucao e permitida: a moderna via backend.app.main
   bot:
     build: .
     container_name: meridian_bot
-    restart: unless-stopped
+    restart: "no"
+    profiles:
+      - legacy
     volumes:
-      - ./data:/app/data      # Persiste o banco SQLite
-      - ./logs:/app/logs      # Persiste os logs do Python
-      - ./.env:/app/.env:ro   # Mapeia o .env como read-only
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
     env_file:
       - .env
 
-  # Container 2: A API FastAPI (backend do dashboard)
+  # Container 2: A API FastAPI (backend com o loop moderno de execucao supervisionada)
   api:
     build: .
     container_name: meridian_api
@@ -25,8 +28,6 @@ services:
       - ./data:/app/data
     env_file:
       - .env
-    depends_on:
-      - bot
 
   # Container 3: O Frontend React (buildado e servido via nginx)
   frontend:

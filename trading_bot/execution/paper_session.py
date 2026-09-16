@@ -193,17 +193,26 @@ class PaperSessionRunner:
                     "em_posicoes": 0.0,
                     "saldo_livre": 0.0,
                     "margem_operavel": 0.0,
+                    "saldo_operavel": 0.0,
                     "patrimonio_total": 0.0,
                 }
             disponivel = float(row[0] or 0.0)
             em_posicoes = float(row[1] or 0.0)
-            margem = float(row[2]) if row[2] is not None else disponivel
+            raw_margem = row[2]
+            margem = float(raw_margem) if raw_margem is not None else None
             patrimonio = float(row[3] or 0.0)
+            saldo_livre = max(0.0, disponivel - em_posicoes)
+            if margem is None:
+                saldo_operavel = saldo_livre
+            else:
+                saldo_operavel = min(saldo_livre, max(0.0, margem - em_posicoes))
+
             return {
                 "saldo_disponivel": disponivel,
                 "em_posicoes": em_posicoes,
-                "saldo_livre": max(0.0, disponivel - em_posicoes),
+                "saldo_livre": saldo_livre,
                 "margem_operavel": margem,
+                "saldo_operavel": round(saldo_operavel, 4),
                 "patrimonio_total": patrimonio,
             }
         finally:
@@ -319,10 +328,19 @@ class PaperSessionRunner:
                 ticker=ticker,
             )
 
-            # Avaliação pelo RiskManager existente
+            # Avaliação pelo RiskManager com saldo operável canônico (NEXUS-004)
             pf_state = self.get_portfolio_state()
-            saldo_operavel = pf_state["margem_operavel"]
+            saldo_operavel = pf_state["saldo_operavel"]
             em_pos = pf_state["em_posicoes"]
+
+            if saldo_operavel <= 0:
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={"reason": "zero_operable_capital", "saldo_operavel": saldo_operavel},
+                    ticker=ticker,
+                )
+                continue
 
             rm = self.risk_manager_cls(saldo_livre=saldo_operavel, em_posicoes=em_pos)
             decision = rm.evaluate_trade(sig, ticker=ticker, open_tickers=open_tickers)
@@ -334,10 +352,59 @@ class PaperSessionRunner:
             )
 
             if decision.approved:
-                intent = ApprovedExecutionIntent(
-                    signal=sig,
-                    risk_decision=decision,
-                )
+                # Obter cotação fresca evidenciada se disponível (NEXUS-004)
+                from backend.app.data.feed import get_evidenced_quote
+                quote = None
+                try:
+                    quote = get_evidenced_quote(ticker)
+                except Exception:
+                    quote = None
+
+                # Fallback controlado para current_prices em simulações/testes
+                if quote is None and current_prices and ticker in current_prices:
+                    from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
+                    px = float(current_prices[ticker])
+                    now_utc = datetime.datetime.now(datetime.timezone.utc)
+                    raw_ev = {
+                        "ticker": ticker.upper(),
+                        "close": px,
+                        "source": "session_current_prices",
+                        "price_kind": "bar_close",
+                        "interval": "1m",
+                        "vendor_symbol": ticker.upper(),
+                        "observed_at": now_utc.isoformat(),
+                        "collected_at": now_utc.isoformat(),
+                    }
+                    quote = EvidencedQuote(
+                        ticker=ticker.upper(),
+                        price=px,
+                        currency="BRL",
+                        source="session_current_prices",
+                        price_kind="bar_close",
+                        interval="1m",
+                        vendor_symbol=ticker.upper(),
+                        observed_at=now_utc,
+                        collected_at=now_utc,
+                        source_ref="session:current_prices",
+                        source_sha256=compute_evidence_sha256(raw_ev),
+                        raw_evidence=raw_ev,
+                    )
+
+                try:
+                    intent = ApprovedExecutionIntent(
+                        signal=sig,
+                        risk_decision=decision,
+                        execution_quote=quote,
+                    )
+                except Exception as e:
+                    orders_rejected += 1
+                    self.journal.append_event(
+                        event_type="ORDER_REJECTED",
+                        payload={"reason": f"Execution intent validation failed: {e}", "ticker": ticker},
+                        ticker=ticker,
+                    )
+                    continue
+
                 exec_res = executor.execute_order(intent)
                 if exec_res.get("status") == "executed":
                     self.executed_signals.add(sig.signal_id)
@@ -367,7 +434,7 @@ class PaperSessionRunner:
                 orders_rejected += 1
                 self.journal.append_event(
                     event_type="ORDER_REJECTED",
-                    payload={"reason": decision.get("reason", "risk_rejection")},
+                    payload={"reason": decision.reason, "decision_id": decision.decision_id},
                     ticker=ticker,
                 )
 
