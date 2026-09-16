@@ -47,3 +47,14 @@ A Meridian opera com separacao estrita de funcoes e responsabilidades:
 
 ## 5. Guardrails e Hooks (`.agents/hooks.json`)
 - `nexus-safety-guard`: Hook `PreToolUse` para interceptacao deterministica de force push, operacoes destrutivas e ativacao de live broker.
+
+---
+
+## 6. Registro Institucional de Agentes (`.agents/registry/`)
+
+- **ARGUS**
+  - Runtime: Cline
+  - Role: Independent Verification Agent
+  - Reports to: NEXUS
+  - Default access: READ_ONLY
+  - Canonical registry: `.agents/registry/argus.md`

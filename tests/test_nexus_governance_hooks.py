@@ -15,15 +15,99 @@ Verifies deterministic guardrails across all declared categories:
 12. Secret File Guard — Write & Replace File (deny on secrets, allow on .env.example)
 13. Shell Access to Secrets Guard (deny on .env/keys, allow on .env.example)
 14. End-to-End Hook Invocations (Working directory resolution & dry-run command inspection)
+15. ARGUS Institutional Registry & Governance Contract (NEXUS-004-R2-FORGE-A)
 """
 import json
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOK_SCRIPT = REPO_ROOT / ".agents" / "scripts" / "pre_tool_guard.py"
 ROOT_BRIDGE_SCRIPT = REPO_ROOT / "scripts" / "pre_tool_guard.py"
+
+# NEXUS-004-R2-FORGE-A — canonical ARGUS governance registry surface.
+REGISTRY_PATH = REPO_ROOT / ".agents" / "registry" / "argus.md"
+GITIGNORE_PATH = REPO_ROOT / ".gitignore"
+
+# Responsibilities required by the registry contract (NEXUS-004-R2-FORGE-A §6).
+ARGUS_RESPONSIBILITIES = (
+    "adversarial_code_review",
+    "execution_path_tracing",
+    "authority_bypass_detection",
+    "financial_mutation_audit",
+    "regression_discovery",
+    "test_quality_review",
+    "provenance_verification",
+    "stale_data_analysis",
+    "nan_inf_analysis",
+    "tamper_analysis",
+    "concurrency_analysis",
+    "replay_analysis",
+    "restart_recovery_analysis",
+    "implementation_report_verification",
+)
+
+# Authority flags that MUST be declared false for the verification role.
+ARGUS_FALSE_AUTHORITY_FLAGS = (
+    "technical_acceptance",
+    "merge_authority",
+    "deployment_authority",
+    "release_authority",
+    "capital_authority",
+    "dataset_approval_authority",
+    "risk_override_authority",
+    "live_broker_authority",
+    "sentinel_bypass_authority",
+)
+
+REGISTRY_KEY_RE = re.compile(r"^([a-z][a-z0-9_]*):[ \t]*(.+?)[ \t]*$")
+
+
+def find_git_executable() -> str | None:
+    """Locate a usable git binary (PATH first, then the known runtime path)."""
+    git_exe = shutil.which("git")
+    if git_exe:
+        return git_exe
+    fallback = Path(
+        r"C:\Users\BIRTUS JANIO\.cache\codex-runtimes\codex-primary-runtime"
+        r"\dependencies\native\git\cmd\git.exe"
+    )
+    if fallback.exists():
+        return str(fallback)
+    return None
+
+
+def load_registry_fields() -> dict[str, list[str]]:
+    """Extract every `key: value` contract pair from the ARGUS registry entry.
+
+    The scan is semantic, not positional: Markdown heading depth, bullet style
+    and surrounding prose are ignored, so assertions target the governance
+    contract instead of paragraph formatting. All occurrences of a key are
+    preserved so a duplicated or conflicting line cannot silently win.
+    """
+    assert REGISTRY_PATH.is_file(), f"ARGUS registry entry is missing: {REGISTRY_PATH}"
+    fields: dict[str, list[str]] = {}
+    for raw_line in REGISTRY_PATH.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("- "):
+            line = line[2:].strip()
+        match = REGISTRY_KEY_RE.match(line)
+        if match:
+            fields.setdefault(match.group(1), []).append(match.group(2))
+    return fields
+
+
+def single_registry_field(fields: dict[str, list[str]], key: str) -> str:
+    """Return the unique value for `key`, failing closed on absence/duplication."""
+    values = fields.get(key)
+    assert values, f"ARGUS registry must declare `{key}:` (found none)"
+    assert len(values) == 1, f"ARGUS registry must declare `{key}:` once, found {values}"
+    return values[0]
 
 
 def run_raw_payload(payload_str: str, cwd: Path | None = None) -> dict:
@@ -556,3 +640,131 @@ class TestNexusGovernanceHooks:
             head_sha = p.stdout.strip()
             assert len(head_sha) == 40, f"Expected 40-char SHA, got: {head_sha}"
             assert all(c in "0123456789abcdefABCDEF" for c in head_sha)
+
+
+class TestArgusGovernanceRegistry:
+    """NEXUS-004-R2-FORGE-A — canonical ARGUS registry + tracking policy.
+
+    Governance documentation is only enforceable if its contract is asserted
+    deterministically: existence, versionability, canonical identity, zero
+    authority escalation, self-review restriction and allowed outcomes.
+    """
+
+    # A. Canonical registry entry exists.
+    def test_registry_entry_exists(self):
+        assert REGISTRY_PATH.is_file(), f"Canonical ARGUS registry is missing: {REGISTRY_PATH}"
+        assert REGISTRY_PATH.read_text(encoding="utf-8").strip(), "ARGUS registry must not be empty"
+
+    # B. The ignore policy re-includes the registry (declared rule layer).
+    def test_ignore_policy_reincludes_registry(self):
+        lines = {line.strip() for line in GITIGNORE_PATH.read_text(encoding="utf-8").splitlines()}
+        assert ".agents/*" in lines, "Baseline `.agents/*` ignore rule expected in .gitignore"
+        assert "!.agents/registry/" in lines, ".gitignore must re-include .agents/registry/"
+        assert "!.agents/registry/argus.md" in lines, ".gitignore must re-include the canonical entry"
+
+    # B (empirical). git itself must agree the canonical entry is not ignored.
+    def test_git_reports_registry_entry_as_trackable(self):
+        git_exe = find_git_executable()
+        if git_exe is None:
+            pytest.skip("git executable unavailable; policy asserted from .gitignore text only")
+        proc = subprocess.run(
+            [git_exe, "check-ignore", "-q", ".agents/registry/argus.md"],
+            cwd=REPO_ROOT, capture_output=True, text=True,
+        )
+        assert proc.returncode == 1, (
+            "`git check-ignore .agents/registry/argus.md` must exit 1 (NOT ignored); "
+            f"got exit {proc.returncode}. stdout={proc.stdout!r}"
+        )
+
+    # The fix must not broadly unignore the .agents tree.
+    def test_ephemeral_agents_paths_stay_ignored(self):
+        git_exe = find_git_executable()
+        if git_exe is None:
+            pytest.skip("git executable unavailable")
+        for probe in (".agents/ephemeral_run_probe", ".agents/ephemeral_run_probe/log.txt"):
+            proc = subprocess.run(
+                [git_exe, "check-ignore", "-q", probe],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            assert proc.returncode == 0, f"{probe} must remain ignored by the .agents/* policy"
+
+    # C. Canonical name.
+    def test_registry_declares_canonical_name(self):
+        assert single_registry_field(load_registry_fields(), "canonical_name") == "ARGUS"
+
+    # D. Runtime.
+    def test_registry_declares_runtime(self):
+        assert single_registry_field(load_registry_fields(), "runtime").lower() == "cline"
+
+    # E. Role.
+    def test_registry_declares_independent_verification_role(self):
+        fields = load_registry_fields()
+        role = single_registry_field(fields, "role").lower()
+        assert "independent" in role and "verification" in role
+        assert single_registry_field(fields, "class") == "verification_agent"
+
+    # F. Reports to NEXUS.
+    def test_registry_reports_to_nexus(self):
+        assert single_registry_field(load_registry_fields(), "reports_to").lower() == "nexus"
+
+    # G. Default access is READ_ONLY.
+    def test_registry_default_access_is_read_only(self):
+        assert single_registry_field(load_registry_fields(), "default_access").upper() == "READ_ONLY"
+
+    # H-O. Authority flags must all be false.
+    @pytest.mark.parametrize("flag", ARGUS_FALSE_AUTHORITY_FLAGS)
+    def test_registry_authority_flag_is_false(self, flag):
+        value = single_registry_field(load_registry_fields(), flag)
+        assert value.lower() == "false", f"ARGUS `{flag}:` must be false, found {value!r}"
+
+    # §6 permission matrix: read-only inspection granted, writes NEXUS-gated.
+    @pytest.mark.parametrize("permission", (
+        "inspect_repository",
+        "inspect_git_history",
+        "run_non_destructive_tests",
+        "run_static_analysis",
+    ))
+    def test_registry_read_only_permissions_are_granted(self, permission):
+        assert single_registry_field(load_registry_fields(), permission).lower() == "true"
+
+    @pytest.mark.parametrize("permission", ("modify_code", "modify_tests"))
+    def test_registry_write_permissions_require_nexus(self, permission):
+        value = single_registry_field(load_registry_fields(), permission)
+        assert value == "explicit_nexus_authorization_only", f"`{permission}:` found {value!r}"
+
+    # P. Self-review restriction.
+    def test_registry_contains_self_review_restriction(self):
+        fields = load_registry_fields()
+        assert single_registry_field(fields, "author_is_sole_independent_reviewer").lower() == "false"
+        assert single_registry_field(fields, "self_review_authorized").lower() == "false"
+        normalized = " ".join(REGISTRY_PATH.read_text(encoding="utf-8").split()).lower()
+        assert "author != sole independent reviewer" in normalized
+
+    # Q. Allowed review outcomes.
+    def test_registry_contains_allowed_review_outcomes(self):
+        text = REGISTRY_PATH.read_text(encoding="utf-8")
+        for outcome in ("READY_FOR_NEXUS_REVIEW", "CORRECTION_REQUIRED", "UNVERIFIED"):
+            assert outcome in text, f"Allowed review outcome missing from registry: {outcome}"
+
+    def test_registry_reserves_final_acceptance_to_nexus(self):
+        fields = load_registry_fields()
+        assert single_registry_field(fields, "final_technical_acceptance_authority").lower() == "nexus"
+        text = REGISTRY_PATH.read_text(encoding="utf-8")
+        for reserved in ("NEXUS_ACCEPTED", "RELEASE_APPROVED", "LIVE_APPROVED"):
+            assert reserved in text, f"Registry must list the reserved verdict: {reserved}"
+
+    # §8 role identity must survive a model swap.
+    def test_registry_identity_is_independent_of_llm(self):
+        value = single_registry_field(load_registry_fields(), "institutional_identity_independent_of_llm")
+        assert value.lower() == "true"
+
+    # §6 required responsibility coverage.
+    def test_registry_lists_required_responsibilities(self):
+        text = REGISTRY_PATH.read_text(encoding="utf-8")
+        missing = [item for item in ARGUS_RESPONSIBILITIES if item not in text]
+        assert missing == [], f"Registry is missing required responsibilities: {missing}"
+
+    # Contract keys must be unambiguous (no duplicated/conflicting declarations).
+    def test_registry_contract_keys_are_unique(self):
+        duplicated = {key: vals for key, vals in load_registry_fields().items() if len(vals) > 1}
+        assert duplicated == {}, f"Ambiguous duplicated registry contract keys: {duplicated}"
