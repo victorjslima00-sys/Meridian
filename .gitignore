@@ -29,6 +29,7 @@ logs/
 !.agents/AGENTS.md
 # Registro institucional de agentes: apenas o registro canonico e versionado.
 !.agents/registry/
+.agents/registry/*
 !.agents/registry/argus.md
 frontend/.agents/
 .todo.json

@@ -19,6 +19,7 @@ Verifies deterministic guardrails across all declared categories:
 """
 import json
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
@@ -69,17 +70,16 @@ REGISTRY_KEY_RE = re.compile(r"^([a-z][a-z0-9_]*):[ \t]*(.+?)[ \t]*$")
 
 
 def find_git_executable() -> str | None:
-    """Locate a usable git binary (PATH first, then the known runtime path)."""
-    git_exe = shutil.which("git")
-    if git_exe:
-        return git_exe
-    fallback = Path(
-        r"C:\Users\BIRTUS JANIO\.cache\codex-runtimes\codex-primary-runtime"
-        r"\dependencies\native\git\cmd\git.exe"
-    )
-    if fallback.exists():
-        return str(fallback)
-    return None
+    """Locate a usable git binary from PATH or a generic environment override.
+
+    Deliberately free of machine/user-specific absolute paths: when git cannot
+    be discovered the caller must skip the empirical layer instead of guessing
+    at a hardcoded location that only exists on one workstation.
+    """
+    override = os.environ.get("GIT_EXECUTABLE")
+    if override and Path(override).is_file():
+        return override
+    return shutil.which("git")
 
 
 def load_registry_fields() -> dict[str, list[str]]:
@@ -660,6 +660,7 @@ class TestArgusGovernanceRegistry:
         lines = {line.strip() for line in GITIGNORE_PATH.read_text(encoding="utf-8").splitlines()}
         assert ".agents/*" in lines, "Baseline `.agents/*` ignore rule expected in .gitignore"
         assert "!.agents/registry/" in lines, ".gitignore must re-include .agents/registry/"
+        assert ".agents/registry/*" in lines, ".gitignore must re-ignore registry siblings"
         assert "!.agents/registry/argus.md" in lines, ".gitignore must re-include the canonical entry"
 
     # B (empirical). git itself must agree the canonical entry is not ignored.
@@ -676,12 +677,38 @@ class TestArgusGovernanceRegistry:
             f"got exit {proc.returncode}. stdout={proc.stdout!r}"
         )
 
+    # P2 (NEXUS-004-R2-FORGE-A-R1). Registry trackability must stay narrow: an
+    # arbitrary sibling is ignored, so removing `.agents/registry/*` (which
+    # would make the whole directory trackable again) fails this test.
+    def test_registry_sibling_files_stay_ignored(self):
+        git_exe = find_git_executable()
+        if git_exe is None:
+            pytest.skip("git executable unavailable")
+        siblings = (
+            ".agents/registry/argus_future_probe.txt",
+            ".agents/registry/notes.md",
+            ".agents/registry/argus.md.bak",
+        )
+        for probe in siblings:
+            proc = subprocess.run(
+                [git_exe, "check-ignore", "-q", probe],
+                cwd=REPO_ROOT, capture_output=True, text=True,
+            )
+            assert proc.returncode == 0, (
+                f"{probe} must stay ignored by the narrow `.agents/registry/*` policy; "
+                f"got exit {proc.returncode}"
+            )
+
     # The fix must not broadly unignore the .agents tree.
     def test_ephemeral_agents_paths_stay_ignored(self):
         git_exe = find_git_executable()
         if git_exe is None:
             pytest.skip("git executable unavailable")
-        for probe in (".agents/ephemeral_run_probe", ".agents/ephemeral_run_probe/log.txt"):
+        for probe in (
+            ".agents/ephemeral_run_probe",
+            ".agents/ephemeral_run_probe/log.txt",
+            ".agents/ephemeral_argus_probe",
+        ):
             proc = subprocess.run(
                 [git_exe, "check-ignore", "-q", probe],
                 cwd=REPO_ROOT, capture_output=True, text=True,
