@@ -1,40 +1,46 @@
-#!/usr/bin/env python3
-"""Read-Only Paper Session Preflight Check (NEXUS-003).
+"""Meridian Read-Only Paper Session Preflight CLI (NEXUS-003-R1).
 
-Performs exhaustive preflight verification of all paper trading prerequisites,
-broker isolation invariants, database constraints, circuit breaker readiness,
-storage writability, and dataset approvals with ZERO trade or portfolio mutations.
+Executes comprehensive, zero-mutation verification of runtime environment,
+broker isolation, SQLite schema and unique invariants, circuit breaker configuration
+and entry gate, storage writability, valuation subsystem, and per-ticker dataset
+digest and approval verification.
+
+Guarantees ZERO trade insertions and ZERO portfolio balance mutations.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import json
+import logging
 import os
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
-# Ensure project root is in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from backend.app.agents.market_analyst import MarketAnalyst  # noqa: E402
-from backend.app.data.database import DB_PATH, init_db  # noqa: E402
-from backend.app.markets import resolve_market  # noqa: E402
 from backend.app.runtime_config import RuntimeConfig  # noqa: E402
+from backend.app.data.database import DB_PATH  # noqa: E402
+from backend.app.markets import get_broker, PaperBroker, resolve_market  # noqa: E402
 from trading_bot.core.config import AppConfig  # noqa: E402
 from trading_bot.data.approval import (  # noqa: E402
+    PROJECT_ROOT,
     REGISTRY,
-    Registry,
     dataset_digest,
     normalize_ohlcv_to_signal_df,
     require_dataset_approval_by_digest,
 )
 from trading_bot.risk.circuit_breaker import CircuitBreaker  # noqa: E402
+
+logger = logging.getLogger("paper_session_preflight")
 
 
 @dataclass
@@ -42,95 +48,124 @@ class TickerPreflightStatus:
     ticker: str
     market_resolved: bool
     data_digest: Optional[str]
-    approval_status: Literal["PASS", "BLOCKED", "UNVERIFIED"]
+    approval_status: str  # PASS / BLOCKED / UNVERIFIED
     approval_reason: str
     analyst_result: Optional[str]
-    preflight_verdict: Literal["PASS", "BLOCKED", "UNVERIFIED"]
-    details: str = ""
+    preflight_verdict: str  # PASS / BLOCKED / UNVERIFIED
+    details: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class PreflightReport:
     started_at_utc: str
     ended_at_utc: str
-    overall_status: Literal["PASS", "BLOCKED", "UNVERIFIED"]
+    overall_status: str  # PASS / BLOCKED / UNVERIFIED
     paper_mode_check: bool
     broker_isolation_check: bool
     db_schema_check: bool
     signal_id_index_check: bool
     active_position_index_check: bool
-    circuit_breaker_check: bool
+    circuit_breaker_config_check: bool
+    circuit_breaker_can_trade_check: bool
     storage_writable_check: bool
     valuation_subsystem_check: bool
     trade_mutations_count: int
     portfolio_mutations_count: int
+    trades_fingerprint_match: bool
+    portfolio_fingerprint_match: bool
     ticker_results: List[TickerPreflightStatus] = field(default_factory=list)
     system_messages: List[str] = field(default_factory=list)
     real_broker_calls_verification: str = "UNVERIFIED"
     broker_activation: str = "NOT DETECTED"
 
 
-def check_paper_mode(settings_path: str, universe_path: str) -> tuple[bool, str]:
+def _compute_db_table_fingerprint(conn: sqlite3.Connection, table_name: str) -> str:
+    """Compute deterministic SHA-256 fingerprint of all rows in an SQLite table."""
     try:
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT * FROM {table_name} ORDER BY rowid")
+        rows = cursor.fetchall()
+        row_bytes = json.dumps(rows, default=str, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(row_bytes).hexdigest()
+    except Exception:
+        return ""
+
+
+def check_paper_mode(settings_path: str, universe_path: str) -> tuple[bool, str]:
+    """Structurally verify supported broker path is PaperBroker and runtime is paper mode."""
+    try:
+        broker = get_broker("paper")
+        if not isinstance(broker, PaperBroker):
+            return False, f"get_broker('paper') returned non-PaperBroker: {type(broker)}"
+
+        try:
+            get_broker("live")
+            return False, "Unsupported broker 'live' was unexpectedly accepted by get_broker"
+        except ValueError:
+            pass  # Expected: only 'paper' is supported
+
         cfg = RuntimeConfig.load(settings_path=settings_path, universe_path=universe_path)
         live_flag = os.environ.get("LIVE_TRADING_ENABLED", "0").strip().lower()
         if live_flag in ("1", "true", "yes"):
             return False, "LIVE_TRADING_ENABLED environment flag is active"
-        return True, f"Paper mode active (execution_mode: {cfg.execution_mode})"
+        return True, f"Paper mode verified: PaperBroker bound, execution_mode={cfg.execution_mode}"
     except Exception as e:
-        return False, f"Failed to load runtime config: {e}"
+        return False, f"Failed to verify paper mode: {e}"
 
 
 def check_broker_isolation(settings_path: str, universe_path: str) -> tuple[bool, str]:
+    """Verify no live broker credentials, live configurations, or unauthorized integrations."""
     try:
         app_cfg = AppConfig.load(settings_path=settings_path, universe_path=universe_path)
         broker_cfg = app_cfg.get("broker", default={}) or {}
-        # Verify no live execution credentials or endpoints
         if broker_cfg.get("live_execution") is True:
             return False, "Broker configured with live_execution=True"
-        return True, "Broker isolation verified (NO live broker authorized or active)"
+
+        live_cred_vars = ["XP_ACCOUNT", "XP_TOKEN", "CLEAR_ACCOUNT", "BTG_API_KEY", "MT5_LOGIN"]
+        for var in live_cred_vars:
+            if os.environ.get(var):
+                return False, f"Live broker environment credential detected: {var}"
+
+        return True, "Broker isolation verified (no live broker credentials or active config)"
     except Exception as e:
         return False, f"Failed to inspect broker configuration: {e}"
 
 
 def check_database_invariants(db_path: Path) -> tuple[bool, bool, bool, str]:
-    """Verify db schema, signal_id unique index, and active position index."""
+    """Inspect SQLite schema, signal_id unique index, and active position index without mutating.
+
+    Returns (schema_ok, signal_idx_ok, active_idx_ok, message).
+    """
     try:
-        if db_path == Path(DB_PATH).resolve():
-            init_db()
+        if not db_path.is_file():
+            return False, False, False, f"BLOCKED: DATABASE_INITIALIZATION_REQUIRED (file not found: {db_path})"
 
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
 
-        # Check trades table exists
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'")
         if not cursor.fetchone():
             conn.close()
-            return False, False, False, "Table 'trades' does not exist in SQLite"
+            return False, False, False, "BLOCKED: DATABASE_INITIALIZATION_REQUIRED (table 'trades' missing)"
 
-        # Check portfolio table exists
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='portfolio'")
         if not cursor.fetchone():
             conn.close()
-            return False, False, False, "Table 'portfolio' does not exist in SQLite"
+            return False, False, False, "BLOCKED: DATABASE_INITIALIZATION_REQUIRED (table 'portfolio' missing)"
 
-        # Check index list for trades
         cursor.execute("PRAGMA index_list('trades')")
         indexes = cursor.fetchall()
-        # index tuple: (seq, name, unique, origin, partial)
         index_names = {row[1]: row[2] for row in indexes}
 
-        # Check signal_id unique index
         signal_id_ok = False
         if "idx_trades_strategy_signal_id" in index_names and index_names["idx_trades_strategy_signal_id"] == 1:
             signal_id_ok = True
 
-        # Check one active per ticker unique index
         active_pos_ok = False
         if "idx_trades_one_active_per_ticker" in index_names and index_names["idx_trades_one_active_per_ticker"] == 1:
             active_pos_ok = True
 
-        # Check for existing duplicate violations
+        # Invariant checks: verify no duplicate signal_ids exist
         cursor.execute(
             "SELECT signal_id, COUNT(*) FROM trades WHERE signal_id IS NOT NULL "
             "GROUP BY signal_id HAVING COUNT(*) > 1"
@@ -139,32 +174,55 @@ def check_database_invariants(db_path: Path) -> tuple[bool, bool, bool, str]:
         if dups_signal:
             signal_id_ok = False
 
+        # Invariant checks: verify NO duplicate active positions exist per ticker
         cursor.execute(
             "SELECT ticker, COUNT(*) FROM trades WHERE status = 'active' "
             "GROUP BY ticker HAVING COUNT(*) > 1"
         )
         dups_active = cursor.fetchall()
         if dups_active:
-            active_pos_ok = True
+            active_pos_ok = False
 
         conn.close()
-        return True, signal_id_ok, active_pos_ok, "Database invariants inspected"
+        msg_parts = []
+        if not signal_id_ok:
+            msg_parts.append("signal_id index or uniqueness invariant failed")
+        if not active_pos_ok:
+            msg_parts.append("active position index or uniqueness invariant failed")
+
+        msg = "Database invariants inspected: " + (", ".join(msg_parts) if msg_parts else "all intact")
+        return True, signal_id_ok, active_pos_ok, msg
     except Exception as e:
-        return False, False, False, f"Database check failed: {e}"
+        return False, False, False, f"Database inspection failed: {e}"
 
 
-def check_circuit_breaker() -> tuple[bool, str]:
+def check_circuit_breaker() -> tuple[bool, bool, str]:
+    """Inspect CircuitBreaker configuration load and entry gate (can_trade).
+
+    Returns (config_ok, can_trade_ok, message).
+    """
     try:
         cb = CircuitBreaker.from_config()
-        return True, (
-            f"CircuitBreaker initialized: daily_limit={cb.daily_loss_limit:.1%}, "
+        config_ok = True
+        cfg_msg = (
+            f"CircuitBreaker configured: daily_limit={cb.daily_loss_limit:.1%}, "
             f"inception_dd={cb.drawdown_inception:.1%}, rolling_30d_dd={cb.drawdown_rolling_30d:.1%}"
         )
     except Exception as e:
-        return False, f"CircuitBreaker failed: {e}"
+        return False, False, f"CircuitBreaker config load failed: {e}"
+
+    try:
+        can_trade_ok = bool(cb.can_trade())
+        trade_msg = "entry gate open" if can_trade_ok else "entry gate closed (fail-closed: missing equity refs)"
+    except Exception as e:
+        can_trade_ok = False
+        trade_msg = f"can_trade check threw: {e}"
+
+    return config_ok, can_trade_ok, f"{cfg_msg}; {trade_msg}"
 
 
 def check_storage_writable(storage_dir: Path) -> tuple[bool, str]:
+    """Verify designated session storage path is writable."""
     try:
         storage_dir.mkdir(parents=True, exist_ok=True)
         probe_file = storage_dir / f".probe_{os.getpid()}_{int(datetime.now().timestamp())}.tmp"
@@ -176,26 +234,15 @@ def check_storage_writable(storage_dir: Path) -> tuple[bool, str]:
 
 
 def check_valuation_subsystem() -> tuple[bool, str]:
+    """Verify valuation snapshot store and DB table integrity."""
     try:
         import trading_bot.data.valuation_snapshot as vs
-        assert hasattr(vs, "EvidencedQuote")
         assert hasattr(vs, "ValuationSnapshot")
-        assert hasattr(vs, "is_snapshot_fresh")
-        return True, "Valuation snapshot and integrity subsystem imported and verified"
+        assert hasattr(vs, "get_latest_valuation_snapshot")
+        assert hasattr(vs, "save_valuation_snapshot")
+        return True, "Valuation subsystem verified (valuation_snapshot contracts ready)"
     except Exception as e:
         return False, f"Valuation subsystem check failed: {e}"
-
-
-async def _dry_run_analyst(ticker: str) -> tuple[bool, str]:
-    """Execute MarketAnalyst.analyze() dry-run with ZERO order execution."""
-    try:
-        analyst = MarketAnalyst(ticker)
-        decision = await analyst.analyze()
-        sig = decision.get("signal", "UNKNOWN")
-        reason = decision.get("reason", "")
-        return True, f"{sig} ({reason[:60]}...)"
-    except Exception as e:
-        return False, f"Analyst exception: {e}"
 
 
 def run_paper_preflight(
@@ -204,139 +251,155 @@ def run_paper_preflight(
     registry_path: Optional[Path] = None,
     db_path: Optional[Path] = None,
     storage_dir: Optional[Path] = None,
+    project_root: Optional[Path] = None,
     tickers: Optional[List[str]] = None,
     max_tickers: Optional[int] = None,
 ) -> PreflightReport:
-    """Perform read-only preflight check and return PreflightReport.
-
-    Strictly guarantees zero database trade insertions or portfolio balance mutations.
-    """
+    """Run full read-only preflight suite without trade or portfolio mutations."""
     start_utc = datetime.now(timezone.utc).isoformat()
-    resolved_db = Path(db_path or DB_PATH).resolve()
-    resolved_registry = Path(registry_path or REGISTRY).resolve()
-    resolved_storage = Path(storage_dir or (PROJECT_ROOT / "data" / "paper_sessions")).resolve()
+    system_messages = []
 
-    # Capture state before preflight
-    conn_pre = sqlite3.connect(str(resolved_db))
-    cur_pre = conn_pre.cursor()
-    cur_pre.execute("SELECT COUNT(*) FROM trades")
-    trades_count_before = cur_pre.fetchone()[0]
-    cur_pre.execute("SELECT * FROM portfolio ORDER BY id DESC LIMIT 1")
-    portfolio_before = cur_pre.fetchone()
-    conn_pre.close()
+    resolved_db = (db_path or Path(DB_PATH)).resolve()
+    resolved_storage = (storage_dir or Path(PROJECT_ROOT / "data" / "paper_sessions")).resolve()
+    resolved_registry = (registry_path or REGISTRY).resolve()
+    resolved_root = (project_root or PROJECT_ROOT).resolve()
 
-    # System-level checks
-    paper_mode_ok, paper_mode_msg = check_paper_mode(settings_path, universe_path)
-    broker_iso_ok, broker_iso_msg = check_broker_isolation(settings_path, universe_path)
+    # Capture initial DB row fingerprints and counts
+    trades_count_before = 0
+    trades_fp_before = ""
+    portfolio_fp_before = ""
+    if resolved_db.is_file():
+        conn_pre = sqlite3.connect(str(resolved_db))
+        try:
+            cur_pre = conn_pre.cursor()
+            cur_pre.execute("SELECT COUNT(*) FROM trades")
+            trades_count_before = cur_pre.fetchone()[0]
+            trades_fp_before = _compute_db_table_fingerprint(conn_pre, "trades")
+            portfolio_fp_before = _compute_db_table_fingerprint(conn_pre, "portfolio")
+        except Exception:
+            pass
+        finally:
+            conn_pre.close()
+
+    # 1. System checks
+    paper_mode_ok, paper_msg = check_paper_mode(settings_path, universe_path)
+    system_messages.append(paper_msg)
+
+    broker_iso_ok, broker_msg = check_broker_isolation(settings_path, universe_path)
+    system_messages.append(broker_msg)
+
     db_ok, signal_idx_ok, active_idx_ok, db_msg = check_database_invariants(resolved_db)
-    cb_ok, cb_msg = check_circuit_breaker()
+    system_messages.append(db_msg)
+
+    cb_cfg_ok, cb_can_trade_ok, cb_msg = check_circuit_breaker()
+    system_messages.append(cb_msg)
+
     storage_ok, storage_msg = check_storage_writable(resolved_storage)
+    system_messages.append(storage_msg)
+
     valuation_ok, valuation_msg = check_valuation_subsystem()
+    system_messages.append(valuation_msg)
 
-    system_messages = [
-        paper_mode_msg,
-        broker_iso_msg,
-        db_msg,
-        cb_msg,
-        storage_msg,
-        valuation_msg,
-    ]
-
-    # Resolve tickers
-    if tickers is None:
+    # 2. Universe tickers to check
+    if tickers is not None:
+        eval_tickers = tickers
+    else:
         try:
             app_cfg = AppConfig.load(settings_path=settings_path, universe_path=universe_path)
-            tickers = app_cfg.get("_universe", "tickers", default=[]) or []
+            eval_tickers = app_cfg.get("watchlist", default=[]) or []
+            if not eval_tickers:
+                eval_tickers = ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]
         except Exception:
-            tickers = []
+            eval_tickers = ["PETR4.SA", "VALE3.SA", "ITUB4.SA"]
 
-    if max_tickers is not None and max_tickers > 0:
-        tickers = tickers[:max_tickers]
+    if max_tickers and max_tickers > 0:
+        eval_tickers = eval_tickers[:max_tickers]
 
     ticker_results: List[TickerPreflightStatus] = []
 
-    # Evaluate each ticker in read-only mode
-    for t in tickers:
+    # 3. Per-ticker evaluation
+    for t in eval_tickers:
+        details: Dict[str, Any] = {}
         market_resolved = False
         digest: Optional[str] = None
-        approval_verdict: Literal["PASS", "BLOCKED", "UNVERIFIED"] = "UNVERIFIED"
-        approval_reason: str = ""
+        approval_verdict = "UNVERIFIED"
+        approval_reason = ""
         analyst_result: Optional[str] = None
-        ticker_verdict: Literal["PASS", "BLOCKED", "UNVERIFIED"] = "BLOCKED"
-        details: str = ""
+        ticker_verdict = "BLOCKED"
 
+        raw_df = None
         try:
             market = resolve_market(t)
             market_resolved = True
-        except Exception as exc:
-            approval_reason = f"Market resolve failed: {exc}"
-            ticker_results.append(
-                TickerPreflightStatus(
-                    ticker=t,
-                    market_resolved=False,
-                    data_digest=None,
-                    approval_status="BLOCKED",
-                    approval_reason=approval_reason,
-                    analyst_result=None,
-                    preflight_verdict="BLOCKED",
-                    details=f"Unresolvable market: {exc}",
-                )
-            )
-            continue
+            raw_df = market.fetch_ohlcv(t, period="2y", interval="1d")
+        except Exception as e:
+            approval_reason = f"Market resolve failed: {e}"
+            ticker_verdict = "BLOCKED"
 
-        # Try to fetch and calculate digest
-        df = None
-        try:
-            df = market.fetch_ohlcv(t, period="2y", interval="1d")
-        except Exception as exc:
-            details = f"fetch_ohlcv error: {exc}"
-
-        if df is None or len(df) < 201:
-            approval_verdict = "UNVERIFIED"
-            approval_reason = f"Insufficient OHLCV data ({len(df) if df is not None else 0} bars)"
-            ticker_verdict = "UNVERIFIED"
-        else:
-            try:
-                eng_df = normalize_ohlcv_to_signal_df(df)
-                digest = dataset_digest(eng_df, t)
-
-                # Check approval against registry
+        if market_resolved:
+            if raw_df is None or len(raw_df) < 201:
+                bars_cnt = len(raw_df) if raw_df is not None else 0
+                approval_reason = f"Insufficient OHLCV data ({bars_cnt} bars)"
+                approval_verdict = "UNVERIFIED"
+                ticker_verdict = "UNVERIFIED"
+            else:
                 try:
-                    # Monkeypatch or check registry directly
-                    reg_content = resolved_registry.read_bytes()
-                    reg_obj = Registry.model_validate_json(reg_content)
-                    matches = [a for a in reg_obj.approvals if a.dataset_sha256 == digest]
-                    if len(matches) != 1:
-                        approval_verdict = "BLOCKED"
-                        approval_reason = "No approved dataset matching current digest in registry"
-                        ticker_verdict = "BLOCKED"
-                    else:
-                        # Re-validate approval by digest
-                        require_dataset_approval_by_digest(digest)
+                    norm_df = normalize_ohlcv_to_signal_df(raw_df)
+                    digest = dataset_digest(norm_df, t)
+                    details["digest"] = digest
+                    details["bars_count"] = len(norm_df)
+
+                    # Check dataset approval against target registry
+                    try:
+                        approval_obj = require_dataset_approval_by_digest(
+                            dataset_sha256=digest,
+                            registry_path=resolved_registry,
+                            project_root=resolved_root,
+                        )
                         approval_verdict = "PASS"
-                        approval_reason = f"Approved dataset verified: {digest[:12]}..."
-                        ticker_verdict = "PASS"
-                except Exception as exc:
+                        approval_reason = f"Approved (reviewer={approval_obj.reviewed_by})"
+                    except ValueError as ve:
+                        approval_verdict = "BLOCKED"
+                        approval_reason = f"Registry check: {ve}"
+                    except Exception as exc:
+                        approval_verdict = "BLOCKED"
+                        approval_reason = f"Registry check error: {exc}"
+
+                    # Bind MarketAnalyst to exact frame: call analyze_ohlcv without refetching
+                    analyst = MarketAnalyst(t)
+                    try:
+                        analysis = asyncio.run(
+                            analyst.analyze_ohlcv(
+                                df=raw_df,
+                                registry_path=resolved_registry,
+                                project_root=resolved_root,
+                            )
+                        )
+                        analyst_result = analysis.get("signal", "UNKNOWN")
+                        details["analyst_signal"] = analyst_result
+                        details["analyst_reason"] = analysis.get("reason", "")
+                        details["analyst_strategy"] = analysis.get("strategy_id", "")
+                        details["analyst_digest"] = analysis.get("dataset_sha256")
+
+                        if approval_verdict == "PASS":
+                            if analyst_result in ("BUY", "HOLD"):
+                                ticker_verdict = "PASS"
+                            else:
+                                ticker_verdict = "BLOCKED"
+                                approval_reason += f" (Analyst returned {analyst_result})"
+                        else:
+                            ticker_verdict = "BLOCKED"
+
+                    except Exception as a_exc:
+                        analyst_result = "ERROR"
+                        details["analyst_error"] = str(a_exc)
+                        ticker_verdict = "BLOCKED"
+                        approval_reason += f" (Analyst failed: {a_exc})"
+
+                except Exception as e:
                     approval_verdict = "BLOCKED"
-                    approval_reason = f"Approval check failed: {exc}"
+                    approval_reason = f"Data normalization/digest error: {e}"
                     ticker_verdict = "BLOCKED"
-
-            except Exception as exc:
-                approval_verdict = "BLOCKED"
-                approval_reason = f"Data normalization/digest error: {exc}"
-                ticker_verdict = "BLOCKED"
-
-        # Dry run MarketAnalyst
-        try:
-            analyst_ok, analyst_summary = asyncio.run(_dry_run_analyst(t))
-            analyst_result = analyst_summary
-        except Exception as exc:
-            analyst_result = f"MarketAnalyst run error: {exc}"
-
-        # If any mandatory check failed, ticker cannot be PASS
-        if not (market_resolved and approval_verdict == "PASS"):
-            if ticker_verdict == "PASS":
-                ticker_verdict = "BLOCKED"
 
         ticker_results.append(
             TickerPreflightStatus(
@@ -352,16 +415,30 @@ def run_paper_preflight(
         )
 
     # Capture state after preflight
-    conn_post = sqlite3.connect(str(resolved_db))
-    cur_post = conn_post.cursor()
-    cur_post.execute("SELECT COUNT(*) FROM trades")
-    trades_count_after = cur_post.fetchone()[0]
-    cur_post.execute("SELECT * FROM portfolio ORDER BY id DESC LIMIT 1")
-    portfolio_after = cur_post.fetchone()
-    conn_post.close()
+    trades_count_after = trades_count_before
+    trades_fp_after = trades_fp_before
+    portfolio_fp_after = portfolio_fp_before
 
-    trade_mutations = trades_count_after - trades_count_before
-    portfolio_mutations = 1 if portfolio_before != portfolio_after else 0
+    if resolved_db.is_file():
+        conn_post = sqlite3.connect(str(resolved_db))
+        try:
+            cur_post = conn_post.cursor()
+            cur_post.execute("SELECT COUNT(*) FROM trades")
+            trades_count_after = cur_post.fetchone()[0]
+            trades_fp_after = _compute_db_table_fingerprint(conn_post, "trades")
+            portfolio_fp_after = _compute_db_table_fingerprint(conn_post, "portfolio")
+        except Exception:
+            pass
+        finally:
+            conn_post.close()
+
+    trade_mutations = abs(trades_count_after - trades_count_before)
+    trades_fp_match = (trades_fp_before == trades_fp_after)
+    portfolio_fp_match = (portfolio_fp_before == portfolio_fp_after)
+
+    portfolio_mutations = 0 if portfolio_fp_match else 1
+    if not trades_fp_match and trade_mutations == 0:
+        trade_mutations = 1
 
     system_all_ok = (
         paper_mode_ok
@@ -369,11 +446,14 @@ def run_paper_preflight(
         and db_ok
         and signal_idx_ok
         and active_idx_ok
-        and cb_ok
+        and cb_cfg_ok
+        and cb_can_trade_ok
         and storage_ok
         and valuation_ok
         and (trade_mutations == 0)
         and (portfolio_mutations == 0)
+        and trades_fp_match
+        and portfolio_fp_match
     )
 
     tickers_all_pass = (
@@ -389,6 +469,7 @@ def run_paper_preflight(
         overall = "UNVERIFIED"
 
     end_utc = datetime.now(timezone.utc).isoformat()
+    broker_act = "NOT DETECTED" if broker_iso_ok else "UNVERIFIED (isolation failed)"
 
     return PreflightReport(
         started_at_utc=start_utc,
@@ -399,38 +480,51 @@ def run_paper_preflight(
         db_schema_check=db_ok,
         signal_id_index_check=signal_idx_ok,
         active_position_index_check=active_idx_ok,
-        circuit_breaker_check=cb_ok,
+        circuit_breaker_config_check=cb_cfg_ok,
+        circuit_breaker_can_trade_check=cb_can_trade_ok,
         storage_writable_check=storage_ok,
         valuation_subsystem_check=valuation_ok,
         trade_mutations_count=trade_mutations,
         portfolio_mutations_count=portfolio_mutations,
+        trades_fingerprint_match=trades_fp_match,
+        portfolio_fingerprint_match=portfolio_fp_match,
         ticker_results=ticker_results,
         system_messages=system_messages,
         real_broker_calls_verification="UNVERIFIED",
-        broker_activation="NOT DETECTED",
+        broker_activation=broker_act,
     )
 
 
 def format_report(report: PreflightReport) -> str:
     lines = []
     lines.append("=" * 80)
-    lines.append("MERIDIAN PAPER SESSION PREFLIGHT REPORT (NEXUS-003)")
+    lines.append("MERIDIAN PAPER SESSION PREFLIGHT REPORT (NEXUS-003-R1)")
     lines.append("=" * 80)
     lines.append(f"Started at (UTC):  {report.started_at_utc}")
     lines.append(f"Ended at (UTC):    {report.ended_at_utc}")
     lines.append(f"Overall Status:    {report.overall_status}")
-    lines.append(f"Trade Mutations:   {report.trade_mutations_count} (ZERO MUTATION VERIFIED)")
-    lines.append(f"Portfolio Mutated: {report.portfolio_mutations_count} (ZERO MUTATION VERIFIED)")
+
+    tm_status = " (ZERO MUTATION VERIFIED)" if (
+        report.trade_mutations_count == 0 and report.trades_fingerprint_match
+    ) else " (MUTATION DETECTED)"
+    pm_status = " (ZERO MUTATION VERIFIED)" if (
+        report.portfolio_mutations_count == 0 and report.portfolio_fingerprint_match
+    ) else " (MUTATION DETECTED)"
+
+    lines.append(f"Trade Mutations:   {report.trade_mutations_count}{tm_status}")
+    lines.append(f"Portfolio Mutated: {report.portfolio_mutations_count}{pm_status}")
     lines.append(f"Broker Calls:      {report.real_broker_calls_verification}")
     lines.append(f"Broker Activation: {report.broker_activation}")
     lines.append("-" * 80)
     lines.append("SYSTEM CHECKS:")
-    lines.append(f"  [ {'PASS' if report.paper_mode_check else 'FAIL'} ] Paper Mode Active")
+    lines.append(f"  [ {'PASS' if report.paper_mode_check else 'FAIL'} ] Paper Mode Active (PaperBroker bound)")
     lines.append(f"  [ {'PASS' if report.broker_isolation_check else 'FAIL'} ] Broker Isolation")
-    lines.append(f"  [ {'PASS' if report.db_schema_check else 'FAIL'} ] Database Schema")
-    lines.append(f"  [ {'PASS' if report.signal_id_index_check else 'FAIL'} ] Signal ID Unique Index")
-    lines.append(f"  [ {'PASS' if report.active_position_index_check else 'FAIL'} ] Active Position Unique Index")
-    lines.append(f"  [ {'PASS' if report.circuit_breaker_check else 'FAIL'} ] Circuit Breaker Read")
+    lines.append(f"  [ {'PASS' if report.db_schema_check else 'FAIL'} ] Database Schema Inspection (read-only)")
+    lines.append(f"  [ {'PASS' if report.signal_id_index_check else 'FAIL'} ] Signal ID Unique Index & Invariant")
+    lines.append(f"  [ {'PASS' if report.active_position_index_check else 'FAIL'} ] Active Position Index & Invariant")
+    lines.append(f"  [ {'PASS' if report.circuit_breaker_config_check else 'FAIL'} ] Circuit Breaker Config Load")
+    cb_gate_str = "PASS" if report.circuit_breaker_can_trade_check else "BLOCKED"
+    lines.append(f"  [ {cb_gate_str} ] Circuit Breaker Entry Gate (can_trade)")
     lines.append(f"  [ {'PASS' if report.storage_writable_check else 'FAIL'} ] Storage Path Writable")
     lines.append(f"  [ {'PASS' if report.valuation_subsystem_check else 'FAIL'} ] Valuation Integrity Subsystem")
     lines.append("-" * 80)
@@ -478,10 +572,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     print(format_report(report))
-
-    if report.overall_status == "PASS":
-        return 0
-    return 1
+    return 0 if report.overall_status == "PASS" else 1
 
 
 if __name__ == "__main__":

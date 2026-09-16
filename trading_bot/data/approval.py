@@ -48,7 +48,11 @@ def dataset_digest(df, ticker):
     return hashlib.sha256(payload).hexdigest()
 
 
-def require_dataset_approval_by_digest(dataset_sha256: str) -> Approval:
+def require_dataset_approval_by_digest(
+    dataset_sha256: str,
+    registry_path: Path | str | None = None,
+    project_root: Path | str | None = None,
+) -> Approval:
     """Exact 64-hex digest, exact one registry match, revalidated evidence hashes. Fail closed."""
     if (
         not isinstance(dataset_sha256, str)
@@ -57,7 +61,9 @@ def require_dataset_approval_by_digest(dataset_sha256: str) -> Approval:
     ):
         raise ValueError("data_approval_required")
     try:
-        registry = Registry.model_validate_json(REGISTRY.read_bytes())
+        reg_file = Path(registry_path).resolve() if registry_path is not None else REGISTRY
+        root = Path(project_root).resolve() if project_root is not None else PROJECT_ROOT.resolve()
+        registry = Registry.model_validate_json(reg_file.read_bytes())
         matches = [a for a in registry.approvals if a.dataset_sha256 == dataset_sha256]
         if len(matches) != 1:
             raise ValueError('missing_or_ambiguous_approval')
@@ -67,8 +73,8 @@ def require_dataset_approval_by_digest(dataset_sha256: str) -> Approval:
             relative = Path(evidence.path)
             if relative.is_absolute():
                 raise ValueError('absolute_evidence_path')
-            path = (PROJECT_ROOT / relative).resolve()
-            if not path.is_relative_to(PROJECT_ROOT.resolve()):
+            path = (root / relative).resolve()
+            if not path.is_relative_to(root):
                 raise ValueError('evidence_outside_project')
             if hashlib.sha256(path.read_bytes()).hexdigest() != evidence.sha256:
                 raise ValueError('evidence_changed')
@@ -77,14 +83,32 @@ def require_dataset_approval_by_digest(dataset_sha256: str) -> Approval:
         raise ValueError('data_approval_required') from None
 
 
-def validate_dataset_digest(digest: str) -> None:
-    require_dataset_approval_by_digest(digest)
+def validate_dataset_digest(
+    digest: str,
+    registry_path: Path | str | None = None,
+    project_root: Path | str | None = None,
+) -> None:
+    if registry_path is not None or project_root is not None:
+        require_dataset_approval_by_digest(
+            digest, registry_path=registry_path, project_root=project_root
+        )
+    else:
+        require_dataset_approval_by_digest(digest)
 
 
-def require_data_approval(df, ticker) -> Approval:
+def require_data_approval(
+    df,
+    ticker,
+    registry_path: Path | str | None = None,
+    project_root: Path | str | None = None,
+) -> Approval:
     """No approval from dataframe attrs/kwargs; no implicit slice approvals."""
     try:
         digest = dataset_digest(df, ticker)
+        if registry_path is not None or project_root is not None:
+            return require_dataset_approval_by_digest(
+                digest, registry_path=registry_path, project_root=project_root
+            )
         return require_dataset_approval_by_digest(digest)
     except Exception:
         raise ValueError('data_approval_required') from None

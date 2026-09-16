@@ -88,6 +88,15 @@ class MarketAnalyst:
         df = await asyncio.to_thread(
             market.fetch_ohlcv, self.ticker, period="2y", interval="1d"
         )
+        return await self.analyze_ohlcv(df)
+
+    async def analyze_ohlcv(
+        self,
+        df: Any,
+        registry_path: Any = None,
+        project_root: Any = None,
+    ) -> Dict[str, Any]:
+        """Deterministic analysis of pre-supplied OHLCV dataframe. Never refetches."""
         if df is None or len(df) < _MIN_DAILY_BARS:
             return self._hold("Dados diários insuficientes para o sinal Donchian.")
 
@@ -129,7 +138,12 @@ class MarketAnalyst:
 
         try:
             d_sha = dataset_digest(eng_df, self.ticker)
-            require_dataset_approval_by_digest(d_sha)
+            if registry_path is not None or project_root is not None:
+                require_dataset_approval_by_digest(
+                    d_sha, registry_path=registry_path, project_root=project_root
+                )
+            else:
+                require_dataset_approval_by_digest(d_sha)
         except Exception as e:
             logger.warning("MarketAnalyst dataset approval check failed for %s: %s", self.ticker, e)
             return self._hold(
