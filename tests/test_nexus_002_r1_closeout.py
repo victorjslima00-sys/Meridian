@@ -12,19 +12,44 @@ H. JOURNAL: SIGNAL_EVALUATED payload equals sanitized validated contract, not ra
 """
 from datetime import datetime, timezone
 import sqlite3
+from unittest.mock import patch
+import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
 from backend.app.agents.contracts import (
     ApprovedExecutionIntent,
+    ManualExecutionIntent,
     RiskDecision,
     TypedSignal,
 )
 from backend.app.agents.executor import ExecutorAgent
+from backend.app.agents.market_analyst import MarketAnalyst
 from backend.app.agents.risk_manager import RiskManager
 from backend.app.markets.paper_broker import PaperBroker
-from trading_bot.data.approval import Approval, Evidence
+from trading_bot.data.approval import Approval, Evidence, dataset_digest
 from trading_bot.execution.paper_session import PaperSessionRunner
+
+
+def _daily_breakout_df(n: int = 250, breakout: float = 1.02) -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    price = 85.0
+    closes = []
+    for _ in range(n - 1):
+        price += 0.015 + rng.normal(0, 0.35)
+        closes.append(price)
+    recent_high = max(closes[-20:])
+    closes.append(recent_high * breakout)
+    highs = [c * 1.006 if i < n - 1 else c * 1.001 for i, c in enumerate(closes)]
+    return pd.DataFrame({
+        "date": pd.date_range("2023-01-02", periods=n, freq="D"),
+        "close": closes,
+        "open": [c * 0.999 for c in closes],
+        "high": highs,
+        "low": [c * 0.994 for c in closes],
+        "volume": [1000] * (n - 1) + [2500],
+    })
 
 
 VALID_SHA256 = "a" * 64
@@ -109,32 +134,68 @@ def _get_db_state(db_path: str):
 
 
 # ---------------------------------------------------------------------------
-# Test A: Real Autonomous Path
+# Test A: True MarketAnalyst Autonomous Path Integration
 # ---------------------------------------------------------------------------
-def test_a_real_autonomous_path_with_valid_approval(isolated_db, synthetic_approval, mock_circuit_breaker):
-    """A. REAL AUTONOMOUS PATH: MarketAnalyst BUY -> TypedSignal -> RiskDecision -> ApprovedExecutionIntent -> Paper execution."""
-    analyst_result = {
-        "ticker": "PETR4",
-        "signal": "BUY",
-        "price": 30.0,
-        "target_price": 33.0,
-        "stop_loss": 28.5,
-        "confidence": 85,
-        "reason": "Donchian breakout confirmed on 20-day high with volume",
-        "generated_at": datetime.now(timezone.utc),
-        "dataset_sha256": VALID_SHA256,
-        "dataset_approved": True,
-        "strategy_id": "donchian_breakout",
-    }
+@pytest.mark.asyncio
+async def test_a_real_market_analyst_autonomous_path_with_valid_approval(
+    isolated_db, monkeypatch, mock_circuit_breaker
+):
+    """A. REAL AUTONOMOUS PATH: MarketAnalyst.analyze() -> TypedSignal -> RiskDecision -> ApprovedExecutionIntent -> Paper DB mutation."""
+    ticker = "PETR4.SA"
+    df = _daily_breakout_df(breakout=1.02)
+
+    # Compute eng_df and real dataset_digest exactly as MarketAnalyst does
+    eng_df = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(df["date"]).dt.date,
+            "adj_close": df["close"].astype(float),
+            "o": df["open"].astype(float),
+            "c": df["close"].astype(float),
+            "h": df["high"].astype(float),
+            "l": df["low"].astype(float),
+            "v": df["volume"].astype(float),
+        }
+    )
+    real_digest = dataset_digest(eng_df, ticker)
+
+    # Register temporary approval for this exact real digest
+    ev = Evidence(path="synthetic_evidence.csv", sha256=real_digest)
+    real_approval = Approval(
+        dataset_sha256=real_digest,
+        reviewed_by="nexus-002-r2-auditor",
+        review_notes="temporary fixture for real market analyst integration",
+        status="approved",
+        source=ev,
+        calendar=ev,
+        adjustments=ev,
+        point_in_time=ev,
+    )
+    monkeypatch.setattr(
+        "trading_bot.data.approval.require_dataset_approval_by_digest",
+        lambda d: real_approval if d == real_digest else (_ for _ in ()).throw(ValueError("data_approval_required")),
+    )
+
+    # Execute actual MarketAnalyst.analyze()
+    with patch("backend.app.data.feed.fetch_recent_data", return_value=df), \
+         patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+        analyst = MarketAnalyst(ticker)
+        analysis = await analyst.analyze()
+
+    assert analysis["signal"] == "BUY"
+    assert analysis["side"] == "BUY"
+    assert analysis["dataset_sha256"] == real_digest
+    assert analysis["dataset_approved"] is True
+    assert analysis["strategy_id"] == "donchian_breakout"
+    assert analysis["generated_at"].tzinfo is not None
 
     # 1. TypedSignal validation
-    sig = TypedSignal.model_validate(analyst_result)
+    sig = TypedSignal.model_validate(analysis)
     assert sig.signal_id.startswith("sig_")
-    assert sig.dataset_sha256 == VALID_SHA256
+    assert sig.dataset_sha256 == real_digest
 
     # 2. RiskManager evaluation
     rm = RiskManager(saldo_livre=1000.0, em_posicoes=0.0)
-    decision = rm.evaluate_trade(sig, ticker="PETR4")
+    decision = rm.evaluate_trade(sig, ticker=ticker)
     assert isinstance(decision, RiskDecision)
     assert decision.approved is True
     assert decision.signal_id == sig.signal_id
@@ -149,13 +210,71 @@ def test_a_real_autonomous_path_with_valid_approval(isolated_db, synthetic_appro
     executor = ExecutorAgent(db_path=isolated_db)
     res = executor.execute_order(intent)
     assert res["status"] == "executed"
-    assert res["ticker"] == "PETR4"
+    assert res["ticker"] == ticker
     assert res["shares"] > 0
 
     # 5. Database verification
     trades_count, pf = _get_db_state(isolated_db)
     assert trades_count == 1
-    assert pf[1] > 0  # em_posicoes incremented
+    assert pf[1] > 0
+
+
+@pytest.mark.asyncio
+async def test_a2_real_market_analyst_unapproved_dataset_results_in_hold_and_no_mutation(
+    isolated_db, monkeypatch
+):
+    """Prove the same market dataset WITHOUT its approval results in HOLD / no execution authority / zero DB mutation."""
+    ticker = "PETR4.SA"
+    df = _daily_breakout_df(breakout=1.02)
+    trades_before, pf_before = _get_db_state(isolated_db)
+
+    # Disallow approval (fail closed)
+    monkeypatch.setattr(
+        "trading_bot.data.approval.require_dataset_approval_by_digest",
+        lambda d: (_ for _ in ()).throw(ValueError("data_approval_required")),
+    )
+
+    with patch("backend.app.data.feed.fetch_recent_data", return_value=df), \
+         patch("backend.app.agents.market_analyst.get_ibov_data", return_value=None):
+        analyst = MarketAnalyst(ticker)
+        unapproved_analysis = await analyst.analyze()
+
+    assert unapproved_analysis["signal"] == "HOLD"
+    assert unapproved_analysis["side"] == "HOLD"
+    assert unapproved_analysis["dataset_approved"] is False
+    assert unapproved_analysis["dataset_sha256"] is None
+
+    # TypedSignal for HOLD
+    hold_sig = TypedSignal.model_validate(unapproved_analysis)
+    assert hold_sig.side == "HOLD"
+
+    # RiskManager rejects HOLD
+    rm = RiskManager(saldo_livre=1000.0)
+    hold_decision = rm.evaluate_trade(hold_sig, ticker=ticker)
+    assert hold_decision.approved is False
+    assert "HOLD" in hold_decision.reason
+
+    # ApprovedExecutionIntent cannot be formed for HOLD (rejected risk decision)
+    with pytest.raises((ValidationError, ValueError)):
+        ApprovedExecutionIntent(signal=hold_sig, risk_decision=hold_decision)
+
+    # Even with forged approved=True decision, HOLD is rejected by signal.side invariant
+    forged_approved_dec = RiskDecision(
+        signal_id=hold_sig.signal_id,
+        approved=True,
+        allocated_capital=100.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Forged",
+        decision_timestamp=datetime.now(timezone.utc),
+    )
+    with pytest.raises((ValidationError, ValueError), match="must be BUY or SELL"):
+        ApprovedExecutionIntent(signal=hold_sig, risk_decision=forged_approved_dec)
+
+    # Zero DB mutation
+    trades_after, pf_after = _get_db_state(isolated_db)
+    assert trades_after == trades_before == 0
+    assert pf_after == pf_before
 
 
 # ---------------------------------------------------------------------------
@@ -447,3 +566,157 @@ def test_h_journal_sanitized_validated_signal(tmp_path, synthetic_approval, mock
     assert eval_payload["signal_id"].startswith("sig_")
     # Must NOT have unnormalized aliases from raw input
     assert "current_price" not in eval_payload
+
+
+# ---------------------------------------------------------------------------
+# Section 1: Authority Immutability & Post-Validation Mutation Tests
+# ---------------------------------------------------------------------------
+def test_mutation_a_signal_tampering_rejected_no_db_mutation(
+    isolated_db, synthetic_approval, mock_circuit_breaker
+):
+    """A. Create valid TypedSignal; mutate price/ticker/dataset/target after validation; attempt execution; REJECT, zero DB/portfolio mutation."""
+    trades_before, pf_before = _get_db_state(isolated_db)
+    now = datetime.now(timezone.utc)
+    sig = TypedSignal(
+        ticker="PETR4",
+        side="BUY",
+        price=30.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Breakout",
+        dataset_sha256=VALID_SHA256,
+        dataset_approved=True,
+        generated_at=now,
+    )
+    dec = RiskDecision(
+        signal_id=sig.signal_id,
+        approved=True,
+        reason="Approved",
+        allocated_capital=100.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        decision_timestamp=now,
+    )
+    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+
+    # Post-validation mutation of price
+    intent.signal.price = 31.0
+
+    executor = ExecutorAgent(db_path=isolated_db)
+    res = executor.execute_order(intent)
+    assert res["status"] == "rejected"
+    assert "Authority graph revalidation failed" in res["reason"]
+
+    # Verify zero DB mutation
+    trades_after, pf_after = _get_db_state(isolated_db)
+    assert trades_after == trades_before == 0
+    assert pf_after == pf_before
+
+
+def test_mutation_b_allocated_capital_tampering_rejected(
+    isolated_db, synthetic_approval, mock_circuit_breaker
+):
+    """B. Create valid RiskDecision; mutate allocated_capital after decision_id creation; attempt execution; REJECT."""
+    trades_before, pf_before = _get_db_state(isolated_db)
+    now = datetime.now(timezone.utc)
+    sig = TypedSignal(
+        ticker="PETR4",
+        side="BUY",
+        price=30.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Breakout",
+        dataset_sha256=VALID_SHA256,
+        dataset_approved=True,
+        generated_at=now,
+    )
+    dec = RiskDecision(
+        signal_id=sig.signal_id,
+        approved=True,
+        reason="Approved",
+        allocated_capital=100.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        decision_timestamp=now,
+    )
+    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+
+    # Post-validation mutation of allocated_capital on decision
+    intent.risk_decision.allocated_capital = 5000.0
+
+    executor = ExecutorAgent(db_path=isolated_db)
+    res = executor.execute_order(intent)
+    assert res["status"] == "rejected"
+    assert "Authority graph revalidation failed" in res["reason"]
+
+    trades_after, pf_after = _get_db_state(isolated_db)
+    assert trades_after == 0
+    assert pf_after == pf_before
+
+
+def test_mutation_c_target_stop_tampering_rejected(
+    isolated_db, synthetic_approval, mock_circuit_breaker
+):
+    """C. Mutate target/stop after decision validation; REJECT."""
+    trades_before, pf_before = _get_db_state(isolated_db)
+    now = datetime.now(timezone.utc)
+    sig = TypedSignal(
+        ticker="PETR4",
+        side="BUY",
+        price=30.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Breakout",
+        dataset_sha256=VALID_SHA256,
+        dataset_approved=True,
+        generated_at=now,
+    )
+    dec = RiskDecision(
+        signal_id=sig.signal_id,
+        approved=True,
+        reason="Approved",
+        allocated_capital=100.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        decision_timestamp=now,
+    )
+    intent = ApprovedExecutionIntent(signal=sig, risk_decision=dec)
+
+    # Post-validation mutation of target price
+    intent.risk_decision.target_price = 45.0
+
+    executor = ExecutorAgent(db_path=isolated_db)
+    res = executor.execute_order(intent)
+    assert res["status"] == "rejected"
+    assert "Authority graph revalidation failed" in res["reason"]
+
+    trades_after, pf_after = _get_db_state(isolated_db)
+    assert trades_after == 0
+    assert pf_after == pf_before
+
+
+def test_mutation_d_manual_intent_tampering_rejected(isolated_db):
+    """D. Mutate ManualExecutionIntent after construction into invalid financial state; REJECT before DB mutation."""
+    trades_before, pf_before = _get_db_state(isolated_db)
+    manual = ManualExecutionIntent(
+        ticker="PETR4",
+        side="BUY",
+        entry_price=30.0,
+        allocated_capital=100.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        reason="Manual order",
+        operator="trader_1",
+    )
+
+    # Mutate allocated_capital into invalid state
+    manual.allocated_capital = -10.0
+
+    executor = ExecutorAgent(db_path=isolated_db)
+    res = executor.execute_manual_order(manual)
+    assert res["status"] == "rejected"
+    assert "Manual authority revalidation failed" in res["reason"]
+
+    trades_after, pf_after = _get_db_state(isolated_db)
+    assert trades_after == 0
+    assert pf_after == pf_before

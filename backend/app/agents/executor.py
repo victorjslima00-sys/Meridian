@@ -25,7 +25,16 @@ class ExecutorAgent:
                 "status": "rejected",
                 "reason": "Autonomous execution requires a validated ApprovedExecutionIntent",
             }
-        return self._execute_internal(intent)
+        try:
+            validated_intent = ApprovedExecutionIntent.model_validate(
+                intent.model_dump(mode="python")
+            )
+        except Exception as e:
+            return {
+                "status": "rejected",
+                "reason": f"Authority graph revalidation failed (stale or tampered contract): {e}",
+            }
+        return self._execute_internal(validated_intent)
 
     def execute_manual_order(self, intent: Any = None) -> Dict[str, Any]:
         """Execute authenticated manual human order. Strictly requires validated ManualExecutionIntent."""
@@ -36,13 +45,44 @@ class ExecutorAgent:
                 "status": "rejected",
                 "reason": "Manual execution requires a validated ManualExecutionIntent",
             }
-        return self._execute_internal(intent)
+        try:
+            validated_intent = ManualExecutionIntent.model_validate(
+                intent.model_dump(mode="python")
+            )
+        except Exception as e:
+            return {
+                "status": "rejected",
+                "reason": f"Manual authority revalidation failed (stale or tampered contract): {e}",
+            }
+        return self._execute_internal(validated_intent)
 
     def _execute_internal(self, intent: Any) -> Dict[str, Any]:
         from backend.app.agents.contracts import ApprovedExecutionIntent, ManualExecutionIntent
 
-        if not isinstance(intent, (ApprovedExecutionIntent, ManualExecutionIntent)):
+        if isinstance(intent, ApprovedExecutionIntent):
+            try:
+                validated_intent = ApprovedExecutionIntent.model_validate(
+                    intent.model_dump(mode="python")
+                )
+            except Exception as e:
+                return {
+                    "status": "rejected",
+                    "reason": f"Authority graph revalidation failed: {e}",
+                }
+        elif isinstance(intent, ManualExecutionIntent):
+            try:
+                validated_intent = ManualExecutionIntent.model_validate(
+                    intent.model_dump(mode="python")
+                )
+            except Exception as e:
+                return {
+                    "status": "rejected",
+                    "reason": f"Manual authority revalidation failed: {e}",
+                }
+        else:
             return {"status": "rejected", "reason": "Invalid execution intent type"}
+
+        intent = validated_intent
 
         ticker = intent.ticker
         current_price = intent.entry_price

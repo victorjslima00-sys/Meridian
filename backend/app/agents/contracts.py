@@ -23,7 +23,7 @@ def compute_signal_id(
     price: float,
     target_price: float,
     stop_loss: float,
-    dataset_sha256: str,
+    dataset_sha256: Optional[str],
     generated_at: datetime,
     strategy_id: Optional[str] = None,
 ) -> str:
@@ -37,7 +37,7 @@ def compute_signal_id(
     dt_utc = generated_at.astimezone(timezone.utc).isoformat()
     payload = {
         "contract_version": CONTRACT_VERSION,
-        "dataset_sha256": dataset_sha256,
+        "dataset_sha256": dataset_sha256 or "",
         "generated_at": dt_utc,
         "price": float(price),
         "side": side,
@@ -95,7 +95,7 @@ class TypedSignal(BaseModel):
     confidence: Optional[int] = Field(default=None, ge=0, le=100)
     reason: str = Field(min_length=1)
     generated_at: datetime
-    dataset_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dataset_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     dataset_approved: bool = Field(default=True)
     strategy_id: Optional[str] = Field(default=None)
     signal_id: Optional[str] = Field(default=None)
@@ -105,12 +105,18 @@ class TypedSignal(BaseModel):
         # Normalize legacy field aliases before strict validation
         if isinstance(obj, dict):
             obj = dict(obj)
-            if "signal" in obj and "side" not in obj:
-                obj["side"] = obj.pop("signal")
-            if "current_price" in obj and "price" not in obj:
-                obj["price"] = obj.pop("current_price")
-            elif "last_price" in obj and "price" not in obj:
-                obj["price"] = obj.pop("last_price")
+            if "signal" in obj:
+                sig_val = obj.pop("signal")
+                if "side" not in obj:
+                    obj["side"] = sig_val
+            if "current_price" in obj:
+                cp_val = obj.pop("current_price")
+                if "price" not in obj:
+                    obj["price"] = cp_val
+            if "last_price" in obj:
+                lp_val = obj.pop("last_price")
+                if "price" not in obj:
+                    obj["price"] = lp_val
             if isinstance(obj.get("generated_at"), str):
                 try:
                     obj["generated_at"] = datetime.fromisoformat(obj["generated_at"])
@@ -155,6 +161,8 @@ class TypedSignal(BaseModel):
             raise ValueError(f"Invalid side: {self.side}")
 
         if self.side != "HOLD":
+            if not self.dataset_sha256:
+                raise ValueError(f"{self.side} signal requires an approved 64-hex dataset_sha256")
             if not self.dataset_approved:
                 raise ValueError("Strategy signal dataset must be approved")
 
@@ -195,8 +203,8 @@ class RiskDecision(BaseModel):
     approved: bool
     reason: str
     allocated_capital: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
-    target_price: float = Field(gt=0, allow_inf_nan=False)
-    stop_loss: float = Field(gt=0, allow_inf_nan=False)
+    target_price: float = Field(ge=0, allow_inf_nan=False)
+    stop_loss: float = Field(ge=0, allow_inf_nan=False)
     decision_timestamp: datetime
     decision_id: Optional[str] = Field(default=None)
 
@@ -213,8 +221,11 @@ class RiskDecision(BaseModel):
         if self.decision_timestamp.tzinfo is None or self.decision_timestamp.tzinfo.utcoffset(self.decision_timestamp) is None:
             raise ValueError("decision_timestamp must be timezone-aware")
 
-        if self.approved and (self.allocated_capital is None or self.allocated_capital <= 0):
-            raise ValueError("allocated_capital must be set and > 0 if approved")
+        if self.approved:
+            if self.allocated_capital is None or self.allocated_capital <= 0:
+                raise ValueError("allocated_capital must be set and > 0 if approved")
+            if self.target_price <= 0 or self.stop_loss <= 0:
+                raise ValueError("approved RiskDecision requires positive target_price and stop_loss")
 
         expected_decision_id = compute_decision_id(
             signal_id=self.signal_id,
@@ -335,7 +346,7 @@ class ApprovedExecutionIntent(BaseModel):
 
     @property
     def dataset_sha256(self) -> str:
-        return self.signal.dataset_sha256
+        return self.signal.dataset_sha256 or ""
 
     @model_validator(mode="after")
     def validate_invariants(self) -> "ApprovedExecutionIntent":
@@ -370,7 +381,7 @@ class ApprovedExecutionIntent(BaseModel):
             allocated_capital=self.risk_decision.allocated_capital,
             target_price=self.risk_decision.target_price,
             stop_loss=self.risk_decision.stop_loss,
-            dataset_sha256=self.signal.dataset_sha256,
+            dataset_sha256=self.signal.dataset_sha256 or "",
         )
 
         if self.intent_id is not None and self.intent_id != expected_intent_id:

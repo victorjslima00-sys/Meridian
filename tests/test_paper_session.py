@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
-from trading_bot.execution.paper_session import PaperSessionRunner, PaperSessionJournal
+from trading_bot.execution.paper_session import PaperSessionRunner
 
 def _init_test_db(db_path: Path, initial_cash: float=1000.0) -> None:
     conn = sqlite3.connect(db_path)
@@ -42,7 +42,8 @@ def test_paper_session_executes_signal_and_reconciles(tmp_path, mock_circuit_bre
     assert report.orders_rejected == 0
     assert report.reconciliation_ok is True
     assert report.discrepancies == []
-    assert report.real_broker_calls == 0
+    assert report.real_broker_calls is None
+    assert report.real_broker_calls_verification == "UNVERIFIED"
     assert report.status == 'RECONCILED'
     conn = sqlite3.connect(db_file)
     trade = conn.execute('SELECT ticker, side, shares, entry_price, status FROM trades').fetchone()
@@ -168,4 +169,5 @@ def test_paper_session_guarantees_zero_real_broker_calls(tmp_path, mock_circuit_
         runner = PaperSessionRunner(session_id='session_zero_broker', db_path=str(db_file), storage_dir=str(storage_dir))
         report = runner.run_cycle(signals=signals)
         mock_url.assert_not_called()
-        assert report.real_broker_calls == 0
+        assert report.real_broker_calls is None
+        assert report.real_broker_calls_verification == "UNVERIFIED"

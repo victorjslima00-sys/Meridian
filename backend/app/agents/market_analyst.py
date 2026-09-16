@@ -74,8 +74,8 @@ class MarketAnalyst:
             "reason": reason,
             "last_price": float(last_price),
             "generated_at": datetime.now(timezone.utc),
-            "dataset_sha256": "0" * 64,
-            "dataset_approved": True,
+            "dataset_sha256": None,
+            "dataset_approved": False,
             "strategy_id": "donchian_breakout",
         }
 
@@ -134,15 +134,15 @@ class MarketAnalyst:
         from datetime import datetime, timezone
         from trading_bot.data.approval import dataset_digest, require_dataset_approval_by_digest
 
-        d_sha = None
-        has_approval = False
         try:
             d_sha = dataset_digest(eng_df, self.ticker)
             require_dataset_approval_by_digest(d_sha)
-            has_approval = True
         except Exception as e:
             logger.warning("MarketAnalyst dataset approval check failed for %s: %s", self.ticker, e)
-            has_approval = False
+            return self._hold(
+                f"Aprovação de dados ausente ou inválida ({e}) — entrada bloqueada (fail-closed).",
+                last_price,
+            )
 
         return {
             "ticker": self.ticker,
@@ -160,7 +160,7 @@ class MarketAnalyst:
                 f"stop {candidate.stop} / alvo {candidate.target} (ATR)."
             ),
             "generated_at": datetime.now(timezone.utc),
-            "dataset_sha256": d_sha or ("0" * 64),
-            "dataset_approved": has_approval,
+            "dataset_sha256": d_sha,
+            "dataset_approved": True,
             "strategy_id": "donchian_breakout",
         }

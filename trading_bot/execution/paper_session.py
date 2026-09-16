@@ -9,7 +9,8 @@ Invariantes Institucionais:
   - Zero tolerância a multiplicação de OMS: delega 100% ao RiskManager e ExecutorAgent existentes.
   - Trilha imutável em disco: gravação append-only com fsync de cada evento em arquivo .jsonl.
   - Reconciliação contábil formal: verificação da conservação de saldos e integridade do SQLite.
-  - Invariante absoluto: real_broker_calls == 0 (nenhum envio externo).
+  - Invariante arquitetural: NENHUMA ROTA DE BROKER REAL ESTÁ AUTORIZADA OU ATIVADA
+    (real_broker_calls_verification="UNVERIFIED", real_broker_calls=None sem medição empírica).
 """
 from __future__ import annotations
 
@@ -54,6 +55,7 @@ class PaperSessionEvent(BaseModel):
 
 class PaperSessionReport(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
+
     session_id: str
     status: Literal["COMPLETED", "INTERRUPTED", "RECONCILED", "DISCREPANCY"]
     started_at_utc: str
@@ -67,7 +69,8 @@ class PaperSessionReport(BaseModel):
     portfolio_after: Dict[str, float]
     reconciliation_ok: bool
     discrepancies: List[str]
-    real_broker_calls: Literal[0] = 0
+    real_broker_calls: Optional[int] = None
+    real_broker_calls_verification: Literal["UNVERIFIED", "VERIFIED"] = "UNVERIFIED"
     report_sha256: Optional[str] = None
 
 
@@ -461,7 +464,8 @@ class PaperSessionRunner:
                 "expected_allocated_delta": expected_allocated_delta,
                 "disponivel_delta": disponivel_delta,
                 "expected_disponivel_delta": expected_disponivel_delta,
-                "real_broker_calls": 0,
+                "real_broker_calls": None,
+                "real_broker_calls_verification": "UNVERIFIED",
             },
         )
 
@@ -484,7 +488,8 @@ class PaperSessionRunner:
             portfolio_after=final_portfolio,
             reconciliation_ok=reconciliation_ok,
             discrepancies=discrepancies,
-            real_broker_calls=0,
+            real_broker_calls=None,
+            real_broker_calls_verification="UNVERIFIED",
         )
 
         report_json = report.model_dump_json(indent=2)
@@ -502,7 +507,8 @@ class PaperSessionRunner:
             "report_sha256": report_sha256,
             "generated_at_utc": ended_at,
             "reconciliation_ok": reconciliation_ok,
-            "real_broker_calls": 0,
+            "real_broker_calls": None,
+            "real_broker_calls_verification": "UNVERIFIED",
         }
         manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
 
