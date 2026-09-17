@@ -380,18 +380,6 @@ def get_evidenced_quote(ticker: str, ttl: Optional[float] = None) -> Optional[Ev
     Fails closed cleanly (returning None) on any defect or unverified scalar price.
     """
     try:
-        # Honor get_current_price if mocked by tests to simulate feed-down scenarios
-        if hasattr(get_current_price, "assert_called") or hasattr(get_current_price, "return_value"):
-            current_p = get_current_price(ticker)
-            if current_p is None or isinstance(current_p, bool):
-                return None
-            try:
-                current_p = float(current_p)
-            except (TypeError, ValueError):
-                return None
-            if not math.isfinite(current_p) or current_p <= 0.0:
-                return None
-
         normalized = _normalize_ticker(ticker)
         key = _cache_key(normalized, "1d", "1m")
         effective_ttl = ttl if ttl is not None else PRICE_CACHE_TTL_SECONDS
@@ -424,7 +412,13 @@ def get_evidenced_quote(ticker: str, ttl: Optional[float] = None) -> Optional[Ev
         if df is None or df.empty or not raw_evidence or not source_sha256:
             return None
 
-        close_val = float(df.iloc[-1]["close"])
+        raw_close = df.iloc[-1]["close"]
+        if raw_close is None or isinstance(raw_close, bool) or type(raw_close).__name__ in ("bool", "bool_"):
+            return None
+        try:
+            close_val = float(raw_close)
+        except (TypeError, ValueError):
+            return None
         if math.isnan(close_val) or math.isinf(close_val) or close_val <= 0.0:
             return None
 

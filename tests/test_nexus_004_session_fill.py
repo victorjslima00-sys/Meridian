@@ -1366,6 +1366,24 @@ def test_r2_regression_l_preflight_import_only_not_ready(tmp_path, monkeypatch, 
     assert report_unverified.infrastructure_ready == "PASS"
 
     # B. With behavioral verification (verify_runtime_quotes=True):
+    # B1. Provider unavailable / no valid quote: MUST NOT be PASS
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: None)
+    report_unavail = run_paper_preflight(
+        registry_path=custom_reg,
+        db_path=test_db,
+        storage_dir=tmp_path / "storage",
+        project_root=tmp_path,
+        tickers=[ticker],
+        now_dt=trade_wednesday,
+        verify_runtime_quotes=True,
+    )
+    assert report_unavail.entry_ready != "PASS"
+    assert report_unavail.overall_status != "PASS"
+
+    # B2. Provider returns valid controlled EvidencedQuote: genuinely passes behavioral verification
+    from tests.conftest import make_test_evidenced_quote
+    test_quote = make_test_evidenced_quote(ticker=ticker, price=30.2, now_dt=trade_wednesday)
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: test_quote)
     report_verified = run_paper_preflight(
         registry_path=custom_reg,
         db_path=test_db,
@@ -1967,3 +1985,384 @@ def test_r3_feed_malformed_auxiliary_columns_handled_resiliently():
     assert raw_ev["low"] is None
     assert raw_ev["volume"] is None
     assert sha == compute_evidence_sha256(raw_ev)
+
+
+# ===========================================================================
+# 12. NEXUS-004-R4: PREFLIGHT TRUTH & TEST-FIDELITY REGRESSIONS (A - G)
+# ===========================================================================
+
+def _setup_preflight_environment(tmp_path, ticker="PETR4.SA"):
+    import sqlite3
+    import json
+    from datetime import date, timedelta
+    from backend.app.markets.b3_session import B3_TIMEZONE
+    from trading_bot.data.approval_candidate import (
+        APPROVAL_CONFIRMATION_TOKEN,
+        build_candidate_bundle,
+        approve_candidate,
+    )
+    import pandas as pd
+
+    test_db = tmp_path / "preflight_env.db"
+    conn = sqlite3.connect(str(test_db))
+    conn.execute("CREATE TABLE portfolio (id INTEGER PRIMARY KEY, patrimonio_total REAL, saldo_disponivel REAL, em_posicoes REAL, margem_operavel REAL)")
+    conn.execute("INSERT INTO portfolio VALUES (1, 10000.0, 10000.0, 0.0, 10000.0)")
+    conn.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, ticker TEXT, side TEXT, shares REAL, entry_price REAL, exit_price REAL, target_price REAL, stop_loss REAL, entry_date TIMESTAMP, exit_date TIMESTAMP, pnl_pct REAL, exit_reason TEXT, ai_rationale TEXT, status TEXT, signal_id TEXT)")
+    conn.execute("CREATE UNIQUE INDEX idx_trades_strategy_signal_id ON trades(signal_id) WHERE signal_id IS NOT NULL")
+    conn.execute("CREATE UNIQUE INDEX idx_trades_one_active_per_ticker ON trades(ticker) WHERE status = 'active'")
+    conn.commit()
+    conn.close()
+
+    dates = [date(2025, 6, 1) + timedelta(days=i) for i in range(220)]
+    records = []
+    price = 30.0
+    for d in dates:
+        p = round(price, 4)
+        records.append({
+            "date": str(d),
+            "open": p,
+            "high": round(p + 1.0, 4),
+            "low": round(p - 1.0, 4),
+            "close": round(p + 0.2, 4),
+            "volume": 10000.0,
+        })
+        price += 0.05
+    df_synth = pd.DataFrame(records)
+
+    bundle_dir = tmp_path / "candidates" / "env"
+    manifest = build_candidate_bundle(
+        ticker=ticker,
+        output_dir=bundle_dir,
+        project_root=tmp_path,
+        df=df_synth,
+    )
+    custom_reg = tmp_path / "custom_registry_env.json"
+    custom_reg.write_text(json.dumps({"version": 1, "approvals": []}), encoding="utf-8")
+    approve_candidate(
+        candidate_path=bundle_dir / "candidate_manifest.json",
+        reviewed_by="Victor",
+        review_notes="Approved for environment",
+        confirm_digest=manifest.dataset_sha256,
+        confirm_candidate_id=manifest.candidate_id,
+        confirmation=APPROVAL_CONFIRMATION_TOKEN,
+        registry_path=custom_reg,
+        project_root=tmp_path,
+    )
+
+    trade_dt = datetime.datetime(2026, 3, 11, 14, 0, tzinfo=B3_TIMEZONE)
+    return test_db, custom_reg, df_synth, trade_dt
+
+
+def test_r4_regression_a_preflight_import_only_quote_structure_cannot_pass(tmp_path, monkeypatch, mock_circuit_breaker):
+    """A. verify_runtime_quotes=False -> STRUCTURALLY_PRESENT / RUNTIME_UNVERIFIED -> overall NOT PASS."""
+    from scripts.paper_session_preflight import (
+        check_entry_quote_path,
+        check_exit_quote_path,
+        run_paper_preflight,
+    )
+    from scripts import paper_session_preflight
+
+    ticker = "PETR4.SA"
+    test_db, custom_reg, df_synth, trade_dt = _setup_preflight_environment(tmp_path, ticker)
+
+    class MockMarket:
+        def fetch_ohlcv(self, t, period="2y", interval="1d"):
+            return df_synth.copy()
+
+    monkeypatch.setattr(paper_session_preflight, "resolve_market", lambda sym: MockMarket())
+
+    ok_in, status_in, _ = check_entry_quote_path(verify_runtime=False)
+    assert ok_in is True
+    assert status_in == "STRUCTURALLY_PRESENT"
+    assert status_in != "BEHAVIORALLY_VERIFIED"
+
+    ok_out, status_out, _ = check_exit_quote_path(verify_runtime=False)
+    assert ok_out is True
+    assert status_out == "STRUCTURALLY_PRESENT"
+    assert status_out != "BEHAVIORALLY_VERIFIED"
+
+    report = run_paper_preflight(
+        registry_path=custom_reg,
+        db_path=test_db,
+        storage_dir=tmp_path / "storage",
+        project_root=tmp_path,
+        tickers=[ticker],
+        now_dt=trade_dt,
+        verify_runtime_quotes=False,
+    )
+    assert report.infrastructure_ready == "PASS"
+    assert report.entry_ready == "RUNTIME_UNVERIFIED"
+    assert report.overall_status == "RUNTIME_UNVERIFIED"
+    assert report.entry_ready != "PASS"
+    assert report.overall_status != "PASS"
+
+
+def test_r4_regression_b_preflight_runtime_provider_unavailable_not_pass(tmp_path, monkeypatch, mock_circuit_breaker):
+    """B. verify_runtime_quotes=True + provider unavailable -> NOT BEHAVIORALLY_VERIFIED -> overall NOT PASS."""
+    from scripts.paper_session_preflight import (
+        check_entry_quote_path,
+        check_exit_quote_path,
+        run_paper_preflight,
+    )
+    from scripts import paper_session_preflight
+
+    ticker = "PETR4.SA"
+    test_db, custom_reg, df_synth, trade_dt = _setup_preflight_environment(tmp_path, ticker)
+
+    class MockMarket:
+        def fetch_ohlcv(self, t, period="2y", interval="1d"):
+            return df_synth.copy()
+
+    monkeypatch.setattr(paper_session_preflight, "resolve_market", lambda sym: MockMarket())
+
+    # Simulate provider down returning None
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: None)
+
+    ok_in, status_in, msg_in = check_entry_quote_path(verify_runtime=True, tickers=[ticker])
+    assert ok_in is False
+    assert status_in != "BEHAVIORALLY_VERIFIED"
+    assert status_in == "RUNTIME_UNVERIFIED"
+
+    ok_out, status_out, msg_out = check_exit_quote_path(verify_runtime=True, tickers=[ticker])
+    assert ok_out is False
+    assert status_out != "BEHAVIORALLY_VERIFIED"
+    assert status_out == "RUNTIME_UNVERIFIED"
+
+    report = run_paper_preflight(
+        registry_path=custom_reg,
+        db_path=test_db,
+        storage_dir=tmp_path / "storage",
+        project_root=tmp_path,
+        tickers=[ticker],
+        now_dt=trade_dt,
+        verify_runtime_quotes=True,
+    )
+    assert report.infrastructure_ready == "PASS"
+    assert report.entry_quote_path_status != "BEHAVIORALLY_VERIFIED"
+    assert report.exit_quote_path_status != "BEHAVIORALLY_VERIFIED"
+    assert report.entry_ready != "PASS"
+    assert report.overall_status != "PASS"
+
+
+def test_r4_regression_c_preflight_runtime_valid_controlled_quote_passes(tmp_path, monkeypatch, mock_circuit_breaker):
+    """C. verify_runtime_quotes=True + valid controlled EvidencedQuote -> runtime verification passes."""
+    from scripts.paper_session_preflight import (
+        check_entry_quote_path,
+        check_exit_quote_path,
+        run_paper_preflight,
+    )
+    from tests.conftest import make_test_evidenced_quote
+    from scripts import paper_session_preflight
+
+    ticker = "PETR4.SA"
+    test_db, custom_reg, df_synth, trade_dt = _setup_preflight_environment(tmp_path, ticker)
+
+    class MockMarket:
+        def fetch_ohlcv(self, t, period="2y", interval="1d"):
+            return df_synth.copy()
+
+    monkeypatch.setattr(paper_session_preflight, "resolve_market", lambda sym: MockMarket())
+
+    test_quote = make_test_evidenced_quote(ticker=ticker, price=30.5, now_dt=trade_dt)
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: test_quote)
+
+    ok_in, status_in, _ = check_entry_quote_path(verify_runtime=True, tickers=[ticker], now_dt=trade_dt)
+    assert ok_in is True
+    assert status_in == "BEHAVIORALLY_VERIFIED"
+
+    ok_out, status_out, _ = check_exit_quote_path(verify_runtime=True, tickers=[ticker], now_dt=trade_dt)
+    assert ok_out is True
+    assert status_out == "BEHAVIORALLY_VERIFIED"
+
+    report = run_paper_preflight(
+        registry_path=custom_reg,
+        db_path=test_db,
+        storage_dir=tmp_path / "storage",
+        project_root=tmp_path,
+        tickers=[ticker],
+        now_dt=trade_dt,
+        verify_runtime_quotes=True,
+    )
+    assert report.infrastructure_ready == "PASS"
+    assert report.entry_ready == "PASS"
+    assert report.overall_status == "PASS"
+
+
+def test_r4_regression_d_signature_only_never_produces_runtime_pass(monkeypatch):
+    """D. Signature-only existence can NEVER produce runtime PASS."""
+    from scripts.paper_session_preflight import (
+        check_entry_quote_path,
+        check_exit_quote_path,
+    )
+    import inspect
+    from backend.app.data.feed import get_evidenced_quote
+
+    # Prove signature is structurally present and has 'ticker' parameter
+    sig = inspect.signature(get_evidenced_quote)
+    assert "ticker" in sig.parameters
+
+    # Feed provider fails / raises
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: None)
+
+    # Runtime verification with valid signature + failing provider MUST NOT return BEHAVIORALLY_VERIFIED
+    ok_in, status_in, _ = check_entry_quote_path(verify_runtime=True, tickers=["PETR4.SA"])
+    assert status_in != "BEHAVIORALLY_VERIFIED"
+    assert ok_in is False
+
+    ok_out, status_out, _ = check_exit_quote_path(verify_runtime=True, tickers=["PETR4.SA"])
+    assert status_out != "BEHAVIORALLY_VERIFIED"
+    assert ok_out is False
+
+
+def test_r4_regression_e_get_evidenced_quote_independent_of_mocked_get_current_price(monkeypatch):
+    """E. get_evidenced_quote behavior identical regardless of whether tests mock unrelated get_current_price."""
+    from backend.app.data import feed
+    from unittest.mock import MagicMock
+    import pandas as pd
+
+    now = datetime.datetime.now(timezone.utc)
+    candle_df = pd.DataFrame({
+        "open": [30.0],
+        "high": [31.0],
+        "low": [29.0],
+        "close": [30.5],
+        "volume": [1000.0],
+        "date": [now],
+    })
+
+    # Stub fetch_recent_data to return valid candle
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: candle_df.copy())
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+
+    # 1. Unmocked get_current_price -> valid EvidencedQuote
+    q1 = feed.get_evidenced_quote("PETR4.SA")
+    assert q1 is not None
+    assert q1.price == 30.5
+
+    # 2. Mock get_current_price to return 0.0 (simulating feed down)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    mock_gcp = MagicMock(return_value=0.0)
+    monkeypatch.setattr(feed, "get_current_price", mock_gcp)
+
+    # get_evidenced_quote MUST NOT inspect or be influenced by get_current_price mock
+    q2 = feed.get_evidenced_quote("PETR4.SA")
+    assert q2 is not None
+    assert q2.price == 30.5
+    # get_current_price was NOT called by get_evidenced_quote
+    assert mock_gcp.call_count == 0
+
+    # 3. Mock get_current_price to return 999.0 while fetch_recent_data fails
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: None)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    mock_gcp_high = MagicMock(return_value=999.0)
+    monkeypatch.setattr(feed, "get_current_price", mock_gcp_high)
+
+    # get_evidenced_quote MUST fail closed (None) — NO scalar fallback!
+    q3 = feed.get_evidenced_quote("PETR4.SA")
+    assert q3 is None
+
+
+def test_r4_regression_f_cache_hit_provenance_preserved(monkeypatch):
+    """F. Cache hit preserves exact original collected_at, source_sha256, and source_ref."""
+    from backend.app.data import feed
+    import pandas as pd
+    import time
+
+    now = datetime.datetime.now(timezone.utc)
+    candle_df = pd.DataFrame({
+        "open": [30.0],
+        "high": [31.0],
+        "low": [29.0],
+        "close": [30.5],
+        "volume": [1000.0],
+        "date": [now],
+    })
+
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: candle_df.copy())
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+
+    q1 = feed.get_evidenced_quote("ITUB4.SA")
+    assert q1 is not None
+    col1 = q1.collected_at
+    sha1 = q1.source_sha256
+    ref1 = q1.source_ref
+
+    time.sleep(0.05)
+
+    # Second call (cache hit)
+    q2 = feed.get_evidenced_quote("ITUB4.SA")
+    assert q2 is not None
+    assert q2.collected_at == col1
+    assert q2.source_sha256 == sha1
+    assert q2.source_ref == ref1
+    assert q2.price == q1.price
+
+
+def test_r4_regression_g_feed_failure_fails_closed(monkeypatch):
+    """G. Feed failure fails closed on empty frame, invalid price, corrupt timestamp, or exception."""
+    from backend.app.data import feed
+    import pandas as pd
+    import math
+
+    now = datetime.datetime.now(timezone.utc)
+
+    # 1. Provider failure (None)
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: None)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 2. Empty DataFrame
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: pd.DataFrame())
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 3. NaN close price
+    df_nan = pd.DataFrame({"close": [math.nan], "date": [now]})
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_nan)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 4. Inf close price
+    df_inf = pd.DataFrame({"close": [float("inf")], "date": [now]})
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_inf)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 5. Boolean close price (must NOT coerce to 1.0)
+    df_bool = pd.DataFrame({"close": [True], "date": [now]})
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_bool)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 6. Non-positive close price
+    df_zero = pd.DataFrame({"close": [0.0], "date": [now]})
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_zero)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 7. Naive timestamp (lacks timezone)
+    naive_dt = datetime.datetime(2026, 3, 11, 14, 0)
+    df_naive = pd.DataFrame({"close": [30.0], "date": [naive_dt]})
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_naive)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+    # 8. Future observation timestamp
+    future_dt = datetime.datetime.now(timezone.utc) + datetime.timedelta(days=1)
+    df_future = pd.DataFrame({"close": [30.0], "date": [future_dt]})
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_future)
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    assert feed.get_evidenced_quote("BBDC4.SA") is None
+

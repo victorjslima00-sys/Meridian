@@ -384,7 +384,8 @@ def test_portfolio_and_positions_unavailable_when_feed_down(test_app, clean_db, 
     conn.close()
 
     client = TestClient(test_app)
-    with patch("backend.app.data.feed.get_current_price", return_value=0.0):
+    with patch("backend.app.data.feed.fetch_recent_data", return_value=None), \
+         patch("backend.app.data.feed.get_current_price", return_value=0.0):
         resp_pf = client.get("/api/portfolio").json()
         assert resp_pf["patrimonio_total"] is None
         assert resp_pf["value"] is None
@@ -408,7 +409,8 @@ def test_emergency_stop_does_not_use_entry_price_fallback(clean_db, monkeypatch)
     conn.close()
 
     req = main.ActionRequest(action="stop", password="test-pass-123")
-    with patch("backend.app.data.feed.get_current_price", return_value=0.0):
+    with patch("backend.app.data.feed.fetch_recent_data", return_value=None), \
+         patch("backend.app.data.feed.get_current_price", return_value=0.0):
         with patch.object(main.ExecutorAgent, "close_order") as mock_close:
             resp = main.system_emergency_stop(req)
             mock_close.assert_not_called()

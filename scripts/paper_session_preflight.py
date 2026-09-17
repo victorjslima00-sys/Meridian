@@ -14,11 +14,12 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -305,33 +306,189 @@ def check_b3_session_calendar(now: Optional[datetime] = None) -> tuple[bool, str
     return calendar_ok, day_type.value, phase.value, can_enter, msg
 
 
-def check_entry_quote_path(verify_runtime: bool = False) -> tuple[bool, str, str]:
-    """Inspect read-only entry quote retrieval contract (NEXUS-004-R3)."""
+def _verify_evidenced_quote_contract(
+    quote: Any,
+    expected_ticker: str,
+    now_dt: Optional[datetime] = None,
+    max_age_seconds: Optional[float] = None,
+) -> tuple[bool, str]:
+    """Verify that an EvidencedQuote satisfies all canonical invariants (NEXUS-004-R4)."""
+    from trading_bot.data.valuation_snapshot import (
+        EvidencedQuote,
+        compute_evidence_sha256,
+        PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS,
+    )
+
+    if quote is None:
+        return False, "Feed provider returned None (quote unavailable)"
+
+    if not isinstance(quote, EvidencedQuote):
+        return False, f"Quote is not an EvidencedQuote instance (got {type(quote)})"
+
+    # 1. Ticker binding
+    norm_expected = expected_ticker.upper().replace(".SA", "")
+    norm_actual = str(quote.ticker).upper().replace(".SA", "")
+    if norm_expected != norm_actual:
+        return False, f"Ticker binding mismatch: expected {expected_ticker}, got {quote.ticker}"
+
+    # 2. Price finite > 0 and not bool
+    if isinstance(quote.price, bool) or type(quote.price).__name__ in ("bool", "bool_"):
+        return False, "Quote price is boolean"
+    if not math.isfinite(quote.price) or quote.price <= 0.0:
+        return False, f"Quote price must be finite > 0, got {quote.price}"
+
+    # 3. Timezone awareness
+    if quote.observed_at.tzinfo is None or quote.collected_at.tzinfo is None:
+        return False, "Observation or collection timestamp lacks timezone"
+
+    obs_utc = quote.observed_at.astimezone(timezone.utc)
+    col_utc = quote.collected_at.astimezone(timezone.utc)
+
+    # 4. observed_at <= collected_at (allowing 1s tolerance for resolution)
+    if obs_utc > col_utc + timedelta(seconds=1.0):
+        return False, f"Causal violation: observed_at ({obs_utc}) > collected_at ({col_utc})"
+
+    # 5. Future observation check (against now_dt or current UTC)
+    ref_now = now_dt.astimezone(timezone.utc) if (now_dt and now_dt.tzinfo) else datetime.now(timezone.utc)
+    tolerated_skew = 5.0
+    if (obs_utc - ref_now).total_seconds() > tolerated_skew:
+        return False, f"observed_at ({obs_utc}) is in the future relative to {ref_now}"
+    if (col_utc - ref_now).total_seconds() > tolerated_skew:
+        return False, f"collected_at ({col_utc}) is in the future relative to {ref_now}"
+
+    # 6. Freshness policy
+    limit = max_age_seconds if max_age_seconds is not None else PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS
+    age_seconds = (ref_now - obs_utc).total_seconds()
+    if age_seconds > limit:
+        return False, f"Quote is stale: age {age_seconds:.1f}s exceeds canonical limit of {limit:.1f}s"
+
+    # 7. Evidence hash & provenance
+    if not quote.source or not quote.source.strip():
+        return False, "Missing quote source"
+    if not quote.source_ref or not quote.source_ref.strip():
+        return False, "Missing quote source_ref"
+
+    if not quote.raw_evidence or not isinstance(quote.raw_evidence, dict):
+        return False, "Missing or invalid raw_evidence"
+
+    expected_sha = compute_evidence_sha256(quote.raw_evidence)
+    if quote.source_sha256 != expected_sha:
+        return False, f"source_sha256 mismatch with raw_evidence ({quote.source_sha256} != {expected_sha})"
+
+    return True, "OK"
+
+
+def check_entry_quote_path(
+    verify_runtime: bool = False,
+    ticker: Optional[str] = None,
+    tickers: Optional[List[str]] = None,
+    now_dt: Optional[datetime] = None,
+) -> tuple[bool, str, str]:
+    """Inspect read-only entry quote retrieval contract (NEXUS-004-R4)."""
     try:
         from backend.app.data.feed import get_evidenced_quote
-        if verify_runtime:
-            import inspect
-            sig = inspect.signature(get_evidenced_quote)
-            if "ticker" not in sig.parameters:
-                return False, "BLOCKED", "get_evidenced_quote missing ticker parameter"
-            return True, "BEHAVIORALLY_VERIFIED", "Entry quote contract behaviorally verified"
-        return True, "STRUCTURALLY_PRESENT", "Entry quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
+        import inspect
+        sig = inspect.signature(get_evidenced_quote)
+        if "ticker" not in sig.parameters:
+            return False, "BLOCKED", "get_evidenced_quote missing ticker parameter"
+
+        if not verify_runtime:
+            return True, "STRUCTURALLY_PRESENT", "Entry quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
+
+        # Genuine runtime verification
+        probe_tickers = [ticker] if ticker else (list(tickers) if tickers is not None else None)
+        if probe_tickers is None:
+            try:
+                from trading_bot.core.config import AppConfig
+                app_cfg = AppConfig.load()
+                raw = app_cfg.get("_universe", "tickers", default=[]) or []
+                probe_tickers = [t for t in raw if t.strip()]
+            except Exception:
+                probe_tickers = []
+            if not probe_tickers:
+                probe_tickers = ["PETR4.SA"]
+
+        if not probe_tickers:
+            return False, "BLOCKED", "No usable ticker available for runtime quote verification"
+
+        tested: List[str] = []
+        for t in probe_tickers:
+            quote = get_evidenced_quote(t)
+            valid, reason = _verify_evidenced_quote_contract(quote, expected_ticker=t, now_dt=now_dt)
+            if not valid:
+                return False, "RUNTIME_UNVERIFIED", f"Entry quote runtime verification failed for {t}: {reason}"
+            tested.append(t)
+
+        return True, "BEHAVIORALLY_VERIFIED", f"Entry quote contract behaviorally verified with valid quote evidence for {', '.join(tested)}"
     except Exception as e:
         return False, "BLOCKED", f"Entry quote path unavailable: {e}"
 
 
-def check_exit_quote_path(verify_runtime: bool = False) -> tuple[bool, str, str]:
-    """Inspect read-only exit quote extraction contract (NEXUS-004-R3)."""
+def check_exit_quote_path(
+    verify_runtime: bool = False,
+    ticker: Optional[str] = None,
+    tickers: Optional[List[str]] = None,
+    now_dt: Optional[datetime] = None,
+) -> tuple[bool, str, str]:
+    """Inspect read-only exit quote extraction contract (NEXUS-004-R4)."""
     try:
         from backend.app.data.feed import get_evidenced_quote
         from backend.app.main import _price_is_trustworthy
-        if verify_runtime:
-            import inspect
-            sig = inspect.signature(get_evidenced_quote)
-            if "ticker" not in sig.parameters:
-                return False, "BLOCKED", "get_evidenced_quote missing ticker parameter"
-            return True, "BEHAVIORALLY_VERIFIED", "Exit quote contract behaviorally verified"
-        return True, "STRUCTURALLY_PRESENT", "Exit quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
+        import inspect
+        sig = inspect.signature(get_evidenced_quote)
+        if "ticker" not in sig.parameters:
+            return False, "BLOCKED", "get_evidenced_quote missing ticker parameter"
+        sig_exit = inspect.signature(_price_is_trustworthy)
+        if "price" not in sig_exit.parameters:
+            return False, "BLOCKED", "_price_is_trustworthy missing price parameter"
+
+        if not verify_runtime:
+            return True, "STRUCTURALLY_PRESENT", "Exit quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
+
+        # Genuine runtime verification
+        probe_tickers = [ticker] if ticker else (list(tickers) if tickers is not None else None)
+        if probe_tickers is None:
+            try:
+                from trading_bot.core.config import AppConfig
+                app_cfg = AppConfig.load()
+                raw = app_cfg.get("_universe", "tickers", default=[]) or []
+                probe_tickers = [t for t in raw if t.strip()]
+            except Exception:
+                probe_tickers = []
+            if not probe_tickers:
+                probe_tickers = ["PETR4.SA"]
+
+        if not probe_tickers:
+            return False, "BLOCKED", "No usable ticker available for runtime quote verification"
+
+        try:
+            from backend.app import worker_state
+            exit_ttl = worker_state.exit_price_cache_ttl_seconds()
+        except Exception:
+            exit_ttl = 5.0
+
+        tested: List[str] = []
+        for t in probe_tickers:
+            quote = get_evidenced_quote(t, ttl=exit_ttl)
+            valid, reason = _verify_evidenced_quote_contract(quote, expected_ticker=t, now_dt=now_dt)
+            if not valid:
+                return False, "RUNTIME_UNVERIFIED", f"Exit quote runtime verification failed for {t}: {reason}"
+
+            raw = quote.raw_evidence or {}
+            trustworthy = _price_is_trustworthy(
+                quote.price,
+                open_=raw.get("open"),
+                high=raw.get("high"),
+                low=raw.get("low"),
+                observed_at=quote.observed_at,
+                collected_at=quote.collected_at,
+                now=now_dt,
+            )
+            if not trustworthy:
+                return False, "RUNTIME_UNVERIFIED", f"Exit quote price is not trustworthy for {t}"
+            tested.append(t)
+
+        return True, "BEHAVIORALLY_VERIFIED", f"Exit quote contract behaviorally verified with valid quote evidence for {', '.join(tested)}"
     except Exception as e:
         return False, "BLOCKED", f"Exit quote path unavailable: {e}"
 
@@ -410,14 +567,6 @@ def run_paper_preflight(
     system_messages.append(storage_msg)
 
     valuation_ok, val_honesty, valuation_msg = check_valuation_subsystem()
-    system_messages.append(valuation_msg)
-
-    entry_qp_ok, entry_qp_status, entry_qp_msg = check_entry_quote_path(verify_runtime=verify_runtime_quotes)
-    system_messages.append(entry_qp_msg)
-
-    exit_qp_ok, exit_qp_status, exit_qp_msg = check_exit_quote_path(verify_runtime=verify_runtime_quotes)
-    system_messages.append(exit_qp_msg)
-
     # 2. Universe tickers to check
     universe_loaded_ok = True
     if tickers is not None:
@@ -461,6 +610,20 @@ def run_paper_preflight(
 
     if max_tickers and max_tickers > 0:
         eval_tickers = eval_tickers[:max_tickers]
+
+    entry_qp_ok, entry_qp_status, entry_qp_msg = check_entry_quote_path(
+        verify_runtime=verify_runtime_quotes,
+        tickers=eval_tickers,
+        now_dt=now_dt,
+    )
+    system_messages.append(entry_qp_msg)
+
+    exit_qp_ok, exit_qp_status, exit_qp_msg = check_exit_quote_path(
+        verify_runtime=verify_runtime_quotes,
+        tickers=eval_tickers,
+        now_dt=now_dt,
+    )
+    system_messages.append(exit_qp_msg)
 
     ticker_results: List[TickerPreflightStatus] = []
 
@@ -611,8 +774,8 @@ def run_paper_preflight(
         and cb_cfg_ok
         and storage_ok
         and valuation_ok
-        and entry_qp_ok
-        and exit_qp_ok
+        and (entry_qp_status != "BLOCKED")
+        and (exit_qp_status != "BLOCKED")
         and universe_loaded_ok
         and (trade_mutations == 0)
         and (portfolio_mutations == 0)

@@ -139,14 +139,22 @@ def make_test_evidenced_quote(
     ticker: str = "PETR4.SA",
     price: float = 30.0,
     age_seconds: float = 0.0,
+    now_dt = None,
 ):
     import datetime
     from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
-    obs = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=age_seconds)
+    if now_dt is not None:
+        base = now_dt.astimezone(datetime.timezone.utc) if now_dt.tzinfo else now_dt.replace(tzinfo=datetime.timezone.utc)
+    else:
+        base = datetime.datetime.now(datetime.timezone.utc)
+    obs = base - datetime.timedelta(seconds=age_seconds)
     t_clean = ticker.upper()
     raw = {
         "ticker": t_clean,
         "close": float(price),
+        "open": float(price),
+        "high": float(price),
+        "low": float(price),
         "source": "yfinance",
         "price_kind": "bar_close",
         "interval": "1m",
