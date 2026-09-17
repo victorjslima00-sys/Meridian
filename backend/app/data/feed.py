@@ -121,6 +121,10 @@ def _extract_raw_evidence_from_df(
         date_val = candle["datetime"]
     elif "index" in candle and not pd.isna(candle["index"]):
         date_val = candle["index"]
+    elif isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0 and not pd.isna(df.index[-1]):
+        date_val = df.index[-1]
+    elif hasattr(candle, "name") and candle.name is not None and not pd.isna(candle.name) and not isinstance(candle.name, int):
+        date_val = candle.name
 
     # Condition 1: Missing source observation timestamp -> fail closed (None)
     # Collection clock must never be substituted as observation time.
@@ -384,14 +388,14 @@ def get_evidenced_quote(ticker: str, ttl: Optional[float] = None) -> Optional[Ev
         key = _cache_key(normalized, "1d", "1m")
         effective_ttl = ttl if ttl is not None else PRICE_CACHE_TTL_SECONDS
 
-        # Retrieve 1m candle via fetch_recent_data (which handles caching, deduplication and mock hooks)
+        # Retrieve 1m candle via fetch_recent_data (handles caching and deduplication)
         df = fetch_recent_data(ticker, period="1d", interval="1m", ttl=effective_ttl)
         if df is None or df.empty:
             return None
 
         cached = _cache_get_entry(key, effective_ttl)
         if cached is None or (cached[0] is not df and not cached[0].equals(df)):
-            # If df is freshly fetched or mocked and differs from cache, extract raw evidence from df
+            # If df is freshly fetched and differs from cache, extract raw evidence from df
             now_utc = datetime.now(timezone.utc)
             extracted = _extract_raw_evidence_from_df(
                 ticker, normalized, "1d", "1m", df, now_utc

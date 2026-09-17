@@ -308,7 +308,7 @@ def check_b3_session_calendar(now: Optional[datetime] = None) -> tuple[bool, str
 
 def _verify_evidenced_quote_contract(
     quote: Any,
-    expected_ticker: str,
+    expected_ticker: Optional[str] = None,
     now_dt: Optional[datetime] = None,
     max_age_seconds: Optional[float] = None,
 ) -> tuple[bool, str]:
@@ -326,10 +326,14 @@ def _verify_evidenced_quote_contract(
         return False, f"Quote is not an EvidencedQuote instance (got {type(quote)})"
 
     # 1. Ticker binding
-    norm_expected = expected_ticker.upper().replace(".SA", "")
-    norm_actual = str(quote.ticker).upper().replace(".SA", "")
-    if norm_expected != norm_actual:
-        return False, f"Ticker binding mismatch: expected {expected_ticker}, got {quote.ticker}"
+    if not quote.ticker or not str(quote.ticker).strip():
+        return False, "Quote ticker is missing or empty"
+
+    if expected_ticker is not None:
+        norm_expected = str(expected_ticker).upper().replace(".SA", "").strip()
+        norm_actual = str(quote.ticker).upper().replace(".SA", "").strip()
+        if norm_expected != norm_actual:
+            return False, f"Ticker binding mismatch: expected {expected_ticker}, got {quote.ticker}"
 
     # 2. Price finite > 0 and not bool
     if isinstance(quote.price, bool) or type(quote.price).__name__ in ("bool", "bool_"):
@@ -344,12 +348,18 @@ def _verify_evidenced_quote_contract(
     obs_utc = quote.observed_at.astimezone(timezone.utc)
     col_utc = quote.collected_at.astimezone(timezone.utc)
 
-    # 4. observed_at <= collected_at (allowing 1s tolerance for resolution)
-    if obs_utc > col_utc + timedelta(seconds=1.0):
+    # 4. observed_at <= collected_at (strict causal invariant: NEXUS-004-R4)
+    if obs_utc > col_utc:
         return False, f"Causal violation: observed_at ({obs_utc}) > collected_at ({col_utc})"
 
     # 5. Future observation check (against now_dt or current UTC)
-    ref_now = now_dt.astimezone(timezone.utc) if (now_dt and now_dt.tzinfo) else datetime.now(timezone.utc)
+    if now_dt is not None:
+        if now_dt.tzinfo is None:
+            return False, "Explicit naive now_dt rejected (must be timezone-aware)"
+        ref_now = now_dt.astimezone(timezone.utc)
+    else:
+        ref_now = datetime.now(timezone.utc)
+
     tolerated_skew = 5.0
     if (obs_utc - ref_now).total_seconds() > tolerated_skew:
         return False, f"observed_at ({obs_utc}) is in the future relative to {ref_now}"
@@ -396,13 +406,19 @@ def check_entry_quote_path(
             return True, "STRUCTURALLY_PRESENT", "Entry quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
 
         # Genuine runtime verification
-        probe_tickers = [ticker] if ticker else (list(tickers) if tickers is not None else None)
+        if ticker:
+            probe_tickers = [ticker.strip()] if ticker.strip() else []
+        elif tickers is not None:
+            probe_tickers = [t.strip() for t in tickers if t and t.strip()]
+        else:
+            probe_tickers = None
+
         if probe_tickers is None:
             try:
                 from trading_bot.core.config import AppConfig
                 app_cfg = AppConfig.load()
                 raw = app_cfg.get("_universe", "tickers", default=[]) or []
-                probe_tickers = [t for t in raw if t.strip()]
+                probe_tickers = [t.strip() for t in raw if t and t.strip()]
             except Exception:
                 probe_tickers = []
             if not probe_tickers:
@@ -446,13 +462,19 @@ def check_exit_quote_path(
             return True, "STRUCTURALLY_PRESENT", "Exit quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
 
         # Genuine runtime verification
-        probe_tickers = [ticker] if ticker else (list(tickers) if tickers is not None else None)
+        if ticker:
+            probe_tickers = [ticker.strip()] if ticker.strip() else []
+        elif tickers is not None:
+            probe_tickers = [t.strip() for t in tickers if t and t.strip()]
+        else:
+            probe_tickers = None
+
         if probe_tickers is None:
             try:
                 from trading_bot.core.config import AppConfig
                 app_cfg = AppConfig.load()
                 raw = app_cfg.get("_universe", "tickers", default=[]) or []
-                probe_tickers = [t for t in raw if t.strip()]
+                probe_tickers = [t.strip() for t in raw if t and t.strip()]
             except Exception:
                 probe_tickers = []
             if not probe_tickers:

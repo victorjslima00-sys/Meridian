@@ -2188,14 +2188,25 @@ def test_r4_regression_c_preflight_runtime_valid_controlled_quote_passes(tmp_pat
     assert report.overall_status == "PASS"
 
 
-def test_r4_regression_d_signature_only_never_produces_runtime_pass(monkeypatch):
+def test_r4_regression_d_signature_only_never_produces_runtime_pass(tmp_path, monkeypatch, mock_circuit_breaker):
     """D. Signature-only existence can NEVER produce runtime PASS."""
     from scripts.paper_session_preflight import (
         check_entry_quote_path,
         check_exit_quote_path,
+        run_paper_preflight,
     )
     import inspect
     from backend.app.data.feed import get_evidenced_quote
+    from scripts import paper_session_preflight
+
+    ticker = "PETR4.SA"
+    test_db, custom_reg, df_synth, trade_dt = _setup_preflight_environment(tmp_path, ticker)
+
+    class MockMarket:
+        def fetch_ohlcv(self, t, period="2y", interval="1d"):
+            return df_synth.copy()
+
+    monkeypatch.setattr(paper_session_preflight, "resolve_market", lambda sym: MockMarket())
 
     # Prove signature is structurally present and has 'ticker' parameter
     sig = inspect.signature(get_evidenced_quote)
@@ -2205,13 +2216,26 @@ def test_r4_regression_d_signature_only_never_produces_runtime_pass(monkeypatch)
     monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: None)
 
     # Runtime verification with valid signature + failing provider MUST NOT return BEHAVIORALLY_VERIFIED
-    ok_in, status_in, _ = check_entry_quote_path(verify_runtime=True, tickers=["PETR4.SA"])
+    ok_in, status_in, _ = check_entry_quote_path(verify_runtime=True, tickers=[ticker])
     assert status_in != "BEHAVIORALLY_VERIFIED"
     assert ok_in is False
 
-    ok_out, status_out, _ = check_exit_quote_path(verify_runtime=True, tickers=["PETR4.SA"])
+    ok_out, status_out, _ = check_exit_quote_path(verify_runtime=True, tickers=[ticker])
     assert status_out != "BEHAVIORALLY_VERIFIED"
     assert ok_out is False
+
+    # Preflight run with valid signature + failing provider MUST NOT become PASS
+    report = run_paper_preflight(
+        registry_path=custom_reg,
+        db_path=test_db,
+        storage_dir=tmp_path / "storage",
+        project_root=tmp_path,
+        tickers=[ticker],
+        now_dt=trade_dt,
+        verify_runtime_quotes=True,
+    )
+    assert report.entry_ready != "PASS"
+    assert report.overall_status != "PASS"
 
 
 def test_r4_regression_e_get_evidenced_quote_independent_of_mocked_get_current_price(monkeypatch):
@@ -2365,4 +2389,98 @@ def test_r4_regression_g_feed_failure_fails_closed(monkeypatch):
     with feed._cache_meta_lock:
         feed._cache.clear()
     assert feed.get_evidenced_quote("BBDC4.SA") is None
+
+
+def test_r4_regression_h_quote_contract_causal_and_clock_invariants(monkeypatch):
+    """H. Hardened contract: strict causality (obs <= col), explicit naive now_dt rejection, ticker sanitization, DatetimeIndex."""
+    from scripts.paper_session_preflight import (
+        _verify_evidenced_quote_contract,
+        check_entry_quote_path,
+        check_exit_quote_path,
+    )
+    from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
+    from backend.app.data import feed
+    import pandas as pd
+
+    now = datetime.datetime(2026, 3, 11, 14, 0, tzinfo=timezone.utc)
+
+    # 1. Strict causal invariant: EvidencedQuote rejects instantiation when observed_at > collected_at
+    col = now
+    obs_causal_violation = col + datetime.timedelta(seconds=0.5)
+    raw_causal = {
+        "ticker": "PETR4.SA", "close": 30.0, "source": "yfinance", "price_kind": "bar_close",
+        "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": obs_causal_violation.isoformat(),
+        "collected_at": col.isoformat(),
+    }
+    with pytest.raises(Exception) as exc_causal:
+        EvidencedQuote(
+            ticker="PETR4.SA", price=30.0, currency="BRL", source="yfinance", price_kind="bar_close",
+            interval="1m", vendor_symbol="PETR4.SA", observed_at=obs_causal_violation, collected_at=col,
+            source_ref="test", source_sha256=compute_evidence_sha256(raw_causal), raw_evidence=raw_causal,
+        )
+    assert "observed_at must be <= collected_at" in str(exc_causal.value)
+
+    # Furthermore, _verify_evidenced_quote_contract strictly rejects any quote where obs > col
+    quote_causal = EvidencedQuote.__new__(EvidencedQuote)
+    quote_causal.__dict__.update({
+        "ticker": "PETR4.SA", "price": 30.0, "currency": "BRL", "source": "yfinance",
+        "price_kind": "bar_close", "interval": "1m", "vendor_symbol": "PETR4.SA",
+        "observed_at": obs_causal_violation, "collected_at": col, "source_ref": "test",
+        "source_sha256": "0" * 64, "raw_evidence": raw_causal,
+    })
+    valid, reason = _verify_evidenced_quote_contract(quote_causal, expected_ticker="PETR4.SA", now_dt=now)
+    assert valid is False
+    assert "Causal violation" in reason
+
+    # 2. Explicit naive now_dt rejected (must not silently fall back to wall-clock time)
+    naive_clock = datetime.datetime(2026, 3, 11, 14, 0)
+    raw_valid = {
+        "ticker": "PETR4.SA", "close": 30.0, "source": "yfinance", "price_kind": "bar_close",
+        "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": now.isoformat(),
+        "collected_at": now.isoformat(),
+    }
+    quote_valid = EvidencedQuote(
+        ticker="PETR4.SA", price=30.0, currency="BRL", source="yfinance", price_kind="bar_close",
+        interval="1m", vendor_symbol="PETR4.SA", observed_at=now, collected_at=now,
+        source_ref="test", source_sha256=compute_evidence_sha256(raw_valid), raw_evidence=raw_valid,
+    )
+    valid_naive, reason_naive = _verify_evidenced_quote_contract(quote_valid, expected_ticker="PETR4.SA", now_dt=naive_clock)
+    assert valid_naive is False
+    assert "Explicit naive now_dt rejected" in reason_naive
+
+    # Preflight entry/exit quote path checks also fail closed on naive now_dt
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda ticker, *a, **k: quote_valid)
+    ok_in, status_in, msg_in = check_entry_quote_path(verify_runtime=True, tickers=["PETR4.SA"], now_dt=naive_clock)
+    assert ok_in is False
+    assert status_in == "RUNTIME_UNVERIFIED"
+    assert "Explicit naive now_dt rejected" in msg_in
+
+    # 3. Optional expected_ticker=None verifies ticker presence defensively without AttributeError
+    valid_no_expected, _ = _verify_evidenced_quote_contract(quote_valid, expected_ticker=None, now_dt=now)
+    assert valid_no_expected is True
+
+    # 4. Sanitization of empty/whitespace probe tickers
+    ok_empty, status_empty, msg_empty = check_entry_quote_path(verify_runtime=True, tickers=["   ", ""])
+    assert ok_empty is False
+    assert status_empty == "BLOCKED"
+    assert "No usable ticker available" in msg_empty
+
+
+def test_r4_regression_i_feed_datetimeindex_extraction(monkeypatch):
+    """I. DatetimeIndex DataFrame in feed.py extracts raw evidence successfully."""
+    from backend.app.data import feed
+    import pandas as pd
+
+    now = datetime.datetime(2026, 3, 11, 14, 0, tzinfo=timezone.utc)
+    df_dtindex = pd.DataFrame(
+        {"close": [31.5], "open": [31.0], "high": [32.0], "low": [30.5], "volume": [5000.0]},
+        index=pd.DatetimeIndex([now]),
+    )
+    monkeypatch.setattr(feed, "fetch_recent_data", lambda *a, **kw: df_dtindex.copy())
+    with feed._cache_meta_lock:
+        feed._cache.clear()
+    q_extracted = feed.get_evidenced_quote("VALE3.SA")
+    assert q_extracted is not None
+    assert q_extracted.price == 31.5
+    assert q_extracted.observed_at == now
 
