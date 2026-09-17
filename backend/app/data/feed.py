@@ -4,7 +4,7 @@ import logging
 import threading
 from collections import OrderedDict
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import yfinance as yf
 import pandas as pd
@@ -159,14 +159,29 @@ def _extract_raw_evidence_from_df(
         )
         return None
 
-    close_p = float(candle["close"]) if "close" in candle and not pd.isna(candle["close"]) else 0.0
-    if math.isnan(close_p) or math.isinf(close_p) or close_p <= 0.0:
+    def _to_clean_float(val: Any) -> Optional[float]:
+        if val is None or pd.isna(val) or isinstance(val, bool) or type(val).__name__ in ("bool", "bool_"):
+            return None
+        try:
+            f = float(val)
+            return f if math.isfinite(f) else None
+        except (TypeError, ValueError):
+            return None
+
+    close_val = candle.get("close") if hasattr(candle, "get") else (candle["close"] if "close" in candle else None)
+    close_p = _to_clean_float(close_val)
+    if close_p is None or close_p <= 0.0:
         return None
 
-    open_p = float(candle["open"]) if "open" in candle and not pd.isna(candle["open"]) else None
-    high_p = float(candle["high"]) if "high" in candle and not pd.isna(candle["high"]) else None
-    low_p = float(candle["low"]) if "low" in candle and not pd.isna(candle["low"]) else None
-    vol = float(candle["volume"]) if "volume" in candle and not pd.isna(candle["volume"]) else None
+    open_val = candle.get("open") if hasattr(candle, "get") else (candle["open"] if "open" in candle else None)
+    high_val = candle.get("high") if hasattr(candle, "get") else (candle["high"] if "high" in candle else None)
+    low_val = candle.get("low") if hasattr(candle, "get") else (candle["low"] if "low" in candle else None)
+    vol_val = candle.get("volume") if hasattr(candle, "get") else (candle["volume"] if "volume" in candle else None)
+
+    open_p = _to_clean_float(open_val)
+    high_p = _to_clean_float(high_val)
+    low_p = _to_clean_float(low_val)
+    vol = _to_clean_float(vol_val)
 
     raw_evidence = {
         "ticker": ticker.upper(),

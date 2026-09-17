@@ -180,6 +180,121 @@ class TestRunExitScan:
         assert args[0] == trade_id
         assert args[1] == 27.5
 
+    async def test_exit_scan_persisted_real_executor_boundary_closes_position_and_mutates_portfolio(
+        self, temp_db_path
+    ):
+        """Integration test with real ExecutorAgent: proves automatic exit scan
+        closes trade in DB and reconciles portfolio when real stop is breached."""
+        from backend.app.markets.b3_session import (
+            AutonomousSessionAuthority,
+            B3DayType,
+            B3SessionPhase,
+            override_session_authority,
+        )
+        trade_id = _insert_active_trade(
+            temp_db_path, "PETR4.SA", "BUY", entry_price=30.0,
+            target_price=35.0, stop_loss=28.0,
+        )
+
+        conn = sqlite3.connect(temp_db_path)
+        trade_before = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchall()
+        pf_before = conn.execute("SELECT * FROM portfolio").fetchall()
+        conn.close()
+
+        open_auth = AutonomousSessionAuthority(
+            override_fn=lambda dt=None: (
+                True,
+                "Trading Open",
+                B3DayType.NORMAL_TRADING_DAY,
+                B3SessionPhase.CONTINUOUS,
+            )
+        )
+
+        df = _make_price_row(close=27.5)  # stop loss breached
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch("backend.app.data.feed.fetch_recent_data", return_value=df), \
+                 patch("backend.app.agents.executor.DB_PATH", temp_db_path), \
+                 override_session_authority(open_auth):
+                from backend.app.main import _run_exit_scan
+                effective = await _run_exit_scan()
+
+            assert effective is True
+
+            conn = sqlite3.connect(temp_db_path)
+            trade_after = conn.execute("SELECT status, exit_price, exit_reason FROM trades WHERE id = ?", (trade_id,)).fetchone()
+            pf_after = conn.execute("SELECT * FROM portfolio").fetchall()
+            conn.close()
+
+            assert trade_after[0] == "closed"
+            assert trade_after[1] == 27.5
+            assert "Stop Loss" in trade_after[2]
+            assert pf_after != pf_before
+        finally:
+            database_module.DB_PATH = original_path
+
+    async def test_exit_scan_persisted_real_executor_boundary_rejects_stale_quote_zero_mutation(
+        self, temp_db_path
+    ):
+        """Integration test with real ExecutorAgent: proves stale quote (>60s)
+        is rejected by exit scan, resulting in zero trade and zero portfolio mutation."""
+        from datetime import timedelta
+        from backend.app.markets.b3_session import (
+            AutonomousSessionAuthority,
+            B3DayType,
+            B3SessionPhase,
+            override_session_authority,
+        )
+        trade_id = _insert_active_trade(
+            temp_db_path, "PETR4.SA", "BUY", entry_price=30.0,
+            target_price=35.0, stop_loss=28.0,
+        )
+
+        conn = sqlite3.connect(temp_db_path)
+        trade_before = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchall()
+        pf_before = conn.execute("SELECT * FROM portfolio").fetchall()
+        conn.close()
+
+        open_auth = AutonomousSessionAuthority(
+            override_fn=lambda dt=None: (
+                True,
+                "Trading Open",
+                B3DayType.NORMAL_TRADING_DAY,
+                B3SessionPhase.CONTINUOUS,
+            )
+        )
+
+        # 120s old candle
+        stale_time = datetime.now(timezone.utc) - timedelta(seconds=120.0)
+        df = pd.DataFrame({
+            "open": [27.5], "high": [27.5], "low": [27.5], "close": [27.5],
+            "volume": [1000], "date": [stale_time],
+        })
+
+        original_path = database_module.DB_PATH
+        database_module.DB_PATH = temp_db_path
+        try:
+            with patch("backend.app.data.feed.fetch_recent_data", return_value=df), \
+                 patch("backend.app.agents.executor.DB_PATH", temp_db_path), \
+                 override_session_authority(open_auth):
+                from backend.app.main import _run_exit_scan
+                effective = await _run_exit_scan()
+
+            assert effective is False
+
+            conn = sqlite3.connect(temp_db_path)
+            trade_after = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchall()
+            pf_after = conn.execute("SELECT * FROM portfolio").fetchall()
+            conn.close()
+
+            # Zero mutation on both tables
+            assert trade_after == trade_before
+            assert pf_after == pf_before
+        finally:
+            database_module.DB_PATH = original_path
+
     async def test_exit_scan_ignores_tickers_without_active_position(
         self, temp_db_path
     ):

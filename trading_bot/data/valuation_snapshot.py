@@ -74,13 +74,17 @@ class EvidencedQuote(BaseModel):
     @field_validator("price")
     @classmethod
     def validate_price(cls, v: Any) -> float:
-        if isinstance(v, bool):
+        if isinstance(v, bool) or type(v).__name__ in ("bool", "bool_"):
             raise ValueError("boolean is not a valid price")
-        if math.isnan(v) or math.isinf(v):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
             raise ValueError("price must be a finite number")
-        if v <= 0.0:
+        if math.isnan(fv) or math.isinf(fv):
+            raise ValueError("price must be a finite number")
+        if fv <= 0.0:
             raise ValueError("price must be positive")
-        return float(v)
+        return fv
 
     @field_validator("ticker")
     @classmethod
@@ -115,7 +119,7 @@ class EvidencedQuote(BaseModel):
 
         # 2. price vs raw close
         raw_close = raw.get("close")
-        if raw_close is None or isinstance(raw_close, bool):
+        if raw_close is None or isinstance(raw_close, bool) or type(raw_close).__name__ in ("bool", "bool_"):
             raise ValueError("raw_evidence missing 'close' or is boolean")
         try:
             raw_close_val = float(raw_close)

@@ -504,10 +504,15 @@ def test_price_trustworthy_rejects_non_finite_and_bool():
     assert _price_is_trustworthy(float("nan")) is False
     assert _price_is_trustworthy(True) is False
     assert _price_is_trustworthy(False) is False
+    assert _price_is_trustworthy(np.bool_(True)) is False
+    assert _price_is_trustworthy(np.bool_(False)) is False
     assert _price_is_trustworthy(0.0) is False
     assert _price_is_trustworthy(-5.0) is False
     assert _price_is_trustworthy(None) is False
     assert _price_is_trustworthy(32.50) is True
+    assert _price_is_trustworthy(32.50, open_=np.bool_(True)) is False
+    assert _price_is_trustworthy(32.50, high=np.bool_(True)) is False
+    assert _price_is_trustworthy(32.50, low=np.bool_(True)) is False
 
 
 def test_price_trustworthy_checks_timestamp_freshness():
@@ -799,6 +804,11 @@ def test_r2_regression_b_wrong_ticker_evidence_rejected_zero_mutation(tmp_path):
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
     executor = ExecutorAgent(str(db_file))
 
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
+
     # Evidence for VALE3 when closing PETR4
     vale_quote = make_test_evidenced_quote("VALE3.SA", 33.0)
     res = executor.close_order(1, 33.0, "Take Profit hit", evidence=vale_quote)
@@ -806,19 +816,24 @@ def test_r2_regression_b_wrong_ticker_evidence_rejected_zero_mutation(tmp_path):
     assert "does not match trade ticker" in res["reason"]
 
     conn = sqlite3.connect(str(db_file))
-    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
-    pf = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio WHERE id = 1").fetchone()
+    trades_after = conn.execute("SELECT * FROM trades").fetchall()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
-    assert trade[0] == "active"
-    assert pf[1] == 300.0
+    assert trades_after == trades_before
+    assert port_after == port_before
 
 
 def test_r2_regression_c_tampered_raw_evidence_hash_rejected_zero_mutation(tmp_path):
-    """C. Tampered raw evidence/hash -> rejected, zero mutation."""
+    """C. Tampered raw evidence/hash -> rejected, zero mutation on both tables."""
     from tests.conftest import make_test_evidenced_quote
     db_file = tmp_path / "test_c.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
     executor = ExecutorAgent(str(db_file))
+
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
 
     quote = make_test_evidenced_quote("PETR4.SA", 33.0)
     # Tamper source_sha256 directly
@@ -829,31 +844,42 @@ def test_r2_regression_c_tampered_raw_evidence_hash_rejected_zero_mutation(tmp_p
     assert "mismatch" in res["reason"]
 
     conn = sqlite3.connect(str(db_file))
-    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    trades_after = conn.execute("SELECT * FROM trades").fetchall()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
-    assert trade[0] == "active"
+    assert trades_after == trades_before
+    assert port_after == port_before
 
 
 def test_r2_regression_d_stale_observation_rejected_zero_mutation(tmp_path):
-    """D. Stale observation (> 300s) -> rejected, zero mutation."""
+    """D. Stale observation under canonical 60s policy (e.g. 65s, 120s) -> rejected, zero mutation."""
     from tests.conftest import make_test_evidenced_quote
     db_file = tmp_path / "test_d.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
     executor = ExecutorAgent(str(db_file))
 
-    stale_quote = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=301.0)
-    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=stale_quote)
-    assert res["status"] == "rejected"
-    assert "stale" in res["reason"]
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
+
+    for stale_age in [65.0, 120.0, 301.0]:
+        stale_quote = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=stale_age)
+        res = executor.close_order(1, 33.0, "Take Profit hit", evidence=stale_quote)
+        assert res["status"] == "rejected"
+        assert "stale" in res["reason"]
 
     conn = sqlite3.connect(str(db_file))
-    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    trades_after = conn.execute("SELECT * FROM trades").fetchall()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
-    assert trade[0] == "active"
+    assert trades_after == trades_before
+    assert port_after == port_before
 
 
 def test_r2_regression_e_naive_quote_timestamp_rejected_zero_mutation(tmp_path):
     """E. Naive quote timestamp -> rejected, zero mutation (exercises actual naive datetime validation)."""
+    from tests.conftest import make_test_evidenced_quote
     db_file = tmp_path / "test_e.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
     executor = ExecutorAgent(str(db_file))
@@ -883,12 +909,20 @@ def test_r2_regression_e_naive_quote_timestamp_rejected_zero_mutation(tmp_path):
     port_before = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
 
-    class FakeQuote:
-        price = 33.0
-        observed_at = naive_dt  # naive
+    ev = make_test_evidenced_quote("PETR4.SA", 33.0)
+    object.__setattr__(ev, "observed_at", naive_dt)
 
-    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=FakeQuote())
+    # Rejection via model revalidation during close_order
+    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=ev)
     assert res["status"] == "rejected"
+    assert "timezone-aware" in res["reason"]
+
+    # Rejection via executor timestamp gate if model revalidation were bypassed
+    from unittest.mock import patch
+    with patch.object(EvidencedQuote, "model_validate", return_value=ev):
+        res2 = executor.close_order(1, 33.0, "Take Profit hit", evidence=ev)
+        assert res2["status"] == "rejected"
+        assert "naive" in res2["reason"]
 
     conn = sqlite3.connect(str(db_file))
     trade_after = conn.execute("SELECT * FROM trades").fetchall()
@@ -899,11 +933,16 @@ def test_r2_regression_e_naive_quote_timestamp_rejected_zero_mutation(tmp_path):
 
 
 def test_r2_regression_f_invalid_price_rejected_zero_mutation(tmp_path):
-    """F. NaN / +Inf / -Inf / bool / <=0 price -> rejected, zero mutation."""
+    """F. NaN / +Inf / -Inf / bool / <=0 price -> rejected, zero mutation on both tables."""
     from tests.conftest import make_test_evidenced_quote
     db_file = tmp_path / "test_f.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
     executor = ExecutorAgent(str(db_file))
+
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
 
     ev = make_test_evidenced_quote("PETR4.SA", 33.0)
 
@@ -912,9 +951,11 @@ def test_r2_regression_f_invalid_price_rejected_zero_mutation(tmp_path):
         assert res["status"] == "rejected"
 
     conn = sqlite3.connect(str(db_file))
-    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    trades_after = conn.execute("SELECT * FROM trades").fetchall()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
-    assert trade[0] == "active"
+    assert trades_after == trades_before
+    assert port_after == port_before
 
 
 def test_r2_regression_g_papersession_bare_current_prices_cannot_close(tmp_path, monkeypatch):
@@ -926,14 +967,21 @@ def test_r2_regression_g_papersession_bare_current_prices_cannot_close(tmp_path,
     # Feed is down / returns None for quotes
     monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda t, *a, **k: None)
 
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
+
     runner = PaperSessionRunner(session_id="sess_bare_g", db_path=str(db_file), storage_dir=str(storage_dir))
     rep = runner.run_cycle(signals=[], current_prices={"PETR4": 34.0})
 
     assert rep.orders_closed == 0
     conn = sqlite3.connect(str(db_file))
-    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    trades_after = conn.execute("SELECT * FROM trades").fetchall()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
-    assert trade[0] == "active"
+    assert trades_after == trades_before
+    assert port_after == port_before
 
     # Journal must record ORDER_REJECTED due to missing evidence
     events = runner.journal.load_events()
@@ -1082,43 +1130,132 @@ def test_r2_regression_k_exit_freshness_policy(tmp_path):
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
     executor = ExecutorAgent(str(db_file))
 
-    # 2. Materially future quote (now + 10s) -> rejected
-    future_obs = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=10.0)
-    raw_future = {
+    # 2. Materially future quotes (> 5.0s tolerance) -> rejected
+    for fut_offset in [6.0, 10.0]:
+        future_obs = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=fut_offset)
+        raw_future = {
+            "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
+            "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": future_obs.isoformat(),
+            "collected_at": future_obs.isoformat(),
+        }
+        future_quote = EvidencedQuote(
+            ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
+            interval="1m", vendor_symbol="PETR4.SA", observed_at=future_obs, collected_at=future_obs,
+            source_ref="test", source_sha256=compute_evidence_sha256(raw_future), raw_evidence=raw_future,
+        )
+        res_future = executor.close_order(1, 33.0, "Take Profit hit", evidence=future_quote)
+        assert res_future["status"] == "rejected"
+        assert "future" in res_future["reason"]
+
+    # 3. Future quote within skew tolerance (<= 5.0s, e.g. +3.0s) -> accepted
+    fut_ok_obs = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=3.0)
+    raw_fut_ok = {
         "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
-        "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": future_obs.isoformat(),
-        "collected_at": future_obs.isoformat(),
+        "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": fut_ok_obs.isoformat(),
+        "collected_at": fut_ok_obs.isoformat(),
     }
-    future_quote = EvidencedQuote(
+    fut_ok_quote = EvidencedQuote(
         ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
-        interval="1m", vendor_symbol="PETR4.SA", observed_at=future_obs, collected_at=future_obs,
-        source_ref="test", source_sha256=compute_evidence_sha256(raw_future), raw_evidence=raw_future,
+        interval="1m", vendor_symbol="PETR4.SA", observed_at=fut_ok_obs, collected_at=fut_ok_obs,
+        source_ref="test", source_sha256=compute_evidence_sha256(raw_fut_ok), raw_evidence=raw_fut_ok,
     )
-    res_future = executor.close_order(1, 33.0, "Take Profit hit", evidence=future_quote)
-    assert res_future["status"] == "rejected"
-    assert "future" in res_future["reason"]
+    # Test tolerance acceptance on clean DB
+    db_k2 = tmp_path / "test_k2.db"
+    _init_r2_test_db(db_k2, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    res_fut_ok = ExecutorAgent(str(db_k2)).close_order(1, 33.0, "Take Profit hit", evidence=fut_ok_quote)
+    assert res_fut_ok["status"] == "closed"
 
-    # 3. 120s old quote under 60s canonical policy -> rejected
-    quote_120 = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=120.0)
-    res_120 = executor.close_order(1, 33.0, "Take Profit hit", evidence=quote_120)
-    assert res_120["status"] == "rejected"
-    assert "stale" in res_120["reason"]
+    # 4. Freshness boundaries under 60.0s canonical policy (deterministic frozen clock):
+    import datetime as dt_mod
+    from unittest.mock import patch
+    fixed_now = dt_mod.datetime(2026, 3, 11, 14, 0, 0, tzinfo=dt_mod.timezone.utc)
 
-    # 4. Stale quote (65s old > 60s) -> rejected
-    quote_65 = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=65.0)
-    res_65 = executor.close_order(1, 33.0, "Take Profit hit", evidence=quote_65)
-    assert res_65["status"] == "rejected"
-    assert "stale" in res_65["reason"]
+    class RealDatetime(dt_mod.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return fixed_now.astimezone(tz)
+            return fixed_now
+
+    class FakeDatetimeModule:
+        pass
+
+    for attr in dir(dt_mod):
+        setattr(FakeDatetimeModule, attr, getattr(dt_mod, attr))
+    FakeDatetimeModule.datetime = RealDatetime
+
+    with patch("backend.app.agents.executor.datetime", FakeDatetimeModule):
+        # 59s old -> accepted
+        obs_59 = fixed_now - datetime.timedelta(seconds=59.0)
+        raw_59 = {
+            "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
+            "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": obs_59.isoformat(),
+            "collected_at": obs_59.isoformat(),
+        }
+        quote_59 = EvidencedQuote(
+            ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
+            interval="1m", vendor_symbol="PETR4.SA", observed_at=obs_59, collected_at=obs_59,
+            source_ref="test", source_sha256=compute_evidence_sha256(raw_59), raw_evidence=raw_59,
+        )
+        db_k3 = tmp_path / "test_k3.db"
+        _init_r2_test_db(db_k3, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+        res_59 = ExecutorAgent(str(db_k3)).close_order(1, 33.0, "Take Profit hit", evidence=quote_59)
+        assert res_59["status"] == "closed"
+
+        # 60.0s old -> accepted (boundary)
+        obs_60 = fixed_now - datetime.timedelta(seconds=60.0)
+        raw_60 = {
+            "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
+            "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": obs_60.isoformat(),
+            "collected_at": obs_60.isoformat(),
+        }
+        quote_60 = EvidencedQuote(
+            ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
+            interval="1m", vendor_symbol="PETR4.SA", observed_at=obs_60, collected_at=obs_60,
+            source_ref="test", source_sha256=compute_evidence_sha256(raw_60), raw_evidence=raw_60,
+        )
+        db_k4 = tmp_path / "test_k4.db"
+        _init_r2_test_db(db_k4, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+        res_60 = ExecutorAgent(str(db_k4)).close_order(1, 33.0, "Take Profit hit", evidence=quote_60)
+        assert res_60["status"] == "closed"
+
+        # 60.5s old (just over 60s) -> rejected
+        obs_60_5 = fixed_now - datetime.timedelta(seconds=60.5)
+        raw_60_5 = {
+            "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
+            "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": obs_60_5.isoformat(),
+            "collected_at": obs_60_5.isoformat(),
+        }
+        quote_60_5 = EvidencedQuote(
+            ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
+            interval="1m", vendor_symbol="PETR4.SA", observed_at=obs_60_5, collected_at=obs_60_5,
+            source_ref="test", source_sha256=compute_evidence_sha256(raw_60_5), raw_evidence=raw_60_5,
+        )
+        res_60_5 = executor.close_order(1, 33.0, "Take Profit hit", evidence=quote_60_5)
+        assert res_60_5["status"] == "rejected"
+        assert "stale" in res_60_5["reason"]
+
+        # 120s old quote under 60s canonical policy -> rejected
+        obs_120 = fixed_now - datetime.timedelta(seconds=120.0)
+        raw_120 = {
+            "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
+            "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": obs_120.isoformat(),
+            "collected_at": obs_120.isoformat(),
+        }
+        quote_120 = EvidencedQuote(
+            ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
+            interval="1m", vendor_symbol="PETR4.SA", observed_at=obs_120, collected_at=obs_120,
+            source_ref="test", source_sha256=compute_evidence_sha256(raw_120), raw_evidence=raw_120,
+        )
+        res_120 = executor.close_order(1, 33.0, "Take Profit hit", evidence=quote_120)
+        assert res_120["status"] == "rejected"
+        assert "stale" in res_120["reason"]
 
     # 5. Invalid max-age override -> rejected (cannot fail open)
     fresh_quote = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=15.0)
     for bad_limit in [float("nan"), float("inf"), -1.0, 0.0, True, False]:
         res_bad = executor.close_order(1, 33.0, "Take Profit hit", evidence=fresh_quote, max_observation_age_seconds=bad_limit)
         assert res_bad["status"] == "rejected"
-
-    # 6. Fresh 1m quote within canonical 60s policy (15s old) -> accepted
-    res_fresh = executor.close_order(1, 33.0, "Take Profit hit", evidence=fresh_quote)
-    assert res_fresh["status"] == "closed"
 
 
 def test_r2_regression_l_preflight_import_only_not_ready(tmp_path, monkeypatch, mock_circuit_breaker):
@@ -1238,6 +1375,7 @@ def test_r2_regression_l_preflight_import_only_not_ready(tmp_path, monkeypatch, 
         now_dt=trade_wednesday,
         verify_runtime_quotes=True,
     )
+    assert report_verified.infrastructure_ready == "PASS"
     assert report_verified.entry_ready == "PASS"
     assert report_verified.overall_status == "PASS"
 
@@ -1249,6 +1387,11 @@ def test_r2_regression_m_broker_close_preserves_and_requires_evidence(tmp_path):
     db_file = tmp_path / "test_m.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
 
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
+
     broker = PaperBroker()
     with patch("backend.app.agents.executor.DB_PATH", str(db_file)):
         # Calling broker close without evidence is rejected
@@ -1256,18 +1399,38 @@ def test_r2_regression_m_broker_close_preserves_and_requires_evidence(tmp_path):
         assert res_no_ev["status"] == "rejected"
         assert "evidence is required" in res_no_ev["reason"]
 
+        # Intervening snapshot proves zero mutation before valid close
+        conn = sqlite3.connect(str(db_file))
+        trades_intervening = conn.execute("SELECT * FROM trades").fetchall()
+        port_intervening = conn.execute("SELECT * FROM portfolio").fetchall()
+        conn.close()
+        assert trades_intervening == trades_before
+        assert port_intervening == port_before
+
         # Calling broker close with valid evidence closes successfully
         ev = make_test_evidenced_quote("PETR4.SA", 33.0)
         res_with_ev = broker.close_order(1, 33.0, "Take Profit hit", evidence=ev)
         assert res_with_ev["status"] == "closed"
 
+        conn = sqlite3.connect(str(db_file))
+        trades_after = conn.execute("SELECT * FROM trades").fetchall()
+        port_after = conn.execute("SELECT * FROM portfolio").fetchall()
+        conn.close()
+        assert trades_after != trades_before
+        assert port_after != port_before
+
 
 def test_r2_regression_n_manual_close_missing_evidence_fails_closed(tmp_path, monkeypatch):
-    """N. Manual close without valid evidenced quote -> fail closed, zero mutation."""
+    """N. Manual close without valid evidenced quote -> fail closed, zero mutation on both tables."""
     from fastapi import HTTPException
     from backend.app import main
     db_file = tmp_path / "test_n.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
 
     monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
     monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
@@ -1278,17 +1441,24 @@ def test_r2_regression_n_manual_close_missing_evidence_fails_closed(tmp_path, mo
     assert exc_info.value.status_code == 500
 
     conn = sqlite3.connect(str(db_file))
-    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    trades_after = conn.execute("SELECT * FROM trades").fetchall()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
-    assert trade[0] == "active"
+    assert trades_after == trades_before
+    assert port_after == port_before
 
 
 def test_r2_regression_o_manual_valid_evidenced_quote_succeeds(tmp_path, monkeypatch):
-    """O. Manual valid evidenced quote -> close succeeds."""
+    """O. Manual valid evidenced quote -> close succeeds and reconciles portfolio."""
     from tests.conftest import make_test_evidenced_quote
     from backend.app import main
     db_file = tmp_path / "test_o.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
 
     ev = make_test_evidenced_quote("PETR4.SA", 31.5)
     monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
@@ -1301,9 +1471,11 @@ def test_r2_regression_o_manual_valid_evidenced_quote_succeeds(tmp_path, monkeyp
 
     conn = sqlite3.connect(str(db_file))
     trade = conn.execute("SELECT status, exit_price FROM trades WHERE id = 1").fetchone()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
     assert trade[0] == "closed"
     assert trade[1] == 31.5
+    assert port_after != port_before
 
 
 def test_r2_regression_p_emergency_stop_operates_outside_session_requires_evidence(tmp_path, monkeypatch):
@@ -1313,6 +1485,11 @@ def test_r2_regression_p_emergency_stop_operates_outside_session_requires_eviden
     from backend.app.markets.b3_session import override_session_authority, AutonomousSessionAuthority
     db_file = tmp_path / "test_p.db"
     _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
 
     monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
     monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
@@ -1340,8 +1517,10 @@ def test_r2_regression_p_emergency_stop_operates_outside_session_requires_eviden
 
     conn = sqlite3.connect(str(db_file))
     trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
     assert trade[0] == "closed"
+    assert port_after != port_before
 
 
 def test_r2_regression_q_emergency_stop_partial_failure_reported_honestly(tmp_path, monkeypatch):
@@ -1357,6 +1536,11 @@ def test_r2_regression_q_emergency_stop_partial_failure_reported_honestly(tmp_pa
             ("VALE3.SA", "BUY", 5.0, 60.0, 65.0, 57.0),
         ],
     )
+
+    conn = sqlite3.connect(str(db_file))
+    trades_before = conn.execute("SELECT * FROM trades").fetchall()
+    port_before = conn.execute("SELECT * FROM portfolio").fetchall()
+    conn.close()
 
     monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
     monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
@@ -1384,10 +1568,12 @@ def test_r2_regression_q_emergency_stop_partial_failure_reported_honestly(tmp_pa
     conn = sqlite3.connect(str(db_file))
     petr4_status = conn.execute("SELECT status FROM trades WHERE ticker = 'PETR4.SA'").fetchone()[0]
     vale3_status = conn.execute("SELECT status FROM trades WHERE ticker = 'VALE3.SA'").fetchone()[0]
+    port_after = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
 
     assert petr4_status == "closed"
     assert vale3_status == "active"  # Unmutated fail-closed
+    assert port_after != port_before
 
 
 # ===========================================================================
@@ -1407,7 +1593,7 @@ def test_r3_raw_evidence_finite_validation_and_executor_defense(tmp_path):
     }
 
     # 1. Model layer: EvidencedQuote rejects non-finite, bool, or non-positive close
-    for bad_close in [float("nan"), float("inf"), float("-inf"), True, False, 0.0, -10.0]:
+    for bad_close in [float("nan"), float("inf"), float("-inf"), True, False, np.bool_(True), np.bool_(False), 0.0, -10.0]:
         raw = dict(base_raw, close=bad_close)
         sha = compute_evidence_sha256(raw)
         with pytest.raises(ValueError, match="raw_evidence"):
@@ -1450,25 +1636,43 @@ def test_r3_raw_evidence_finite_validation_and_executor_defense(tmp_path):
     port_before = conn.execute("SELECT * FROM portfolio").fetchall()
     conn.close()
 
-    # Injected tampered quote where raw_evidence has NaN close
-    class TamperedQuote:
-        ticker = "PETR4.SA"
-        price = 33.0
-        observed_at = now
-        collected_at = now
-        source_sha256 = "0" * 64
-        raw_evidence = dict(base_raw, close=float("nan"))
-        def model_dump(self, **kw):
-            return {
-                "ticker": self.ticker, "price": self.price, "currency": "BRL",
-                "source": "yfinance", "price_kind": "bar_close", "interval": "1m",
-                "vendor_symbol": "PETR4.SA", "observed_at": self.observed_at,
-                "collected_at": self.collected_at, "source_ref": "test",
-                "source_sha256": self.source_sha256, "raw_evidence": self.raw_evidence,
-            }
+    # Rejection of numpy bool as execution price
+    res_np_px = executor.close_order(1, np.bool_(True), "Take Profit hit", evidence=valid_quote)
+    assert res_np_px["status"] == "rejected"
+    assert "bool" in res_np_px["reason"]
 
-    res_nan = executor.close_order(1, 33.0, "Take Profit hit", evidence=TamperedQuote())
-    assert res_nan["status"] == "rejected"
+    # Rejection of numpy bool as max_observation_age_seconds
+    res_np_age = executor.close_order(1, 33.0, "Take Profit hit", evidence=valid_quote, max_observation_age_seconds=np.bool_(True))
+    assert res_np_age["status"] == "rejected"
+    assert "bool" in res_np_age["reason"]
+
+    # A. Rejection via model revalidation inside close_order:
+    # Mutate raw_evidence on a real EvidencedQuote post-creation
+    q_tampered = valid_quote.model_copy()
+    tampered_raw = dict(base_raw, close=float("nan"))
+    object.__setattr__(q_tampered, "raw_evidence", tampered_raw)
+    object.__setattr__(q_tampered, "source_sha256", compute_evidence_sha256(tampered_raw))
+
+    res_nan_model = executor.close_order(1, 33.0, "Take Profit hit", evidence=q_tampered)
+    assert res_nan_model["status"] == "rejected"
+    assert "finite and > 0" in res_nan_model["reason"]
+
+    # B. Rejection via Executor layer defense-in-depth when model revalidation is bypassed:
+    from unittest.mock import patch
+    with patch.object(EvidencedQuote, "model_validate", return_value=q_tampered):
+        res_nan_exec = executor.close_order(1, 33.0, "Take Profit hit", evidence=q_tampered)
+        assert res_nan_exec["status"] == "rejected"
+        assert "Raw evidence close must be finite and > 0" in res_nan_exec["reason"]
+
+    # C. Also test Inf, -Inf, bool, np.bool_, <=0 on executor defense layer
+    for bad_v in [float("inf"), float("-inf"), True, False, np.bool_(True), np.bool_(False), 0.0, -5.0]:
+        bad_raw = dict(base_raw, close=bad_v)
+        q_bad = valid_quote.model_copy()
+        object.__setattr__(q_bad, "raw_evidence", bad_raw)
+        object.__setattr__(q_bad, "source_sha256", compute_evidence_sha256(bad_raw))
+        with patch.object(EvidencedQuote, "model_validate", return_value=q_bad):
+            res_bad = executor.close_order(1, 33.0, "Take Profit hit", evidence=q_bad)
+            assert res_bad["status"] == "rejected"
 
     conn = sqlite3.connect(str(db_file))
     trades_after = conn.execute("SELECT * FROM trades").fetchall()
@@ -1738,3 +1942,28 @@ def test_r3_emergency_stop_per_trade_exception_continues_and_reports_partial_fai
 
     assert t1_status == "active"
     assert t2_status == "closed"
+
+
+def test_r3_feed_malformed_auxiliary_columns_handled_resiliently():
+    """Proves feed._extract_raw_evidence_from_df safely handles malformed/non-numeric auxiliary columns without crashing."""
+    from backend.app.data.feed import _extract_raw_evidence_from_df
+    from trading_bot.data.valuation_snapshot import compute_evidence_sha256
+    import pandas as pd
+    now = datetime.datetime.now(timezone.utc)
+    df_malformed = pd.DataFrame({
+        "open": ["not_a_number"],
+        "high": [None],
+        "low": [float("inf")],
+        "close": [30.0],
+        "volume": [True],  # bool rejected as numeric volume
+        "date": [now],
+    })
+    extracted = _extract_raw_evidence_from_df("PETR4.SA", "PETR4.SA", "1d", "1m", df_malformed, now)
+    assert extracted is not None
+    obs_utc, raw_ev, sha, s_ref = extracted
+    assert raw_ev["close"] == 30.0
+    assert raw_ev["open"] is None
+    assert raw_ev["high"] is None
+    assert raw_ev["low"] is None
+    assert raw_ev["volume"] is None
+    assert sha == compute_evidence_sha256(raw_ev)

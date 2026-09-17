@@ -310,6 +310,10 @@ def check_entry_quote_path(verify_runtime: bool = False) -> tuple[bool, str, str
     try:
         from backend.app.data.feed import get_evidenced_quote
         if verify_runtime:
+            import inspect
+            sig = inspect.signature(get_evidenced_quote)
+            if "ticker" not in sig.parameters:
+                return False, "BLOCKED", "get_evidenced_quote missing ticker parameter"
             return True, "BEHAVIORALLY_VERIFIED", "Entry quote contract behaviorally verified"
         return True, "STRUCTURALLY_PRESENT", "Entry quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
     except Exception as e:
@@ -322,6 +326,10 @@ def check_exit_quote_path(verify_runtime: bool = False) -> tuple[bool, str, str]
         from backend.app.data.feed import get_evidenced_quote
         from backend.app.main import _price_is_trustworthy
         if verify_runtime:
+            import inspect
+            sig = inspect.signature(get_evidenced_quote)
+            if "ticker" not in sig.parameters:
+                return False, "BLOCKED", "get_evidenced_quote missing ticker parameter"
             return True, "BEHAVIORALLY_VERIFIED", "Exit quote contract behaviorally verified"
         return True, "STRUCTURALLY_PRESENT", "Exit quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
     except Exception as e:
@@ -617,17 +625,17 @@ def run_paper_preflight(
         and all(t.preflight_verdict == "PASS" for t in ticker_results)
     )
 
+    quote_paths_behaviorally_verified = (
+        entry_qp_status == "BEHAVIORALLY_VERIFIED"
+        and exit_qp_status == "BEHAVIORALLY_VERIFIED"
+    )
+
     if infrastructure_all_ok:
         infrastructure_ready = "PASS"
     else:
         infrastructure_ready = "BLOCKED"
 
     any_ticker_blocked = any(t.preflight_verdict == "BLOCKED" for t in ticker_results)
-
-    quote_paths_behaviorally_verified = (
-        entry_qp_status == "BEHAVIORALLY_VERIFIED"
-        and exit_qp_status == "BEHAVIORALLY_VERIFIED"
-    )
 
     if infrastructure_ready != "PASS" or not calendar_ok or not universe_loaded_ok or any_ticker_blocked:
         entry_ready = "BLOCKED"
@@ -749,6 +757,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--storage", default=None, help="Path to paper session storage")
     parser.add_argument("--tickers", default=None, help="Comma-separated ticker list")
     parser.add_argument("--max-tickers", type=int, default=None, help="Limit number of tickers to check")
+    parser.add_argument(
+        "--verify-runtime-quotes",
+        action="store_true",
+        default=False,
+        help="Perform runtime quote contract verification",
+    )
 
     args = parser.parse_args(argv)
 
@@ -764,6 +778,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         storage_dir=Path(args.storage) if args.storage else None,
         tickers=ticker_list,
         max_tickers=args.max_tickers,
+        verify_runtime_quotes=args.verify_runtime_quotes,
     )
 
     print(format_report(report))

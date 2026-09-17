@@ -277,7 +277,7 @@ def _price_is_trustworthy(
     - cotação com idade superior a max_age_seconds (stale price)
     - observed_at posterior a collected_at (inconsistência causal)
     """
-    if price is None or isinstance(price, bool):
+    if price is None or isinstance(price, bool) or type(price).__name__ in ("bool", "bool_"):
         return False
     try:
         price_f = float(price)
@@ -289,7 +289,7 @@ def _price_is_trustworthy(
     if open_ is not None or high is not None or low is not None:
         for val in (open_, high, low):
             if val is not None:
-                if isinstance(val, bool):
+                if isinstance(val, bool) or type(val).__name__ in ("bool", "bool_"):
                     return False
                 try:
                     vf = float(val)

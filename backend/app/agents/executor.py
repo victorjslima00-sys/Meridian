@@ -257,7 +257,7 @@ class ExecutorAgent:
         """
         import math
         # 1. Price validation
-        if current_price is None or isinstance(current_price, bool):
+        if current_price is None or isinstance(current_price, bool) or type(current_price).__name__ in ("bool", "bool_"):
             return {"status": "rejected", "reason": "Exit price cannot be None or bool"}
         try:
             px_val = float(current_price)
@@ -284,7 +284,7 @@ class ExecutorAgent:
             return {"status": "rejected", "reason": f"Invalid EvidencedQuote structure: {e}"}
 
         ev_px = validated_evidence.price
-        if ev_px is None or isinstance(ev_px, bool):
+        if ev_px is None or isinstance(ev_px, bool) or type(ev_px).__name__ in ("bool", "bool_"):
             return {"status": "rejected", "reason": "Evidence price cannot be None or bool"}
         try:
             ev_px_val = float(ev_px)
@@ -323,7 +323,7 @@ class ExecutorAgent:
         if max_observation_age_seconds is None:
             effective_max_age = float(PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS)
         else:
-            if isinstance(max_observation_age_seconds, bool):
+            if isinstance(max_observation_age_seconds, bool) or type(max_observation_age_seconds).__name__ in ("bool", "bool_"):
                 return {"status": "rejected", "reason": "max_observation_age_seconds cannot be bool"}
             if not isinstance(max_observation_age_seconds, (int, float)):
                 return {"status": "rejected", "reason": "max_observation_age_seconds must be numeric"}
@@ -358,7 +358,7 @@ class ExecutorAgent:
 
         raw_ev = validated_evidence.raw_evidence or {}
         raw_close = raw_ev.get("close")
-        if raw_close is None or isinstance(raw_close, bool):
+        if raw_close is None or isinstance(raw_close, bool) or type(raw_close).__name__ in ("bool", "bool_"):
             return {"status": "rejected", "reason": "Raw evidence close is missing or bool"}
         try:
             raw_close_val = float(raw_close)
