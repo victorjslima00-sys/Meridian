@@ -448,13 +448,50 @@ class PaperSessionRunner:
             finally:
                 conn.close()
 
+            from trading_bot.data.valuation_snapshot import EvidencedQuote
+            from backend.app.data.feed import get_evidenced_quote
+
             for trade_row in rows:
                 tid, t_ticker, side, entry_p, target_p, stop_l, shares = trade_row
-                curr_p = current_prices.get(t_ticker)
-                if curr_p is None or isinstance(curr_p, bool):
+                price_input = current_prices.get(t_ticker)
+                if price_input is None:
+                    # Tentar com sufixo .SA ou sem
+                    alt_ticker = f"{t_ticker}.SA" if not t_ticker.endswith(".SA") else t_ticker[:-3]
+                    price_input = current_prices.get(alt_ticker)
+
+                if price_input is None or isinstance(price_input, bool):
+                    continue
+
+                # EvidencedQuote authority check (NEXUS-004-R2)
+                quote = None
+                if isinstance(price_input, EvidencedQuote):
+                    quote = price_input
+                else:
+                    # Bare scalar cannot authorize fill: try to fetch legitimate EvidencedQuote
+                    try:
+                        quote = get_evidenced_quote(t_ticker)
+                    except Exception:
+                        quote = None
+
+                if quote is None:
+                    # Sem evidência de mercado válida: posição permanece aberta, rejeição registrada no journal
+                    self.journal.append_event(
+                        event_type="ORDER_REJECTED",
+                        payload={
+                            "reason": "no_evidenced_quote_available",
+                            "ticker": t_ticker,
+                            "trade_id": tid,
+                            "price_input": str(price_input),
+                        },
+                        ticker=t_ticker,
+                    )
+                    continue
+
+                curr_p_val = quote.price
+                if curr_p_val is None or isinstance(curr_p_val, bool):
                     continue
                 try:
-                    curr_p_val = float(curr_p)
+                    curr_p_val = float(curr_p_val)
                 except (TypeError, ValueError):
                     continue
                 if not math.isfinite(curr_p_val) or curr_p_val <= 0.0:
@@ -470,9 +507,16 @@ class PaperSessionRunner:
                     elif stop_l > 0 and curr_p_val <= stop_l:
                         should_close = True
                         close_reason = f"Stop Loss hit at {curr_p_val}"
+                elif side == "SELL":
+                    if target_p > 0 and curr_p_val <= target_p:
+                        should_close = True
+                        close_reason = f"Take Profit hit at {curr_p_val}"
+                    elif stop_l > 0 and curr_p_val >= stop_l:
+                        should_close = True
+                        close_reason = f"Stop Loss hit at {curr_p_val}"
 
                 if should_close:
-                    close_res = executor.close_order(tid, curr_p_val, close_reason)
+                    close_res = executor.close_order(tid, curr_p_val, close_reason, evidence=quote)
                     if close_res.get("status") == "closed":
                         orders_closed += 1
                         if side == "BUY":
@@ -486,6 +530,12 @@ class PaperSessionRunner:
                         close_res["returned_capital"] = allocated_ret
                         self.journal.append_event(
                             event_type="ORDER_CLOSED",
+                            payload=close_res,
+                            ticker=t_ticker,
+                        )
+                    else:
+                        self.journal.append_event(
+                            event_type="ORDER_REJECTED",
                             payload=close_res,
                             ticker=t_ticker,
                         )

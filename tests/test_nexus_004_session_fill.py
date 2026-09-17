@@ -18,7 +18,7 @@ from datetime import timezone
 import math
 from pathlib import Path
 import sqlite3
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set, Tuple
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 import yaml
@@ -729,3 +729,515 @@ def test_preflight_valuation_honesty_not_overclaimed():
     assert ok is True
     assert honesty == "VALUATION_CONTRACT_AVAILABLE / VALUATION_STORE_UNVERIFIED"
     assert "VALUATION_STORE_UNVERIFIED" in msg
+
+
+# ===========================================================================
+# 10. NEXUS-004-R2: EXIT AUTHORITY, SESSION DEFENSE & PAPER CLOSEOUT (A - Q)
+# ===========================================================================
+
+def _init_r2_test_db(db_path: Path, initial_cash: float = 1000.0, active_trades: Optional[List[tuple]] = None) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT, side TEXT, shares REAL, entry_price REAL,
+            exit_price REAL, target_price REAL, stop_loss REAL,
+            entry_date TIMESTAMP, exit_date TIMESTAMP,
+            pnl_pct REAL, exit_reason TEXT, ai_rationale TEXT, status TEXT, signal_id TEXT)
+    """)
+    conn.execute("CREATE UNIQUE INDEX idx_trades_one_active_per_ticker ON trades(ticker) WHERE status = 'active'")
+    conn.execute("""
+        CREATE TABLE portfolio (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patrimonio_total REAL DEFAULT 0.0,
+            saldo_disponivel REAL DEFAULT 0.0,
+            em_posicoes REAL DEFAULT 0.0,
+            margem_operavel REAL,
+            updated_at TIMESTAMP
+        )
+    """)
+    em_pos = sum((row[2] * row[3]) for row in (active_trades or []))
+    conn.execute(
+        "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (initial_cash, initial_cash, em_pos, initial_cash, datetime.datetime.now()),
+    )
+    if active_trades:
+        for t in active_trades:
+            conn.execute(
+                "INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'test', 'active')",
+                (t[0], t[1], t[2], t[3], t[4], t[5], datetime.datetime.now()),
+            )
+    conn.commit()
+    conn.close()
+
+
+def test_r2_regression_a_missing_evidence_rejected_zero_mutation(tmp_path):
+    """A. Automatic/manual exit with missing evidence -> rejected, zero trade mutation, zero portfolio mutation."""
+    db_file = tmp_path / "test_a.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=None)
+    assert res["status"] == "rejected"
+    assert "evidence is required" in res["reason"]
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status, exit_price FROM trades WHERE id = 1").fetchone()
+    pf = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio WHERE id = 1").fetchone()
+    conn.close()
+
+    assert trade[0] == "active"
+    assert trade[1] is None
+    assert pf[0] == 1000.0
+    assert pf[1] == 300.0
+
+
+def test_r2_regression_b_wrong_ticker_evidence_rejected_zero_mutation(tmp_path):
+    """B. Wrong-ticker exit evidence -> rejected, zero mutation."""
+    from tests.conftest import make_test_evidenced_quote
+    db_file = tmp_path / "test_b.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    # Evidence for VALE3 when closing PETR4
+    vale_quote = make_test_evidenced_quote("VALE3.SA", 33.0)
+    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=vale_quote)
+    assert res["status"] == "rejected"
+    assert "does not match trade ticker" in res["reason"]
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    pf = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+    assert pf[1] == 300.0
+
+
+def test_r2_regression_c_tampered_raw_evidence_hash_rejected_zero_mutation(tmp_path):
+    """C. Tampered raw evidence/hash -> rejected, zero mutation."""
+    from tests.conftest import make_test_evidenced_quote
+    db_file = tmp_path / "test_c.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    quote = make_test_evidenced_quote("PETR4.SA", 33.0)
+    # Tamper source_sha256 directly
+    tampered_quote = quote.model_copy(update={"source_sha256": "f" * 64})
+
+    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=tampered_quote)
+    assert res["status"] == "rejected"
+    assert "mismatch" in res["reason"]
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+
+
+def test_r2_regression_d_stale_observation_rejected_zero_mutation(tmp_path):
+    """D. Stale observation (> 300s) -> rejected, zero mutation."""
+    from tests.conftest import make_test_evidenced_quote
+    db_file = tmp_path / "test_d.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    stale_quote = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=301.0)
+    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=stale_quote)
+    assert res["status"] == "rejected"
+    assert "stale" in res["reason"]
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+
+
+def test_r2_regression_e_naive_quote_timestamp_rejected_zero_mutation(tmp_path):
+    """E. Naive quote timestamp -> rejected, zero mutation."""
+    db_file = tmp_path / "test_e.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    # Passing non-EvidencedQuote object with naive datetime
+    class FakeQuote:
+        price = 33.0
+        observed_at = datetime.datetime.now()  # naive
+
+    res = executor.close_order(1, 33.0, "Take Profit hit", evidence=FakeQuote())
+    assert res["status"] == "rejected"
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+
+
+def test_r2_regression_f_invalid_price_rejected_zero_mutation(tmp_path):
+    """F. NaN / +Inf / -Inf / bool / <=0 price -> rejected, zero mutation."""
+    from tests.conftest import make_test_evidenced_quote
+    db_file = tmp_path / "test_f.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    ev = make_test_evidenced_quote("PETR4.SA", 33.0)
+
+    for invalid_p in [float("nan"), float("inf"), float("-inf"), True, False, 0.0, -10.0, None]:
+        res = executor.close_order(1, invalid_p, "Take Profit hit", evidence=ev)
+        assert res["status"] == "rejected"
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+
+
+def test_r2_regression_g_papersession_bare_current_prices_cannot_close(tmp_path, monkeypatch):
+    """G. PaperSession bare current_prices cannot directly authorize exit without EvidencedQuote."""
+    db_file = tmp_path / "paper_bare.db"
+    storage_dir = tmp_path / "paper_sessions"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    # Feed is down / returns None for quotes
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda t, *a, **k: None)
+
+    runner = PaperSessionRunner(session_id="sess_bare_g", db_path=str(db_file), storage_dir=str(storage_dir))
+    rep = runner.run_cycle(signals=[], current_prices={"PETR4": 34.0})
+
+    assert rep.orders_closed == 0
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+
+    # Journal must record ORDER_REJECTED due to missing evidence
+    events = runner.journal.load_events()
+    rejected_events = [e for e in events if e.event_type == "ORDER_REJECTED"]
+    assert len(rejected_events) >= 1
+    assert rejected_events[0].payload["reason"] == "no_evidenced_quote_available"
+
+
+def test_r2_regression_h_valid_evidenced_automatic_exit_reconciles_exactly_once(tmp_path):
+    """H. Valid evidenced automatic exit -> exactly one close -> portfolio reconciled exactly once."""
+    from tests.conftest import make_test_evidenced_quote
+    db_file = tmp_path / "paper_valid_h.db"
+    storage_dir = tmp_path / "paper_sessions"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    ev_exit = make_test_evidenced_quote("PETR4", 34.0)
+    runner = PaperSessionRunner(session_id="sess_valid_h", db_path=str(db_file), storage_dir=str(storage_dir))
+    rep = runner.run_cycle(signals=[], current_prices={"PETR4": ev_exit})
+
+    assert rep.orders_closed == 1
+    assert rep.reconciliation_ok is True
+    assert rep.discrepancies == []
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status, exit_price, pnl_pct FROM trades WHERE id = 1").fetchone()
+    pf = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio WHERE id = 1").fetchone()
+    conn.close()
+
+    assert trade[0] == "closed"
+    assert trade[1] == 34.0
+    assert trade[2] == pytest.approx(13.333333333333334)
+    # Initial: 1000. em_posicoes was 300. Return 300 + (34-30)*10 = 340. New saldo_disponivel = 1040.
+    assert pf[1] == 0.0
+    assert pf[0] == pytest.approx(1040.0)
+
+
+def test_r2_regression_i_intent_continuous_then_closed_before_executor_rejected(tmp_path):
+    """I. Valid intent created CONTINUOUS then authority CLOSED before executor -> rejected, zero mutation."""
+    from tests.conftest import make_test_evidenced_quote
+    from backend.app.markets.b3_session import override_session_authority, AutonomousSessionAuthority
+    db_file = tmp_path / "session_defense_i.db"
+    _init_r2_test_db(db_file, 1000.0)
+    executor = ExecutorAgent(str(db_file))
+
+    # Intent constructed during CONTINUOUS phase (11:00 AM)
+    valid_dt = datetime.datetime(2026, 3, 10, 11, 0, tzinfo=B3_TIMEZONE)
+    quote = make_test_evidenced_quote("PETR4.SA", 30.0)
+    sig = TypedSignal(
+        ticker="PETR4.SA",
+        side="BUY",
+        price=30.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        dataset_sha256="0" * 64,
+        dataset_approved=True,
+        generated_at=valid_dt,
+        reason="Session defense test",
+    )
+    decision = RiskDecision(
+        signal_id=sig.signal_id,
+        approved=True,
+        reason="Approved for execution",
+        allocated_capital=300.0,
+        target_price=33.0,
+        stop_loss=28.5,
+        decision_timestamp=valid_dt,
+    )
+    # Intent constructed during CONTINUOUS phase
+    open_authority = AutonomousSessionAuthority(
+        override_fn=lambda dt=None: (
+            True,
+            "B3 market session phase is CONTINUOUS",
+            B3DayType.NORMAL_TRADING_DAY,
+            B3SessionPhase.CONTINUOUS,
+        )
+    )
+    with override_session_authority(open_authority):
+        intent = ApprovedExecutionIntent(
+            signal=sig,
+            risk_decision=decision,
+            execution_quote=quote,
+        )
+
+    # Now authority transitions to CLOSED before executor write
+    closed_authority = AutonomousSessionAuthority(
+        override_fn=lambda dt=None: (
+            False,
+            "B3 market session phase is CLOSED",
+            B3DayType.NORMAL_TRADING_DAY,
+            B3SessionPhase.CLOSED,
+        )
+    )
+    with override_session_authority(closed_authority):
+        res = executor.execute_order(intent)
+        assert res["status"] == "rejected"
+        assert "Autonomous session" in res["reason"]
+
+    conn = sqlite3.connect(str(db_file))
+    trades_count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    pf = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio WHERE id = 1").fetchone()
+    conn.close()
+
+    assert trades_count == 0
+    assert pf[0] == 1000.0
+    assert pf[1] == 0.0
+
+
+def test_r2_regression_j_explicit_naive_session_datetime_denied():
+    """J. Explicit naive session datetime -> fail-closed: denied by authority, UNKNOWN day, CLOSED phase."""
+    from backend.app.markets.b3_session import (
+        check_autonomous_session_authority,
+        get_day_type,
+        get_session_phase,
+        can_enter_new_position,
+    )
+    naive_dt = datetime.datetime(2026, 3, 10, 11, 0)  # naive (no tzinfo)
+
+    # 1. Day type fails closed to UNKNOWN
+    assert get_day_type(naive_dt) == B3DayType.UNKNOWN
+
+    # 2. Session phase fails closed to CLOSED
+    assert get_session_phase(naive_dt) == B3SessionPhase.CLOSED
+
+    # 3. Autonomous authority check fails closed with explicit rejection reason
+    allowed, reason, d_type, phase = check_autonomous_session_authority(naive_dt)
+    assert allowed is False
+    assert "Explicit naive datetime rejected" in reason
+    assert d_type == B3DayType.UNKNOWN
+    assert phase == B3SessionPhase.CLOSED
+
+    # 4. can_enter_new_position fails closed
+    assert can_enter_new_position(naive_dt) is False
+
+
+def test_r2_regression_k_exit_freshness_policy(tmp_path):
+    """K. Realistic exit timestamp/freshness policy: fresh 1m accepted, stale (>300s) rejected, future (>5s) rejected."""
+    from tests.conftest import make_test_evidenced_quote
+    db_file = tmp_path / "test_k.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+    executor = ExecutorAgent(str(db_file))
+
+    # 1. Materially future quote (now + 10s) -> rejected
+    future_obs = datetime.datetime.now(timezone.utc) + datetime.timedelta(seconds=10.0)
+    raw_future = {
+        "ticker": "PETR4.SA", "close": 33.0, "source": "yfinance", "price_kind": "bar_close",
+        "interval": "1m", "vendor_symbol": "PETR4.SA", "observed_at": future_obs.isoformat(),
+        "collected_at": future_obs.isoformat(),
+    }
+    future_quote = EvidencedQuote(
+        ticker="PETR4.SA", price=33.0, currency="BRL", source="yfinance", price_kind="bar_close",
+        interval="1m", vendor_symbol="PETR4.SA", observed_at=future_obs, collected_at=future_obs,
+        source_ref="test", source_sha256=compute_evidence_sha256(raw_future), raw_evidence=raw_future,
+    )
+    res_future = executor.close_order(1, 33.0, "Take Profit hit", evidence=future_quote)
+    assert res_future["status"] == "rejected"
+    assert "future" in res_future["reason"]
+
+    # 2. Stale quote (305s old) -> rejected
+    stale_quote = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=305.0)
+    res_stale = executor.close_order(1, 33.0, "Take Profit hit", evidence=stale_quote)
+    assert res_stale["status"] == "rejected"
+    assert "stale" in res_stale["reason"]
+
+    # 3. Fresh 1m quote (15s old) -> accepted
+    fresh_quote = make_test_evidenced_quote("PETR4.SA", 33.0, age_seconds=15.0)
+    res_fresh = executor.close_order(1, 33.0, "Take Profit hit", evidence=fresh_quote)
+    assert res_fresh["status"] == "closed"
+
+
+def test_r2_regression_l_preflight_import_only_not_ready():
+    """L. Preflight import-only path is NOT runtime READY; returns STRUCTURALLY_PRESENT."""
+    from scripts.paper_session_preflight import check_entry_quote_path, check_exit_quote_path
+    ok_in, status_in, _ = check_entry_quote_path()
+    assert ok_in is True
+    assert status_in == "STRUCTURALLY_PRESENT"
+    assert status_in != "READY"
+    assert status_in != "VERIFIED"
+
+    ok_out, status_out, _ = check_exit_quote_path()
+    assert ok_out is True
+    assert status_out == "STRUCTURALLY_PRESENT"
+    assert status_out != "READY"
+    assert status_out != "VERIFIED"
+
+
+def test_r2_regression_m_broker_close_preserves_and_requires_evidence(tmp_path):
+    """M. Broker-mediated Paper close preserves/requires evidence."""
+    from tests.conftest import make_test_evidenced_quote
+    from backend.app.markets.paper_broker import PaperBroker
+    db_file = tmp_path / "test_m.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    broker = PaperBroker()
+    with patch("backend.app.agents.executor.DB_PATH", str(db_file)):
+        # Calling broker close without evidence is rejected
+        res_no_ev = broker.close_order(1, 33.0, "Take Profit hit", evidence=None)
+        assert res_no_ev["status"] == "rejected"
+        assert "evidence is required" in res_no_ev["reason"]
+
+        # Calling broker close with valid evidence closes successfully
+        ev = make_test_evidenced_quote("PETR4.SA", 33.0)
+        res_with_ev = broker.close_order(1, 33.0, "Take Profit hit", evidence=ev)
+        assert res_with_ev["status"] == "closed"
+
+
+def test_r2_regression_n_manual_close_missing_evidence_fails_closed(tmp_path, monkeypatch):
+    """N. Manual close without valid evidenced quote -> fail closed, zero mutation."""
+    from fastapi import HTTPException
+    from backend.app import main
+    db_file = tmp_path / "test_n.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
+    monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda t: None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        main.manual_close_trade(1, api_key="test")
+    assert exc_info.value.status_code == 500
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "active"
+
+
+def test_r2_regression_o_manual_valid_evidenced_quote_succeeds(tmp_path, monkeypatch):
+    """O. Manual valid evidenced quote -> close succeeds."""
+    from tests.conftest import make_test_evidenced_quote
+    from backend.app import main
+    db_file = tmp_path / "test_o.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    ev = make_test_evidenced_quote("PETR4.SA", 31.5)
+    monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
+    monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda t: ev)
+
+    res = main.manual_close_trade(1, api_key="test")
+    assert res["status"] == "closed"
+    assert res["exit_price"] == 31.5
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status, exit_price FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "closed"
+    assert trade[1] == 31.5
+
+
+def test_r2_regression_p_emergency_stop_operates_outside_session_requires_evidence(tmp_path, monkeypatch):
+    """P. Emergency request can operate outside entry session gate BUT cannot bypass execution-price evidence."""
+    from tests.conftest import make_test_evidenced_quote
+    from backend.app import main
+    from backend.app.markets.b3_session import override_session_authority, AutonomousSessionAuthority
+    db_file = tmp_path / "test_p.db"
+    _init_r2_test_db(db_file, 1000.0, [("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5)])
+
+    monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
+    monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
+    monkeypatch.setattr(main, "EMERGENCY_PASSWORD", "secret123")
+
+    # Entry session authority is strictly CLOSED
+    closed_authority = AutonomousSessionAuthority(
+        override_fn=lambda dt=None: (
+            False,
+            "B3 market is CLOSED",
+            B3DayType.NORMAL_TRADING_DAY,
+            B3SessionPhase.CLOSED,
+        )
+    )
+
+    # 1. With feed returning valid quote: closes successfully even though entry session is CLOSED
+    ev = make_test_evidenced_quote("PETR4.SA", 29.0)
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", lambda t: ev)
+
+    req = main.ActionRequest(action="stop", password="secret123")
+    with override_session_authority(closed_authority):
+        resp = main.system_emergency_stop(req)
+        assert resp["status"] == "success"
+        assert resp["closed"] == 1
+
+    conn = sqlite3.connect(str(db_file))
+    trade = conn.execute("SELECT status FROM trades WHERE id = 1").fetchone()
+    conn.close()
+    assert trade[0] == "closed"
+
+
+def test_r2_regression_q_emergency_stop_partial_failure_reported_honestly(tmp_path, monkeypatch):
+    """Q. Partial Emergency Stop failure is not falsely reported as total success."""
+    from tests.conftest import make_test_evidenced_quote
+    from backend.app import main
+    db_file = tmp_path / "test_q.db"
+    _init_r2_test_db(
+        db_file,
+        1000.0,
+        [
+            ("PETR4.SA", "BUY", 10.0, 30.0, 33.0, 28.5),
+            ("VALE3.SA", "BUY", 5.0, 60.0, 65.0, 57.0),
+        ],
+    )
+
+    monkeypatch.setattr("backend.app.data.database.DB_PATH", str(db_file))
+    monkeypatch.setattr("backend.app.agents.executor.DB_PATH", str(db_file))
+    monkeypatch.setattr(main, "EMERGENCY_PASSWORD", "secret123")
+
+    # PETR4 has quote, VALE3 feed is unavailable (returns None)
+    def _selective_quote(ticker):
+        if "PETR4" in ticker:
+            return make_test_evidenced_quote("PETR4.SA", 30.5)
+        return None
+
+    monkeypatch.setattr("backend.app.data.feed.get_evidenced_quote", _selective_quote)
+
+    req = main.ActionRequest(action="stop", password="secret123")
+    resp = main.system_emergency_stop(req)
+
+    # Must NOT report "success"
+    assert resp["status"] != "success"
+    assert resp["status"] == "partial_failure"
+    assert resp["success"] is False
+    assert resp["closed"] == 1
+    assert resp["failed"] == 1
+    assert "VALE3.SA" in resp["failed_tickers"]
+
+    conn = sqlite3.connect(str(db_file))
+    petr4_status = conn.execute("SELECT status FROM trades WHERE ticker = 'PETR4.SA'").fetchone()[0]
+    vale3_status = conn.execute("SELECT status FROM trades WHERE ticker = 'VALE3.SA'").fetchone()[0]
+    conn.close()
+
+    assert petr4_status == "closed"
+    assert vale3_status == "active"  # Unmutated fail-closed
+
+

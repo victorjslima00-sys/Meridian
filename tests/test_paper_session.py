@@ -143,8 +143,10 @@ def test_paper_session_exit_management_and_reconciliation(tmp_path, mock_circuit
     sig = {'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Entrada', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}
     rep1 = runner.run_cycle(signals=[sig])
     assert rep1.orders_executed == 1
+    from tests.conftest import make_test_evidenced_quote
+    ev_exit = make_test_evidenced_quote('PETR4', 34.0)
     runner_exit = PaperSessionRunner(session_id='session_exit_01', db_path=str(db_file), storage_dir=str(storage_dir))
-    rep2 = runner_exit.run_cycle(signals=[], current_prices={'PETR4': 34.0})
+    rep2 = runner_exit.run_cycle(signals=[], current_prices={'PETR4': ev_exit})
     assert rep2.orders_closed == 1
     assert rep2.reconciliation_ok is True
     conn = sqlite3.connect(db_file)

@@ -387,7 +387,7 @@ def extract_exit_evidenced_quote(
             "close": close_p,
             "source": "exit_scan",
             "price_kind": "bar_close",
-            "interval": "15m",
+            "interval": "1m",
             "vendor_symbol": ticker.upper(),
             "observed_at": obs_tz.isoformat(),
             "collected_at": col_tz.isoformat(),
@@ -399,7 +399,7 @@ def extract_exit_evidenced_quote(
             currency="BRL",
             source="exit_scan",
             price_kind="bar_close",
-            interval="15m",
+            interval="1m",
             vendor_symbol=ticker.upper(),
             observed_at=obs_tz,
             collected_at=col_tz,
@@ -471,7 +471,7 @@ async def _run_exit_scan() -> bool:
             continue
 
         df_recent = await asyncio.to_thread(
-            market.fetch_ohlcv, ticker, period="1d", interval="15m",
+            market.fetch_ohlcv, ticker, period="1d", interval="1m",
             ttl=worker_state.exit_price_cache_ttl_seconds(),
         )
         if df_recent is None or len(df_recent) == 0:
@@ -508,7 +508,7 @@ async def _run_exit_scan() -> bool:
             all_trustworthy = False
             continue
 
-        # Extract NEXUS-001-grade exit evidence binding (NEXUS-004-R1)
+        # Extract NEXUS-001-grade exit evidence binding with 1m bar (NEXUS-004-R2)
         exit_quote = extract_exit_evidenced_quote(ticker, df_recent)
         if exit_quote is None:
             logger.warning(
@@ -517,6 +517,9 @@ async def _run_exit_scan() -> bool:
             )
             all_trustworthy = False
             continue
+
+        # Stop/target decision and close order both use the exact evidenced price
+        current_price = exit_quote.price
 
         # Preço confiável de novo: limpa o estado de alerta deste ticker,
         # para que uma falha FUTURA seja tratada como condição nova (não
@@ -1217,19 +1220,21 @@ def manual_close_trade(trade_id: int, api_key: str = Depends(verify_api_key)):
     if status != "active":
         raise HTTPException(status_code=400, detail="Trade não está ativo")
 
-    current_price = get_current_price(ticker)
-    if current_price <= 0:
+    from .data.feed import get_evidenced_quote
+    quote = get_evidenced_quote(ticker)
+    if quote is None:
         raise HTTPException(
-            status_code=500, detail="Falha ao obter preço atual do ativo"
+            status_code=500,
+            detail="Falha ao obter cotação evidenciada válida do ativo para encerramento manual (fail-closed)",
         )
 
     executor = ExecutorAgent()
     res = executor.close_order(
-        trade_id, current_price, "Encerrado manualmente pelo usuário"
+        trade_id, quote.price, "Encerrado manualmente pelo usuário", evidence=quote
     )
 
-    if res.get("status") == "error":
-        raise HTTPException(status_code=500, detail=res.get("reason"))
+    if res.get("status") in ("error", "rejected"):
+        raise HTTPException(status_code=500, detail=res.get("reason", "Erro ao fechar ordem."))
 
     return res
 
@@ -1451,28 +1456,72 @@ def system_emergency_stop(
         active_trades = get_active_trades()
 
         executor = ExecutorAgent()
+        closed_count = 0
+        failed_count = 0
+        failed_tickers = []
+
+        from .data.feed import get_evidenced_quote
+
         for row in active_trades:
             trade_id = row["id"]
             ticker = row["ticker"]
-            entry_price = row["entry_price"]
-            
-            from .data.feed import get_current_price
-            current_price = get_current_price(ticker)
-            if current_price is None or current_price <= 0:
-                current_price = None
+
+            quote = None
+            try:
+                quote = get_evidenced_quote(ticker)
+            except Exception:
+                quote = None
+
+            if quote is None:
                 logger.warning(
-                    "Emergency stop: preço de mercado indisponível para %s; "
-                    "ordem não fechada com preço sintético.",
+                    "Emergency stop: cotação evidenciada indisponível para %s; posição não fechada (fail-closed).",
                     ticker,
                 )
+                failed_count += 1
+                failed_tickers.append(ticker)
                 continue
-                
-            executor.close_order(trade_id, current_price, "EMERGENCY STOP")
+
+            res = executor.close_order(
+                trade_id, quote.price, "EMERGENCY STOP", evidence=quote
+            )
+            if res.get("status") == "closed":
+                closed_count += 1
+            else:
+                logger.warning(
+                    "Emergency stop: close_order rejeitado para trade %s (%s): %s",
+                    trade_id, ticker, res.get("reason"),
+                )
+                failed_count += 1
+                failed_tickers.append(ticker)
+
+        total_trades = len(active_trades)
+        if total_trades == 0:
+            return {
+                "status": "success",
+                "success": True,
+                "msg": "EMERGENCY STOP ACIONADO. Nenhuma posição ativa.",
+                "total": 0,
+                "closed": 0,
+                "failed": 0,
+            }
+
+        all_closed = (failed_count == 0)
+        status_str = "success" if all_closed else ("partial_failure" if closed_count > 0 else "failed")
         return {
-            "status": "success",
-            "msg": "EMERGENCY STOP ACIONADO. Posições válidas fechadas.",
+            "status": status_str,
+            "success": all_closed,
+            "total": total_trades,
+            "closed": closed_count,
+            "failed": failed_count,
+            "failed_tickers": failed_tickers,
+            "msg": (
+                f"EMERGENCY STOP ACIONADO. Todas as {closed_count} posições fechadas com sucesso."
+                if all_closed
+                else f"EMERGENCY STOP PARCIAL: {closed_count}/{total_trades} posições fechadas. {failed_count} falharam por ausência de cotação evidenciada válida."
+            ),
         }
-    except Exception:
+    except Exception as e:
+        logger.error("Erro interno em emergency_stop: %s", e)
         return {"error": "Internal server error"}
 
 

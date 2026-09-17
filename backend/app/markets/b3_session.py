@@ -86,10 +86,8 @@ def get_day_type(market_date: datetime.date | datetime.datetime) -> B3DayType:
     """
     if isinstance(market_date, datetime.datetime):
         if market_date.tzinfo is None:
-            market_date = market_date.replace(tzinfo=B3_TIMEZONE)
-        else:
-            market_date = market_date.astimezone(B3_TIMEZONE)
-        d = market_date.date()
+            return B3DayType.UNKNOWN
+        d = market_date.astimezone(B3_TIMEZONE).date()
     else:
         d = market_date
 
@@ -116,12 +114,12 @@ def get_session_phase(dt: Optional[datetime.datetime] = None) -> B3SessionPhase:
     """Determine the B3 session phase for cash equities at a given datetime.
     
     If dt is None, the current time in America/Sao_Paulo is used.
-    If dt is naive, America/Sao_Paulo timezone is assumed.
+    If dt is naive, fails closed returning B3SessionPhase.CLOSED (NEXUS-004-R2).
     """
     if dt is None:
         dt = datetime.datetime.now(B3_TIMEZONE)
     elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=B3_TIMEZONE)
+        return B3SessionPhase.CLOSED
     else:
         dt = dt.astimezone(B3_TIMEZONE)
 
@@ -206,7 +204,12 @@ def check_autonomous_session_authority(
     if dt is None:
         dt = datetime.datetime.now(B3_TIMEZONE)
     elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=B3_TIMEZONE)
+        return (
+            False,
+            "Explicit naive datetime rejected: timezone-aware datetime required",
+            B3DayType.UNKNOWN,
+            B3SessionPhase.CLOSED,
+        )
     else:
         dt = dt.astimezone(B3_TIMEZONE)
 

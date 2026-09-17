@@ -412,7 +412,9 @@ def test_emergency_stop_does_not_use_entry_price_fallback(clean_db, monkeypatch)
         with patch.object(main.ExecutorAgent, "close_order") as mock_close:
             resp = main.system_emergency_stop(req)
             mock_close.assert_not_called()
-            assert resp["status"] == "success"
+            # NEXUS-004-R2: positions that cannot be closed due to missing quote are reported honestly, not as success
+            assert resp["status"] != "success"
+            assert resp.get("failed") == 1
 
 
 def test_no_synthetic_hardcoded_balance_emitted(test_app, clean_db, empty_registry):

@@ -75,12 +75,14 @@ class TestCloseOrderConcurrency:
         _set_portfolio(temp_db_path, saldo_disponivel=100.0, em_posicoes=50.0)
         exit_price = 55.0
         barrier = threading.Barrier(2)
+        from tests.conftest import make_test_evidenced_quote
+        ev = make_test_evidenced_quote('BTC-USD', exit_price)
         results = [None, None]
 
         def _worker(idx):
             barrier.wait()
             try:
-                results[idx] = ExecutorAgent().close_order(trade_id, exit_price, 'Take Profit hit')
+                results[idx] = ExecutorAgent().close_order(trade_id, exit_price, 'Take Profit hit', evidence=ev)
             except Exception as e:
                 results[idx] = e
         with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kw: _real_connect(temp_db_path, **kw)):

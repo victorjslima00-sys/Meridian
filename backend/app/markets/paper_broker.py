@@ -42,6 +42,12 @@ class PaperBroker:
         return self._agent().execute_order(intent)
 
     def close_order(
-        self, trade_id: int, current_price: float, reason: str
+        self,
+        trade_id: int,
+        current_price: float,
+        reason: str,
+        evidence: Any = None,
     ) -> dict[str, Any]:
-        return self._agent().close_order(trade_id, current_price, reason)
+        return self._agent().close_order(
+            trade_id, current_price, reason, evidence=evidence
+        )

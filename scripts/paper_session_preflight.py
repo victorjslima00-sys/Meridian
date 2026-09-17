@@ -95,8 +95,8 @@ class PreflightReport:
     real_broker_calls_verification: str = "UNVERIFIED"
     broker_activation: str = "NOT DETECTED"
     universe_source: str = "configured_universe"
-    entry_quote_path_status: str = "READY"
-    exit_quote_path_status: str = "READY"
+    entry_quote_path_status: str = "STRUCTURALLY_PRESENT"
+    exit_quote_path_status: str = "STRUCTURALLY_PRESENT"
 
 
 def _compute_db_table_fingerprint(conn: sqlite3.Connection, table_name: str) -> str:
@@ -306,19 +306,20 @@ def check_b3_session_calendar(now: Optional[datetime] = None) -> tuple[bool, str
 
 
 def check_entry_quote_path() -> tuple[bool, str, str]:
-    """Inspect read-only entry quote retrieval contract (NEXUS-004-R1)."""
+    """Inspect read-only entry quote retrieval contract (NEXUS-004-R2)."""
     try:
         from backend.app.data.feed import get_evidenced_quote
-        return True, "READY", "Entry quote contract (get_evidenced_quote) verified available"
+        return True, "STRUCTURALLY_PRESENT", "Entry quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
     except Exception as e:
         return False, "BLOCKED", f"Entry quote path unavailable: {e}"
 
 
 def check_exit_quote_path() -> tuple[bool, str, str]:
-    """Inspect read-only exit quote extraction contract (NEXUS-004-R1)."""
+    """Inspect read-only exit quote extraction contract (NEXUS-004-R2)."""
     try:
+        from backend.app.data.feed import get_evidenced_quote
         from backend.app.main import extract_exit_evidenced_quote, _price_is_trustworthy
-        return True, "READY", "Exit quote contract (extract_exit_evidenced_quote) verified available"
+        return True, "STRUCTURALLY_PRESENT", "Exit quote contract (extract_exit_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
     except Exception as e:
         return False, "BLOCKED", f"Exit quote path unavailable: {e}"
 

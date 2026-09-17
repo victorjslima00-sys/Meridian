@@ -72,6 +72,10 @@ class Broker(Protocol):
         ...
 
     def close_order(
-        self, trade_id: int, current_price: float, reason: str
+        self,
+        trade_id: int,
+        current_price: float,
+        reason: str,
+        evidence: Optional[Any] = None,
     ) -> dict[str, Any]:
         ...

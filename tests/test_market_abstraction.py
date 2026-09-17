@@ -219,10 +219,12 @@ class TestPaperBrokerDelegaParaOExecutor:
         mock.assert_called_once_with(intent)
 
     def test_close_order_delega(self):
+        from tests.conftest import make_test_evidenced_quote
         esperado = {"status": "closed"}
+        ev = make_test_evidenced_quote("PETR4.SA", 12.34)
         with patch(
             "backend.app.agents.executor.ExecutorAgent.close_order",
             return_value=esperado,
         ) as mock:
-            assert get_broker().close_order(7, 12.34, "Take Profit") is esperado
-        mock.assert_called_once_with(7, 12.34, "Take Profit")
+            assert get_broker().close_order(7, 12.34, "Take Profit", evidence=ev) is esperado
+        mock.assert_called_once_with(7, 12.34, "Take Profit", evidence=ev)

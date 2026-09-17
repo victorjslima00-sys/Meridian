@@ -271,7 +271,9 @@ def test_replay_protection_same_signal_id_rejected_after_close(tmp_path):
     conn.close()
 
     # 2. Close trade
-    res_close = executor.close_order(trade_id, 33.0, reason="Take Profit hit")
+    from tests.conftest import make_test_evidenced_quote
+    ev_close = make_test_evidenced_quote("PETR4", 33.0)
+    res_close = executor.close_order(trade_id, 33.0, reason="Take Profit hit", evidence=ev_close)
     assert res_close["status"] == "closed"
 
     conn = sqlite3.connect(str(db_file))
@@ -312,7 +314,9 @@ def test_new_signal_for_same_ticker_succeeds_after_close(tmp_path):
     conn.close()
 
     # 2. Close first trade
-    executor.close_order(trade_id, 33.0, reason="Take Profit")
+    from tests.conftest import make_test_evidenced_quote
+    ev_close1 = make_test_evidenced_quote("PETR4", 33.0)
+    executor.close_order(trade_id, 33.0, reason="Take Profit", evidence=ev_close1)
 
     # 3. New second signal with DIFFERENT price/stop/target/generated_at
     intent2 = _make_intent(ticker="PETR4", price=31.0, target_price=34.0, stop_loss=29.5)

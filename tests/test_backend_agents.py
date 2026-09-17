@@ -290,31 +290,37 @@ class TestExecutorAgent:
 
     def test_close_order_positive_pnl_on_profit(self):
         from backend.app.agents.executor import ExecutorAgent
+        from tests.conftest import make_test_evidenced_quote
         conn = _init_in_memory_db()
         conn.execute('INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status) VALUES (?,?,?,?,?,?,?,?,?)', ('BTC-USD', 'BUY', 0.001, 60000.0, 65000.0, 58000.0, datetime.now(), 't', 'active'))
         conn.commit()
         trade_id = conn.execute('SELECT MAX(id) FROM trades').fetchone()[0]
+        ev = make_test_evidenced_quote('BTC-USD', 65000.0)
         with patch('backend.app.agents.executor.sqlite3.connect', return_value=conn):
-            result = ExecutorAgent().close_order(trade_id, 65000.0, 'Take Profit hit')
+            result = ExecutorAgent().close_order(trade_id, 65000.0, 'Take Profit hit', evidence=ev)
         assert result['status'] == 'closed'
         assert result['pnl_pct'] > 0
 
     def test_close_order_negative_pnl_on_loss(self):
         from backend.app.agents.executor import ExecutorAgent
+        from tests.conftest import make_test_evidenced_quote
         conn = _init_in_memory_db()
         conn.execute('INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status) VALUES (?,?,?,?,?,?,?,?,?)', ('ETH-USD', 'BUY', 0.01, 3000.0, 3200.0, 2940.0, datetime.now(), 't', 'active'))
         conn.commit()
         trade_id = conn.execute('SELECT MAX(id) FROM trades').fetchone()[0]
+        ev = make_test_evidenced_quote('ETH-USD', 2940.0)
         with patch('backend.app.agents.executor.sqlite3.connect', return_value=conn):
-            result = ExecutorAgent().close_order(trade_id, 2940.0, 'Stop Loss hit')
+            result = ExecutorAgent().close_order(trade_id, 2940.0, 'Stop Loss hit', evidence=ev)
         assert result['status'] == 'closed'
         assert result['pnl_pct'] < 0
 
     def test_close_order_returns_error_for_invalid_id(self):
         from backend.app.agents.executor import ExecutorAgent
+        from tests.conftest import make_test_evidenced_quote
         conn = _init_in_memory_db()
+        ev = make_test_evidenced_quote('PETR4.SA', 50000.0)
         with patch('backend.app.agents.executor.sqlite3.connect', return_value=conn):
-            result = ExecutorAgent().close_order(9999, 50000.0, 'Test')
+            result = ExecutorAgent().close_order(9999, 50000.0, 'Test', evidence=ev)
         assert result['status'] == 'error'
 
 class TestFeed:
