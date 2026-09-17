@@ -189,3 +189,50 @@ def test_paper_session_guarantees_zero_real_broker_calls(tmp_path, mock_circuit_
         mock_url.assert_not_called()
         assert report.real_broker_calls is None
         assert report.real_broker_calls_verification == "UNVERIFIED"
+
+
+def test_paper_session_conflicting_scalar_does_not_close_trade(tmp_path, mock_circuit_breaker):
+    """Valida que escalar conflitante (34.0) não autoriza fechamento quando a cotação autoritativa é 30.0."""
+    db_file = tmp_path / 'paper_test.db'
+    storage_dir = tmp_path / 'paper_sessions'
+    _init_test_db(db_file, initial_cash=1000.0)
+    runner = PaperSessionRunner(session_id='session_scalar_conflict', db_path=str(db_file), storage_dir=str(storage_dir))
+    sig = {
+        'ticker': 'PETR4',
+        'signal': 'BUY',
+        'current_price': 30.0,
+        'target_price': 33.0,
+        'stop_loss': 28.5,
+        'confidence': 80,
+        'reason': 'Entrada',
+        'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000',
+        'dataset_approved': True,
+        'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc),
+    }
+    rep1 = runner.run_cycle(signals=[sig])
+    assert rep1.orders_executed == 1
+
+    # Snapshot tables before exit cycle
+    conn = sqlite3.connect(db_file)
+    trade_before = conn.execute("SELECT id, status, entry_price, exit_price FROM trades WHERE ticker = 'PETR4'").fetchone()
+    pf_before = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+
+    assert trade_before[1] == 'active'
+
+    # Run cycle with conflicting bare scalar 34.0 (which would trigger target if trusted).
+    # Since mock_feed_quotes returns 30.0 (< target 33.0), authoritative quote governs and prevents close.
+    runner_exit = PaperSessionRunner(session_id='session_scalar_conflict', db_path=str(db_file), storage_dir=str(storage_dir))
+    rep2 = runner_exit.run_cycle(signals=[], current_prices={'PETR4': 34.0})
+
+    assert rep2.orders_closed == 0
+    assert rep2.reconciliation_ok is True
+
+    # Tables remain unchanged
+    conn = sqlite3.connect(db_file)
+    trade_after = conn.execute("SELECT id, status, entry_price, exit_price FROM trades WHERE ticker = 'PETR4'").fetchone()
+    pf_after = conn.execute("SELECT saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+
+    assert trade_after == trade_before
+    assert pf_after == pf_before

@@ -247,10 +247,10 @@ class ExecutorAgent:
         current_price: float,
         reason: str,
         evidence: Optional[Any] = None,
-        max_observation_age_seconds: float = 300.0,
+        max_observation_age_seconds: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Closes an active order with strict evidence validation (NEXUS-004-R2).
+        Closes an active order with strict evidence validation (NEXUS-004-R3).
         Any market-price-driven Paper accounting close MUST require explicit,
         validated market evidence at this final mutation boundary.
         Failure produces 0 trade mutation and 0 portfolio mutation.
@@ -270,7 +270,11 @@ class ExecutorAgent:
         if evidence is None:
             return {"status": "rejected", "reason": "Exit price evidence is required for market close"}
 
-        from trading_bot.data.valuation_snapshot import EvidencedQuote, compute_evidence_sha256
+        from trading_bot.data.valuation_snapshot import (
+            EvidencedQuote,
+            PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS,
+            compute_evidence_sha256,
+        )
         if not isinstance(evidence, EvidencedQuote):
             return {"status": "rejected", "reason": "Evidence must be an instance of EvidencedQuote"}
 
@@ -295,7 +299,7 @@ class ExecutorAgent:
                 "reason": f"Execution price {px_val} does not match evidence price {ev_px_val}",
             }
 
-        # 3. Timestamps validation
+        # 3. Timestamps & freshness validation
         obs_at = validated_evidence.observed_at
         col_at = validated_evidence.collected_at
         if obs_at is None or getattr(obs_at, "tzinfo", None) is None:
@@ -312,14 +316,39 @@ class ExecutorAgent:
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         obs_utc = obs_at.astimezone(datetime.timezone.utc)
         col_utc = col_at.astimezone(datetime.timezone.utc)
-        if obs_utc > now_utc + datetime.timedelta(seconds=5.0) or col_utc > now_utc + datetime.timedelta(seconds=5.0):
+        tolerated_skew = 5.0
+        if (obs_utc - now_utc).total_seconds() > tolerated_skew or (col_utc - now_utc).total_seconds() > tolerated_skew:
             return {"status": "rejected", "reason": "Exit quote timestamp cannot be in the future"}
 
-        age_seconds = (now_utc - obs_utc).total_seconds()
-        if age_seconds > max_observation_age_seconds:
+        if max_observation_age_seconds is None:
+            effective_max_age = float(PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS)
+        else:
+            if isinstance(max_observation_age_seconds, bool):
+                return {"status": "rejected", "reason": "max_observation_age_seconds cannot be bool"}
+            if not isinstance(max_observation_age_seconds, (int, float)):
+                return {"status": "rejected", "reason": "max_observation_age_seconds must be numeric"}
+            try:
+                effective_max_age = float(max_observation_age_seconds)
+            except (TypeError, ValueError):
+                return {"status": "rejected", "reason": "max_observation_age_seconds must be numeric"}
+            if not math.isfinite(effective_max_age) or effective_max_age <= 0.0:
+                return {
+                    "status": "rejected",
+                    "reason": f"max_observation_age_seconds must be finite and > 0 (got {max_observation_age_seconds})",
+                }
+
+        observation_age = (now_utc - obs_utc).total_seconds()
+        if observation_age > effective_max_age:
             return {
                 "status": "rejected",
-                "reason": f"Exit quote observation is stale ({age_seconds:.1f}s > {max_observation_age_seconds}s)",
+                "reason": f"Exit quote observation is stale ({observation_age:.1f}s > {effective_max_age}s)",
+            }
+
+        collection_age = (now_utc - col_utc).total_seconds()
+        if collection_age > effective_max_age:
+            return {
+                "status": "rejected",
+                "reason": f"Exit quote collection is stale ({collection_age:.1f}s > {effective_max_age}s)",
             }
 
         # 4. Evidence hash and semantic binding
@@ -335,6 +364,11 @@ class ExecutorAgent:
             raw_close_val = float(raw_close)
         except (TypeError, ValueError):
             return {"status": "rejected", "reason": "Raw evidence close must be real numeric"}
+        if not math.isfinite(raw_close_val) or raw_close_val <= 0.0:
+            return {
+                "status": "rejected",
+                "reason": f"Raw evidence close must be finite and > 0 (got {raw_close_val})",
+            }
         if abs(raw_close_val - ev_px_val) > 1e-6:
             return {
                 "status": "rejected",

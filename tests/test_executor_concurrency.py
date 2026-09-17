@@ -85,8 +85,9 @@ class TestCloseOrderConcurrency:
                 results[idx] = ExecutorAgent().close_order(trade_id, exit_price, 'Take Profit hit', evidence=ev)
             except Exception as e:
                 results[idx] = e
+        import contextvars
         with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kw: _real_connect(temp_db_path, **kw)):
-            threads = [threading.Thread(target=_worker, args=(i,)) for i in range(2)]
+            threads = [threading.Thread(target=contextvars.copy_context().run, args=(_worker, i)) for i in range(2)]
             for t in threads:
                 t.start()
             for t in threads:
@@ -142,6 +143,7 @@ class TestExecuteOrderConcurrency:
 
         barrier = threading.Barrier(2)
         results = [None, None]
+        import contextvars
 
         def _worker(idx):
             barrier.wait()
@@ -150,7 +152,7 @@ class TestExecuteOrderConcurrency:
             except Exception as e:
                 results[idx] = e
         with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kw: _real_connect(temp_db_path, **kw)):
-            threads = [threading.Thread(target=_worker, args=(i,)) for i in range(2)]
+            threads = [threading.Thread(target=contextvars.copy_context().run, args=(_worker, i)) for i in range(2)]
             for t in threads:
                 t.start()
             for t in threads:

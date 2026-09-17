@@ -245,7 +245,13 @@ def _formatar_posicoes_abertas_para_alerta() -> str:
     return "\n".join(linhas)
 
 
-PAPER_EXIT_MAX_OBSERVATION_AGE_SECONDS: float = 300.0
+from trading_bot.data.valuation_snapshot import (
+    EvidencedQuote,
+    PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS,
+    compute_evidence_sha256,
+)
+
+PAPER_EXIT_MAX_OBSERVATION_AGE_SECONDS: float = float(PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS)
 
 
 def _price_is_trustworthy(
@@ -329,15 +335,19 @@ def _price_is_trustworthy(
             if obs_tz > col_tz + datetime.timedelta(seconds=1.0):
                 return False
 
-        ts_to_check = obs_tz if obs_tz is not None else col_tz
-        if ts_to_check is not None:
-            # Future timestamp check (tolerance of 5s)
-            if (ts_to_check - current_time).total_seconds() > 5.0:
-                return False
+        limit = max_age_seconds if max_age_seconds is not None else PAPER_EXIT_MAX_OBSERVATION_AGE_SECONDS
+        if isinstance(limit, bool) or not isinstance(limit, (int, float)) or not math.isfinite(limit) or limit <= 0.0:
+            return False
 
-            limit = max_age_seconds if max_age_seconds is not None else PAPER_EXIT_MAX_OBSERVATION_AGE_SECONDS
-            age = (current_time - ts_to_check).total_seconds()
-            if age > limit:
+        if obs_tz is not None:
+            if (obs_tz - current_time).total_seconds() > 5.0:
+                return False
+            if (current_time - obs_tz).total_seconds() > limit:
+                return False
+        if col_tz is not None:
+            if (col_tz - current_time).total_seconds() > 5.0:
+                return False
+            if (current_time - col_tz).total_seconds() > limit:
                 return False
 
     return True
@@ -348,7 +358,12 @@ def extract_exit_evidenced_quote(
     df: Any,
     collected_at: Optional[datetime.datetime] = None,
 ) -> Optional[Any]:
-    """Extract and strictly validate EvidencedQuote from exit OHLCV data (NEXUS-004-R1)."""
+    """NON-AUTHORITATIVE helper: extracts synthetic exit quote from DataFrame for legacy testing.
+
+    DEMOTED (NEXUS-004-R3): Authoritative automatic exit execution MUST use
+    backend.app.data.feed.get_evidenced_quote(...) to preserve feed provider provenance,
+    actual collection timestamp, and provider evidence hash.
+    """
     if df is None or getattr(df, "empty", True):
         return None
     try:
@@ -470,31 +485,36 @@ async def _run_exit_scan() -> bool:
             all_trustworthy = False
             continue
 
-        df_recent = await asyncio.to_thread(
-            market.fetch_ohlcv, ticker, period="1d", interval="1m",
-            ttl=worker_state.exit_price_cache_ttl_seconds(),
-        )
-        if df_recent is None or len(df_recent) == 0:
-            # Falha total do fetch (ex.: rate limit esgotando os retries) —
-            # este ticker ficou sem avaliação nesta passada. Mesma
-            # categoria de "não efetivo" que preço não confiável abaixo.
+        exit_ttl = worker_state.exit_price_cache_ttl_seconds()
+        # Authoritative market evidence from feed provider (NEXUS-004-R3)
+        from .data.feed import get_evidenced_quote
+        exit_quote = await asyncio.to_thread(get_evidenced_quote, ticker, ttl=exit_ttl)
+        if exit_quote is None:
+            logger.warning(
+                "Exit scan: evidência estruturada de saída indisponível para %s — mantendo posição (fail-closed)",
+                ticker,
+            )
+            if _should_alert_price_untrustworthy(ticker, "untrustworthy_price"):
+                await asyncio.to_thread(
+                    _alerta_telegram,
+                    f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
+                    f"(None) — posição mantida (fail-closed).",
+                )
             all_trustworthy = False
             continue
 
-        last_row = df_recent.iloc[-1]
-        current_price = last_row["close"]
-        observed_time = last_row.get("date") or last_row.get("datetime") or last_row.get("index")
-
+        raw = exit_quote.raw_evidence or {}
         if not _price_is_trustworthy(
-            current_price,
-            open_=last_row.get("open"),
-            high=last_row.get("high"),
-            low=last_row.get("low"),
-            observed_at=observed_time,
+            exit_quote.price,
+            open_=raw.get("open"),
+            high=raw.get("high"),
+            low=raw.get("low"),
+            observed_at=exit_quote.observed_at,
+            collected_at=exit_quote.collected_at,
         ):
             logger.warning(
                 "Exit scan: preço não confiável para %s (%r) — mantendo "
-                "posição, nenhuma ação tomada.", ticker, current_price
+                "posição, nenhuma ação tomada.", ticker, exit_quote.price
             )
             # Log sempre acontece (barato); o Telegram é deduplicado —
             # exit_loop roda a cada poucos segundos, e uma condição
@@ -503,18 +523,8 @@ async def _run_exit_scan() -> bool:
                 await asyncio.to_thread(
                     _alerta_telegram,
                     f"⚠️ [Meridian] Exit scan: preço não confiável para {ticker} "
-                    f"({current_price!r}) — posição mantida (fail-closed).",
+                    f"({exit_quote.price!r}) — posição mantida (fail-closed).",
                 )
-            all_trustworthy = False
-            continue
-
-        # Extract NEXUS-001-grade exit evidence binding with 1m bar (NEXUS-004-R2)
-        exit_quote = extract_exit_evidenced_quote(ticker, df_recent)
-        if exit_quote is None:
-            logger.warning(
-                "Exit scan: evidência estruturada de saída indisponível para %s — mantendo posição (fail-closed)",
-                ticker,
-            )
             all_trustworthy = False
             continue
 
@@ -554,9 +564,12 @@ async def _run_exit_scan() -> bool:
             else:
                 live_pnl_pct = 0.0
             cursor.execute(
-                "UPDATE trades SET pnl_pct = ? WHERE id = ?",
+                "UPDATE trades SET pnl_pct = ? WHERE id = ? AND status = 'active'",
                 (live_pnl_pct, trade_id),
             )
+            if cursor.rowcount == 0:
+                # Concurrent close happened, do not proceed with breakeven or close
+                continue
             conn.commit()
 
             # Breakeven (50% do caminho até o alvo)
@@ -568,9 +581,11 @@ async def _run_exit_scan() -> bool:
                 halfway = entry_price + (target_price - entry_price) * 0.5
                 if current_price >= halfway:
                     cursor.execute(
-                        "UPDATE trades SET stop_loss = ? WHERE id = ?",
+                        "UPDATE trades SET stop_loss = ? WHERE id = ? AND status = 'active'",
                         (entry_price, trade_id),
                     )
+                    if cursor.rowcount == 0:
+                        continue
                     conn.commit()
                     stop_loss = entry_price
                     await broadcast_log(
@@ -586,9 +601,11 @@ async def _run_exit_scan() -> bool:
                 halfway = entry_price - (entry_price - target_price) * 0.5
                 if current_price <= halfway:
                     cursor.execute(
-                        "UPDATE trades SET stop_loss = ? WHERE id = ?",
+                        "UPDATE trades SET stop_loss = ? WHERE id = ? AND status = 'active'",
                         (entry_price, trade_id),
                     )
+                    if cursor.rowcount == 0:
+                        continue
                     conn.commit()
                     stop_loss = entry_price
                     await broadcast_log(
@@ -619,12 +636,29 @@ async def _run_exit_scan() -> bool:
                 "warning",
             )
             executor = ExecutorAgent()
-            res = executor.close_order(trade_id, current_price, close_reason, evidence=exit_quote)
-            await broadcast_log(
-                "ExecutorAgent",
-                f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
-                "success",
-            )
+            try:
+                res = executor.close_order(trade_id, current_price, close_reason, evidence=exit_quote)
+            except Exception as exc:
+                logger.exception("Exit scan: exceção ao fechar ordem para trade %s (%s): %s", trade_id, ticker, exc)
+                res = {"status": "exception", "reason": str(exc)}
+
+            if res.get("status") == "closed":
+                await broadcast_log(
+                    "ExecutorAgent",
+                    f"Closed trade! PnL: {res.get('pnl_pct', 0.0):.2f}%",
+                    "success",
+                )
+            else:
+                logger.error(
+                    "Exit scan: close_order não fechou posição para trade %s (%s) [status=%s, reason=%s]",
+                    trade_id, ticker, res.get("status"), res.get("reason"),
+                )
+                await broadcast_log(
+                    "ExecutorAgent",
+                    f"Falha ao fechar trade {trade_id} ({ticker}): status={res.get('status')} motivo={res.get('reason')}",
+                    "error",
+                )
+                all_trustworthy = False
         else:
             await broadcast_log(
                 "System",
@@ -1481,9 +1515,17 @@ def system_emergency_stop(
                 failed_tickers.append(ticker)
                 continue
 
-            res = executor.close_order(
-                trade_id, quote.price, "EMERGENCY STOP", evidence=quote
-            )
+            try:
+                res = executor.close_order(
+                    trade_id, quote.price, "EMERGENCY STOP", evidence=quote
+                )
+            except Exception as exc:
+                logger.exception(
+                    "Emergency stop: executor close_order lançou exceção para trade %s (%s): %s",
+                    trade_id, ticker, exc,
+                )
+                res = {"status": "exception", "reason": str(exc)}
+
             if res.get("status") == "closed":
                 closed_count += 1
             else:

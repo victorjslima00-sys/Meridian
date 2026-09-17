@@ -12,6 +12,7 @@ Rules:
 """
 from __future__ import annotations
 
+import contextvars
 import datetime
 from contextlib import contextmanager
 from enum import Enum
@@ -268,33 +269,38 @@ class AutonomousSessionAuthority:
         return self.check_authority(dt)[0]
 
 
-_CURRENT_SESSION_AUTHORITY: AutonomousSessionAuthority = AutonomousSessionAuthority()
+DEFAULT_SESSION_AUTHORITY: AutonomousSessionAuthority = AutonomousSessionAuthority()
+_SESSION_AUTHORITY_OVERRIDE: contextvars.ContextVar[Optional[AutonomousSessionAuthority]] = (
+    contextvars.ContextVar("_SESSION_AUTHORITY_OVERRIDE", default=None)
+)
 
 
 def get_session_authority() -> AutonomousSessionAuthority:
-    """Get the active AutonomousSessionAuthority singleton."""
-    return _CURRENT_SESSION_AUTHORITY
-
-
-def set_session_authority(authority: AutonomousSessionAuthority) -> None:
-    """Set the active AutonomousSessionAuthority singleton."""
-    global _CURRENT_SESSION_AUTHORITY
-    _CURRENT_SESSION_AUTHORITY = authority
+    """Get the active AutonomousSessionAuthority (scoped override if active, else default)."""
+    override = _SESSION_AUTHORITY_OVERRIDE.get()
+    if override is not None:
+        return override
+    return DEFAULT_SESSION_AUTHORITY
 
 
 @contextmanager
 def override_session_authority(
     authority_or_fn: AutonomousSessionAuthority | Callable[[Optional[datetime.datetime]], tuple[bool, str, B3DayType, B3SessionPhase]],
 ):
-    """Context manager for temporarily overriding autonomous session authority."""
-    global _CURRENT_SESSION_AUTHORITY
-    old_authority = _CURRENT_SESSION_AUTHORITY
+    """Context manager for temporarily overriding autonomous session authority.
+
+    Uses contextvars for context-local scoping:
+    - nested overrides restore correctly;
+    - exception unwinding restores correctly;
+    - overrides do not leak across independent threads/contexts.
+    """
     if isinstance(authority_or_fn, AutonomousSessionAuthority):
-        _CURRENT_SESSION_AUTHORITY = authority_or_fn
+        auth = authority_or_fn
     else:
-        _CURRENT_SESSION_AUTHORITY = AutonomousSessionAuthority(override_fn=authority_or_fn)
+        auth = AutonomousSessionAuthority(override_fn=authority_or_fn)
+    token = _SESSION_AUTHORITY_OVERRIDE.set(auth)
     try:
-        yield _CURRENT_SESSION_AUTHORITY
+        yield auth
     finally:
-        _CURRENT_SESSION_AUTHORITY = old_authority
+        _SESSION_AUTHORITY_OVERRIDE.reset(token)
 

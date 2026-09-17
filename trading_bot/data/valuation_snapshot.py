@@ -115,12 +115,14 @@ class EvidencedQuote(BaseModel):
 
         # 2. price vs raw close
         raw_close = raw.get("close")
-        if raw_close is None:
-            raise ValueError("raw_evidence missing 'close'")
+        if raw_close is None or isinstance(raw_close, bool):
+            raise ValueError("raw_evidence missing 'close' or is boolean")
         try:
             raw_close_val = float(raw_close)
         except (ValueError, TypeError):
             raise ValueError(f"raw_evidence 'close' is not a valid number: {raw_close}")
+        if not math.isfinite(raw_close_val) or raw_close_val <= 0.0:
+            raise ValueError(f"raw_evidence close must be finite and > 0 (got {raw_close_val})")
         if abs(self.price - raw_close_val) > 1e-6:
             raise ValueError(
                 f"EvidencedQuote price {self.price} does not match raw_evidence close {raw_close_val}"

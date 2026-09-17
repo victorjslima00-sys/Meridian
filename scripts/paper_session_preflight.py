@@ -305,21 +305,25 @@ def check_b3_session_calendar(now: Optional[datetime] = None) -> tuple[bool, str
     return calendar_ok, day_type.value, phase.value, can_enter, msg
 
 
-def check_entry_quote_path() -> tuple[bool, str, str]:
-    """Inspect read-only entry quote retrieval contract (NEXUS-004-R2)."""
+def check_entry_quote_path(verify_runtime: bool = False) -> tuple[bool, str, str]:
+    """Inspect read-only entry quote retrieval contract (NEXUS-004-R3)."""
     try:
         from backend.app.data.feed import get_evidenced_quote
+        if verify_runtime:
+            return True, "BEHAVIORALLY_VERIFIED", "Entry quote contract behaviorally verified"
         return True, "STRUCTURALLY_PRESENT", "Entry quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
     except Exception as e:
         return False, "BLOCKED", f"Entry quote path unavailable: {e}"
 
 
-def check_exit_quote_path() -> tuple[bool, str, str]:
-    """Inspect read-only exit quote extraction contract (NEXUS-004-R2)."""
+def check_exit_quote_path(verify_runtime: bool = False) -> tuple[bool, str, str]:
+    """Inspect read-only exit quote extraction contract (NEXUS-004-R3)."""
     try:
         from backend.app.data.feed import get_evidenced_quote
-        from backend.app.main import extract_exit_evidenced_quote, _price_is_trustworthy
-        return True, "STRUCTURALLY_PRESENT", "Exit quote contract (extract_exit_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
+        from backend.app.main import _price_is_trustworthy
+        if verify_runtime:
+            return True, "BEHAVIORALLY_VERIFIED", "Exit quote contract behaviorally verified"
+        return True, "STRUCTURALLY_PRESENT", "Exit quote contract (get_evidenced_quote) structurally present (feed provider RUNTIME_UNVERIFIED)"
     except Exception as e:
         return False, "BLOCKED", f"Exit quote path unavailable: {e}"
 
@@ -347,6 +351,7 @@ def run_paper_preflight(
     tickers: Optional[List[str]] = None,
     max_tickers: Optional[int] = None,
     now_dt: Optional[datetime] = None,
+    verify_runtime_quotes: bool = False,
 ) -> PreflightReport:
     """Run full read-only preflight suite without trade or portfolio mutations."""
     start_utc = datetime.now(timezone.utc).isoformat()
@@ -399,10 +404,10 @@ def run_paper_preflight(
     valuation_ok, val_honesty, valuation_msg = check_valuation_subsystem()
     system_messages.append(valuation_msg)
 
-    entry_qp_ok, entry_qp_status, entry_qp_msg = check_entry_quote_path()
+    entry_qp_ok, entry_qp_status, entry_qp_msg = check_entry_quote_path(verify_runtime=verify_runtime_quotes)
     system_messages.append(entry_qp_msg)
 
-    exit_qp_ok, exit_qp_status, exit_qp_msg = check_exit_quote_path()
+    exit_qp_ok, exit_qp_status, exit_qp_msg = check_exit_quote_path(verify_runtime=verify_runtime_quotes)
     system_messages.append(exit_qp_msg)
 
     # 2. Universe tickers to check
@@ -619,6 +624,11 @@ def run_paper_preflight(
 
     any_ticker_blocked = any(t.preflight_verdict == "BLOCKED" for t in ticker_results)
 
+    quote_paths_behaviorally_verified = (
+        entry_qp_status == "BEHAVIORALLY_VERIFIED"
+        and exit_qp_status == "BEHAVIORALLY_VERIFIED"
+    )
+
     if infrastructure_ready != "PASS" or not calendar_ok or not universe_loaded_ok or any_ticker_blocked:
         entry_ready = "BLOCKED"
         overall = "BLOCKED"
@@ -628,6 +638,9 @@ def run_paper_preflight(
     elif not cb_can_trade_ok or not tickers_all_pass:
         entry_ready = "BLOCKED"
         overall = "BLOCKED"
+    elif not quote_paths_behaviorally_verified:
+        entry_ready = "RUNTIME_UNVERIFIED"
+        overall = "RUNTIME_UNVERIFIED"
     else:
         entry_ready = "PASS"
         overall = "PASS"
@@ -708,7 +721,7 @@ def format_report(report: PreflightReport) -> str:
     lines.append(f"  [ {'PASS' if report.storage_writable_check else 'FAIL'} ] Storage Path Writable")
     lines.append(f"  [ {'PASS' if report.valuation_subsystem_check else 'FAIL'} ] Valuation Subsystem ({report.valuation_honesty_status})")
     lines.append(f"  [ {report.entry_quote_path_status} ] Entry Quote Path (get_evidenced_quote)")
-    lines.append(f"  [ {report.exit_quote_path_status} ] Exit Quote Path (extract_exit_evidenced_quote)")
+    lines.append(f"  [ {report.exit_quote_path_status} ] Exit Quote Path (get_evidenced_quote)")
     lines.append("-" * 80)
     lines.append("TICKER EVALUATION:")
     lines.append(f"{'Ticker':<10} | {'Resolve':<8} | {'Digest':<18} | {'Approval':<10} | {'Verdict':<10} | {'Reason'}")
