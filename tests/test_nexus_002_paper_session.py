@@ -168,6 +168,31 @@ def test_paper_session_hold_signal_not_executable(tmp_path):
     mock_exec.return_value.execute_order.assert_not_called()
 
 
+VALID_SHA256 = "0" * 64
+
+
+def _ident(ticker="PETR4", digest=VALID_SHA256):
+    """Authority identity matching this module's synthetic_approval fixture exactly."""
+    from trading_bot.data.approval import compute_candidate_id
+    return {
+        "strategy_id": "donchian_breakout",
+        "intended_use": "PAPER_TRADING",
+        "candidate_id": compute_candidate_id(
+            ticker=ticker,
+            strategy_id="donchian_breakout",
+            intended_use="PAPER_TRADING",
+            dataset_sha256=digest,
+            collected_at_utc="2026-09-16T12:00:00Z",
+            dataset_artifact_sha256=VALID_SHA256,
+            review_csv_sha256=VALID_SHA256,
+            source_sha256=VALID_SHA256,
+            calendar_sha256=VALID_SHA256,
+            adjustments_sha256=VALID_SHA256,
+            point_in_time_sha256=VALID_SHA256,
+        ),
+    }
+
+
 def test_paper_session_replay_idempotency_in_session_and_across_restarts(tmp_path, mock_circuit_breaker):
     db_file = tmp_path / "paper.db"
     storage_dir = tmp_path / "sessions"
@@ -184,6 +209,7 @@ def test_paper_session_replay_idempotency_in_session_and_across_restarts(tmp_pat
         "generated_at": now,
         "dataset_sha256": VALID_SHA256,
         "dataset_approved": True,
+        **_ident(),
     }
 
     # 1. First run executes the order

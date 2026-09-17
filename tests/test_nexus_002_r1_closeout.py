@@ -61,6 +61,24 @@ def _daily_breakout_df(n: int = 250, breakout: float = 1.02) -> pd.DataFrame:
 VALID_SHA256 = "a" * 64
 
 
+def _authority_kwargs(digest=VALID_SHA256, ticker="PETR4"):
+    """Explicit synthetic authority identity matching the synthetic_approval fixture."""
+    c_id = compute_candidate_id(
+        ticker=ticker,
+        strategy_id="donchian_breakout",
+        intended_use="PAPER_TRADING",
+        dataset_sha256=digest,
+        collected_at_utc="2026-09-16T12:00:00Z",
+        dataset_artifact_sha256=VALID_SHA256,
+        review_csv_sha256=VALID_SHA256,
+        source_sha256=VALID_SHA256,
+        calendar_sha256=VALID_SHA256,
+        adjustments_sha256=VALID_SHA256,
+        point_in_time_sha256=VALID_SHA256,
+    )
+    return {"strategy_id": "donchian_breakout", "candidate_id": c_id, "intended_use": "PAPER_TRADING"}
+
+
 @pytest.fixture
 def synthetic_approval(monkeypatch):
     ev = Evidence(path="synthetic.csv", sha256=VALID_SHA256)
@@ -494,25 +512,27 @@ def test_f_signal_risk_mismatch_rejected_before_transaction(isolated_db, synthet
         dataset_sha256=VALID_SHA256,
         dataset_approved=True,
         generated_at=now,
+        **_authority_kwargs(),
     )
 
     sig_b = TypedSignal(
-        ticker="VALE3",
+        ticker="PETR4",
         side="BUY",
-        price=60.0,
-        target_price=66.0,
-        stop_loss=57.0,
+        price=31.0,
+        target_price=34.0,
+        stop_loss=29.0,
         reason="Signal B",
         dataset_sha256=VALID_SHA256,
         dataset_approved=True,
         generated_at=now,
+        **_authority_kwargs(),
     )
     dec_b = RiskDecision(
         signal_id=sig_b.signal_id,
         approved=True,
         allocated_capital=100.0,
-        target_price=66.0,
-        stop_loss=57.0,
+        target_price=34.0,
+        stop_loss=29.0,
         reason="Decision for B",
         decision_timestamp=now,
     )
@@ -555,6 +575,7 @@ def test_g_paperbroker_rejects_raw_dicts_accepts_typed_intent(isolated_db, synth
         dataset_sha256=VALID_SHA256,
         dataset_approved=True,
         generated_at=datetime.now(timezone.utc),
+        **_authority_kwargs(),
     )
     dec = RiskDecision(
         signal_id=sig.signal_id,
@@ -621,6 +642,7 @@ def test_h_journal_sanitized_validated_signal(tmp_path, synthetic_approval, mock
         "generated_at": now.isoformat(),
         "dataset_sha256": VALID_SHA256,
         "dataset_approved": True,
+        **_authority_kwargs(),
     }
 
     runner = PaperSessionRunner(session_id="session_h", db_path=str(db_file), storage_dir=str(storage_dir))
@@ -660,6 +682,7 @@ def test_mutation_a_signal_tampering_rejected_no_db_mutation(
         dataset_sha256=VALID_SHA256,
         dataset_approved=True,
         generated_at=now,
+        **_authority_kwargs(),
     )
     dec = RiskDecision(
         signal_id=sig.signal_id,
@@ -706,6 +729,7 @@ def test_mutation_b_allocated_capital_tampering_rejected(
         dataset_sha256=VALID_SHA256,
         dataset_approved=True,
         generated_at=now,
+        **_authority_kwargs(),
     )
     dec = RiskDecision(
         signal_id=sig.signal_id,
@@ -751,6 +775,7 @@ def test_mutation_c_target_stop_tampering_rejected(
         dataset_sha256=VALID_SHA256,
         dataset_approved=True,
         generated_at=now,
+        **_authority_kwargs(),
     )
     dec = RiskDecision(
         signal_id=sig.signal_id,

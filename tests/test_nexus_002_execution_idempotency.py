@@ -18,44 +18,22 @@ from tests.conftest import make_test_evidenced_quote
 VALID_SHA256 = "0" * 64
 
 
+from tests.conftest import make_synthetic_approval
+
+SYNTHETIC_AUTHORITY = make_synthetic_approval("PETR4", VALID_SHA256)
+IDENTITY = {name: getattr(SYNTHETIC_AUTHORITY, name) for name in (
+    "strategy_id", "candidate_id", "intended_use",
+)}
+
+
 @pytest.fixture(autouse=True)
 def synthetic_approval(monkeypatch):
-    from trading_bot.data.approval import Approval, Evidence, compute_candidate_id
-    ev = Evidence(path="synthetic.csv", sha256=VALID_SHA256)
-    c_id = compute_candidate_id(
-        ticker="PETR4",
-        strategy_id="donchian_breakout",
-        intended_use="PAPER_TRADING",
-        dataset_sha256=VALID_SHA256,
-        collected_at_utc="2026-09-16T12:00:00Z",
-        dataset_artifact_sha256=ev.sha256,
-        review_csv_sha256=ev.sha256,
-        source_sha256=ev.sha256,
-        calendar_sha256=ev.sha256,
-        adjustments_sha256=ev.sha256,
-        point_in_time_sha256=ev.sha256,
-    )
-    appr = Approval(
-        candidate_id=c_id,
-        ticker="PETR4",
-        strategy_id="donchian_breakout",
-        intended_use="PAPER_TRADING",
-        dataset_sha256=VALID_SHA256,
-        collected_at_utc="2026-09-16T12:00:00Z",
-        dataset_artifact=ev,
-        review_csv=ev,
-        source=ev,
-        calendar=ev,
-        adjustments=ev,
-        point_in_time=ev,
-        reviewed_by="nexus-tester",
-        review_notes="synthetic fixture",
-        status="approved",
-    )
-    monkeypatch.setattr(
-        "trading_bot.data.approval.require_dataset_approval_by_digest",
-        lambda d, *a, **kw: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required"))
-    )
+    """Only the explicit PETR4 synthetic authority is authorized in these unit tests."""
+    def lookup(digest, **kwargs):
+        if digest != VALID_SHA256:
+            raise ValueError("data_approval_required")
+        return SYNTHETIC_AUTHORITY
+    monkeypatch.setattr("trading_bot.data.approval.require_dataset_approval_by_digest", lookup)
 
 
 def _create_isolated_db(db_path: Path, initial_cash: float = 1000.0):
@@ -139,6 +117,7 @@ def _make_intent(
         reason="Test breakout signal",
         generated_at=generated_at,
         dataset_sha256=dataset_sha256,
+        **IDENTITY,
         dataset_approved=True,
     )
     dec = RiskDecision(
@@ -183,6 +162,7 @@ def test_executor_rejects_signal_risk_mismatch(tmp_path):
         stop_loss=28.5,
         reason="Signal A",
         dataset_sha256=VALID_SHA256,
+        **IDENTITY,
         dataset_approved=True,
         generated_at=datetime.now(timezone.utc),
     )

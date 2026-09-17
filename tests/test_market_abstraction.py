@@ -29,6 +29,12 @@ from backend.app.markets import get_broker, get_market, resolve_market
 from backend.app.markets.base import Broker, Market
 
 
+def _petr4():
+    """Synthetic authority identity matching the conftest global approval mock."""
+    from tests.conftest import synthetic_identity_kwargs
+    return synthetic_identity_kwargs(digest="0" * 64, ticker="PETR4.SA")
+
+
 class TestConformidadeDeProtocolo:
     def test_b3_market_satisfaz_o_protocolo_market(self):
         assert isinstance(get_market("b3"), Market)
@@ -177,6 +183,7 @@ class TestPaperBrokerDelegaParaOExecutor:
             generated_at=datetime.now(timezone.utc),
             dataset_sha256="0" * 64,
             dataset_approved=True,
+            **_petr4(),
         )
         dec = RiskDecision(
             signal_id=sig.signal_id,

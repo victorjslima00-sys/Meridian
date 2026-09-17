@@ -87,6 +87,7 @@ def mock_validate_dataset_digest(monkeypatch, request):
         'test_data_approval' in request.module.__name__
         or 'test_nexus_002' in request.module.__name__
         or 'test_nexus_003' in request.module.__name__
+        or 'test_nexus_005' in request.module.__name__
         or 'sem_aprovacao' in request.node.name
     ):
         return
@@ -133,6 +134,76 @@ def mock_validate_dataset_digest(monkeypatch, request):
 
     monkeypatch.setattr(trading_bot.data.approval, 'validate_dataset_digest', _mock_validate)
     monkeypatch.setattr(trading_bot.data.approval, 'require_dataset_approval_by_digest', _mock_require)
+
+
+def make_synthetic_approval(ticker="PETR4.SA", digest="0" * 64):
+    """Explicit synthetic authority for unit fixtures, not persisted approval evidence."""
+    from trading_bot.data.approval import Approval, Evidence, compute_candidate_id
+    ev = Evidence(path="synthetic.csv", sha256="0" * 64)
+    identity = dict(
+        ticker=ticker, strategy_id="donchian_breakout", intended_use="PAPER_TRADING",
+        dataset_sha256=digest, collected_at_utc="2026-09-16T12:00:00Z",
+    )
+    candidate_id = compute_candidate_id(
+        **identity, dataset_artifact_sha256=ev.sha256, review_csv_sha256=ev.sha256,
+        source_sha256=ev.sha256, calendar_sha256=ev.sha256,
+        adjustments_sha256=ev.sha256, point_in_time_sha256=ev.sha256,
+    )
+    return Approval(
+        **identity, candidate_id=candidate_id, dataset_artifact=ev, review_csv=ev,
+        source=ev, calendar=ev, adjustments=ev, point_in_time=ev,
+        reviewed_by="nexus-tester", review_notes="synthetic unit fixture", status="approved",
+    )
+
+
+@pytest.fixture
+def unit_approval_identity(monkeypatch):
+    """Opt-in per-test lookup of explicitly registered synthetic ticker authorities."""
+    import hashlib
+    authorities = {}
+
+    def lookup(digest, **kwargs):
+        if digest not in authorities:
+            raise ValueError("data_approval_required")
+        return authorities[digest]
+
+    def register(ticker):
+        digest = hashlib.sha256(f"synthetic-unit:{ticker}".encode()).hexdigest()
+        authority = make_synthetic_approval(ticker, digest)
+        authorities[digest] = authority
+        return {name: getattr(authority, name) for name in (
+            "ticker", "dataset_sha256", "strategy_id", "candidate_id", "intended_use",
+        )}
+
+    monkeypatch.setattr("trading_bot.data.approval.require_dataset_approval_by_digest", lookup)
+    return register
+
+
+def synthetic_identity_kwargs(digest="0" * 64, ticker="PETR4.SA"):
+    """Signal authority identity kwargs matching make_synthetic_approval exactly.
+
+    Use when a module relies on the global conftest approval mock: candidate_id
+    must be computed from the same identity the mock returns.
+    """
+    from trading_bot.data.approval import compute_candidate_id
+    return {
+        "strategy_id": "donchian_breakout",
+        "intended_use": "PAPER_TRADING",
+        "candidate_id": compute_candidate_id(
+            ticker=ticker,
+            strategy_id="donchian_breakout",
+            intended_use="PAPER_TRADING",
+            dataset_sha256=digest,
+            collected_at_utc="2026-09-16T12:00:00Z",
+            dataset_artifact_sha256="0" * 64,
+            review_csv_sha256="0" * 64,
+            source_sha256="0" * 64,
+            calendar_sha256="0" * 64,
+            adjustments_sha256="0" * 64,
+            point_in_time_sha256="0" * 64,
+        ),
+    }
+
 
 
 def make_test_evidenced_quote(

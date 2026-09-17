@@ -9,45 +9,22 @@ from backend.app.agents.contracts import TypedSignal, compute_signal_id
 VALID_SHA256 = "0" * 64
 
 
+from tests.conftest import make_synthetic_approval
+
+SYNTHETIC_AUTHORITY = make_synthetic_approval("PETR4", VALID_SHA256)
+IDENTITY = {name: getattr(SYNTHETIC_AUTHORITY, name) for name in (
+    "strategy_id", "candidate_id", "intended_use",
+)}
+
+
 @pytest.fixture(autouse=True)
 def synthetic_approval(monkeypatch):
-    """Synthetic dataset approval for contract unit tests."""
-    from trading_bot.data.approval import Approval, Evidence, compute_candidate_id
-    ev = Evidence(path="synthetic.csv", sha256=VALID_SHA256)
-    c_id = compute_candidate_id(
-        ticker="PETR4",
-        strategy_id="donchian_breakout",
-        intended_use="PAPER_TRADING",
-        dataset_sha256=VALID_SHA256,
-        collected_at_utc="2026-09-16T12:00:00Z",
-        dataset_artifact_sha256=ev.sha256,
-        review_csv_sha256=ev.sha256,
-        source_sha256=ev.sha256,
-        calendar_sha256=ev.sha256,
-        adjustments_sha256=ev.sha256,
-        point_in_time_sha256=ev.sha256,
-    )
-    appr = Approval(
-        candidate_id=c_id,
-        ticker="PETR4",
-        strategy_id="donchian_breakout",
-        intended_use="PAPER_TRADING",
-        dataset_sha256=VALID_SHA256,
-        collected_at_utc="2026-09-16T12:00:00Z",
-        dataset_artifact=ev,
-        review_csv=ev,
-        source=ev,
-        calendar=ev,
-        adjustments=ev,
-        point_in_time=ev,
-        reviewed_by="nexus-tester",
-        review_notes="synthetic fixture",
-        status="approved",
-    )
-    monkeypatch.setattr(
-        "trading_bot.data.approval.require_dataset_approval_by_digest",
-        lambda d, *a, **kw: appr if d == VALID_SHA256 else (_ for _ in ()).throw(ValueError("data_approval_required"))
-    )
+    """Only the explicit PETR4 synthetic authority is authorized in these unit tests."""
+    def lookup(digest, **kwargs):
+        if digest != VALID_SHA256:
+            raise ValueError("data_approval_required")
+        return SYNTHETIC_AUTHORITY
+    monkeypatch.setattr("trading_bot.data.approval.require_dataset_approval_by_digest", lookup)
 
 
 def test_valid_buy_signal_contract():
@@ -61,6 +38,7 @@ def test_valid_buy_signal_contract():
         "reason": "Breakout",
         "generated_at": now,
         "dataset_sha256": VALID_SHA256,
+        **IDENTITY,
         "dataset_approved": True,
     })
     assert sig.signal_id.startswith("sig_")
@@ -73,7 +51,7 @@ def test_valid_buy_signal_contract():
 def test_valid_sell_signal_contract():
     now = datetime.now(timezone.utc)
     sig = TypedSignal.model_validate({
-        "ticker": "VALE3",
+        "ticker": "PETR4",
         "side": "SELL",
         "price": 60.0,
         "target_price": 55.0,
@@ -81,6 +59,7 @@ def test_valid_sell_signal_contract():
         "reason": "Breakdown",
         "generated_at": now,
         "dataset_sha256": VALID_SHA256,
+        **IDENTITY,
         "dataset_approved": True,
     })
     assert sig.signal_id.startswith("sig_")
@@ -98,6 +77,7 @@ def test_hold_signal_allowed_in_signal_but_no_direction_inversion():
         "reason": "Neutral",
         "generated_at": now,
         "dataset_sha256": VALID_SHA256,
+        **IDENTITY,
         "dataset_approved": True,
     })
     assert sig.signal_id.startswith("sig_")
@@ -106,7 +86,7 @@ def test_hold_signal_allowed_in_signal_but_no_direction_inversion():
 
 def test_caller_supplied_matching_signal_id():
     now = datetime.now(timezone.utc)
-    expected = compute_signal_id("PETR4", "BUY", 30.0, 33.0, 28.5, VALID_SHA256, now)
+    expected = compute_signal_id("PETR4", "BUY", 30.0, 33.0, 28.5, VALID_SHA256, now, **IDENTITY)
     sig = TypedSignal.model_validate({
         "signal_id": expected,
         "ticker": "PETR4",
@@ -117,6 +97,7 @@ def test_caller_supplied_matching_signal_id():
         "reason": "Breakout",
         "generated_at": now,
         "dataset_sha256": VALID_SHA256,
+        **IDENTITY,
         "dataset_approved": True,
     })
     assert sig.signal_id == expected
@@ -135,6 +116,7 @@ def test_caller_supplied_mismatched_signal_id():
             "reason": "Breakout",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -151,6 +133,7 @@ def test_reject_bool_as_numeric():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -168,6 +151,7 @@ def test_reject_nan_inf(val):
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -185,6 +169,7 @@ def test_reject_zero_or_negative_price(p):
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -201,6 +186,7 @@ def test_reject_naive_timestamp():
             "reason": "Test",
             "generated_at": naive,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -217,6 +203,7 @@ def test_reject_invalid_side():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -233,6 +220,7 @@ def test_reject_buy_inverted_target_stop():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -249,6 +237,7 @@ def test_reject_sell_inverted_target_stop():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -265,6 +254,7 @@ def test_reject_unapproved_dataset():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": "1" * 64,  # Not approved in fixture
+            **IDENTITY,
             "dataset_approved": True,
         })
 
@@ -281,6 +271,7 @@ def test_reject_dataset_approved_false():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": False,
         })
 
@@ -297,6 +288,7 @@ def test_reject_extra_fields():
             "reason": "Test",
             "generated_at": now,
             "dataset_sha256": VALID_SHA256,
+            **IDENTITY,
             "dataset_approved": True,
             "extra_forged_field": "injected",
         })
@@ -313,13 +305,16 @@ def test_signal_id_sensitivity():
         "reason": "Test",
         "generated_at": now,
         "dataset_sha256": VALID_SHA256,
+        **IDENTITY,
         "dataset_approved": True,
     }
     sig1 = TypedSignal.model_validate(base)
 
     # Change ticker
-    sig2 = TypedSignal.model_validate({**base, "ticker": "VALE3"})
-    assert sig1.signal_id != sig2.signal_id
+    with pytest.raises(ValueError, match="Approval identity mismatch: ticker"):
+        TypedSignal.model_validate({**base, "ticker": "VALE3"})
+    changed_id = compute_signal_id("VALE3", "BUY", 30.0, 33.0, 28.5, VALID_SHA256, now, **IDENTITY)
+    assert sig1.signal_id != changed_id
 
     # Change price
     sig3 = TypedSignal.model_validate({**base, "price": 30.5})

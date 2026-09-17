@@ -10,7 +10,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
+from pathlib import Path
 
 import trading_bot.data.approval
 from trading_bot.data.valuation_snapshot import (
@@ -19,7 +20,28 @@ from trading_bot.data.valuation_snapshot import (
     PAPER_DEFAULT_MAX_QUOTE_AGE_SECONDS,
 )
 
+# Legacy export retained for the unchanged risk schema only.
 CONTRACT_VERSION = "1.0"
+SIGNAL_CONTRACT_VERSION = "2.0"
+RISK_CONTRACT_VERSION = "1.0"
+INTENT_CONTRACT_VERSION = "2.0"
+
+
+def approval_lookup_context(context: Any) -> dict[str, Any]:
+    """Resolve trusted, non-payload approval context without partial fallback."""
+    if context is None:
+        return {}
+    if not isinstance(context, dict):
+        raise ValueError("Validation context must be a mapping")
+    if "approval_context" not in context:
+        return {}
+    custom = context["approval_context"]
+    keys = {"registry_path", "project_root", "settings_path"}
+    if not isinstance(custom, dict) or set(custom) != keys:
+        raise ValueError("approval_context requires exactly registry_path, project_root, settings_path")
+    if any(not isinstance(v, (str, Path)) or not str(v).strip() for v in custom.values()):
+        raise ValueError("approval_context paths must be explicit non-empty paths")
+    return dict(custom)
 
 
 def compute_signal_id(
@@ -31,6 +53,8 @@ def compute_signal_id(
     dataset_sha256: Optional[str],
     generated_at: datetime,
     strategy_id: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    intended_use: Optional[str] = None,
 ) -> str:
     """Compute deterministic canonical digest binding economic & provenance identity.
     
@@ -41,7 +65,9 @@ def compute_signal_id(
 
     dt_utc = generated_at.astimezone(timezone.utc).isoformat()
     payload = {
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": SIGNAL_CONTRACT_VERSION,
+        "candidate_id": candidate_id or "",
+        "intended_use": intended_use or "",
         "dataset_sha256": dataset_sha256 or "",
         "generated_at": dt_utc,
         "price": float(price),
@@ -76,7 +102,7 @@ def compute_decision_id(
     payload = {
         "allocated_capital": float(allocated_capital) if allocated_capital is not None else None,
         "approved": approved,
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": RISK_CONTRACT_VERSION,
         "decision_timestamp": dt_utc,
         "reason": reason,
         "signal_id": signal_id,
@@ -103,6 +129,8 @@ class TypedSignal(BaseModel):
     dataset_sha256: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     dataset_approved: bool = Field(default=True)
     strategy_id: Optional[str] = Field(default=None)
+    candidate_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    intended_use: Optional[Literal["PAPER_TRADING"]] = None
     signal_id: Optional[str] = Field(default=None)
     market_date: Optional[str] = Field(default=None)
     decision_bar_date: Optional[str] = Field(default=None)
@@ -144,7 +172,8 @@ class TypedSignal(BaseModel):
         return self.price
 
     @model_validator(mode="after")
-    def validate_invariants(self) -> "TypedSignal":
+    def validate_invariants(self, info: ValidationInfo) -> "TypedSignal":
+        lookup_context = approval_lookup_context(info.context)
         if self.generated_at.tzinfo is None or self.generated_at.tzinfo.utcoffset(self.generated_at) is None:
             raise ValueError("generated_at must be timezone-aware")
 
@@ -175,11 +204,21 @@ class TypedSignal(BaseModel):
             if not self.dataset_approved:
                 raise ValueError("Strategy signal dataset must be approved")
 
-            # Dataset approval verification
+            if not self.strategy_id or not self.strategy_id.strip():
+                raise ValueError("Actionable signal requires non-empty strategy_id")
+            if not self.candidate_id or self.intended_use != "PAPER_TRADING":
+                raise ValueError("Actionable signal requires candidate_id and PAPER_TRADING intended_use")
             try:
-                trading_bot.data.approval.require_dataset_approval_by_digest(self.dataset_sha256)
+                authority = trading_bot.data.approval.require_dataset_approval_by_digest(
+                    self.dataset_sha256, **lookup_context
+                )
             except Exception as e:
                 raise ValueError("Invalid or unapproved dataset_sha256") from e
+            for name in ("dataset_sha256", "ticker", "strategy_id", "candidate_id", "intended_use"):
+                if getattr(authority, name) != getattr(self, name):
+                    raise ValueError(f"Approval identity mismatch: {name}")
+            if authority.status != "approved":
+                raise ValueError("Approval status must be approved")
 
         # Recompute deterministic signal_id
         expected_id = compute_signal_id(
@@ -191,6 +230,8 @@ class TypedSignal(BaseModel):
             dataset_sha256=self.dataset_sha256,
             generated_at=self.generated_at,
             strategy_id=self.strategy_id,
+            candidate_id=self.candidate_id,
+            intended_use=self.intended_use,
         )
 
         if self.signal_id is not None and self.signal_id != expected_id:
@@ -284,6 +325,8 @@ def compute_intent_id(
     quote_collected_at: Optional[datetime] = None,
     quote_source_sha256: Optional[str] = None,
     entry_price: Optional[float] = None,
+    candidate_id: Optional[str] = None,
+    intended_use: Optional[str] = None,
     **kwargs,
 ) -> str:
     """Compute deterministic canonical digest for approved execution intent (NEXUS-004).
@@ -311,7 +354,9 @@ def compute_intent_id(
 
     payload = {
         "allocated_capital": float(allocated_capital),
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": INTENT_CONTRACT_VERSION,
+        "candidate_id": candidate_id or "",
+        "intended_use": intended_use or "",
         "dataset_sha256": dataset_sha256,
         "decision_id": decision_id,
         "decision_price": dec_p,
@@ -405,6 +450,14 @@ class ApprovedExecutionIntent(BaseModel):
     @property
     def dataset_sha256(self) -> str:
         return self.signal.dataset_sha256 or ""
+
+    @property
+    def candidate_id(self) -> str:
+        return self.signal.candidate_id or ""
+
+    @property
+    def intended_use(self) -> Optional[str]:
+        return self.signal.intended_use
 
     @property
     def quote_source_sha256(self) -> str:
@@ -516,6 +569,8 @@ class ApprovedExecutionIntent(BaseModel):
             target_price=self.risk_decision.target_price,
             stop_loss=self.risk_decision.stop_loss,
             dataset_sha256=self.signal.dataset_sha256 or "",
+            candidate_id=self.candidate_id,
+            intended_use=self.intended_use,
             quote_ticker=quote.ticker,
             quote_source=quote.source,
             quote_price_kind=quote.price_kind,

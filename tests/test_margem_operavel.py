@@ -116,10 +116,19 @@ class TestSetMargemOperavel:
 def _ordem_aprovada(allocated):
     from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal, RiskDecision
     from datetime import datetime, timezone
+    from trading_bot.data.approval import compute_candidate_id
     sig = TypedSignal(
         ticker='PETR4.SA', side='BUY', price=10.0, target_price=12.0, stop_loss=9.0,
         reason='teste', dataset_sha256='0'*64, dataset_approved=True,
-        generated_at=datetime.now(timezone.utc)
+        generated_at=datetime.now(timezone.utc),
+        strategy_id='donchian_breakout', intended_use='PAPER_TRADING',
+        candidate_id=compute_candidate_id(
+            ticker='PETR4.SA', strategy_id='donchian_breakout', intended_use='PAPER_TRADING',
+            dataset_sha256='0'*64, collected_at_utc='2026-09-16T12:00:00Z',
+            dataset_artifact_sha256='0'*64, review_csv_sha256='0'*64,
+            source_sha256='0'*64, calendar_sha256='0'*64,
+            adjustments_sha256='0'*64, point_in_time_sha256='0'*64,
+        ),
     )
     dec = RiskDecision(
         signal_id=sig.signal_id, approved=True, allocated_capital=allocated, target_price=12.0,

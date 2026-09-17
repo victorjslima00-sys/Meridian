@@ -30,6 +30,18 @@ from unittest.mock import patch
 import pytest
 from backend.app.data import database as database_module
 from backend.app.agents.executor import ExecutorAgent
+from tests.conftest import synthetic_identity_kwargs as _authority, make_synthetic_approval
+
+
+@pytest.fixture(autouse=True)
+def btc_usd_approval(monkeypatch):
+    """Synthetic authority for this module's BTC-USD concurrency scope only."""
+    authority = make_synthetic_approval("BTC-USD", "2" * 64)
+    monkeypatch.setattr(
+        "trading_bot.data.approval.require_dataset_approval_by_digest",
+        lambda d, *a, **kw: authority if d == "2" * 64 else
+        (_ for _ in ()).throw(ValueError("data_approval_required")),
+    )
 _real_connect = sqlite3.connect
 
 @pytest.fixture
@@ -111,8 +123,9 @@ class TestExecuteOrderConcurrency:
         _set_portfolio(temp_db_path, saldo_disponivel=1000.0, em_posicoes=0.0)
         sig1 = TypedSignal(
             ticker='BTC-USD', side='BUY', price=62000.0, target_price=65000.0, stop_loss=60000.0,
-            confidence=70, reason='Test 1', dataset_sha256='0'*64, dataset_approved=True,
-            generated_at=datetime.now(timezone.utc)
+            confidence=70, reason='Test 1', dataset_sha256='2'*64, dataset_approved=True,
+            generated_at=datetime.now(timezone.utc),
+            **_authority('2' * 64, 'BTC-USD'),
         )
         dec1 = RiskDecision(
             signal_id=sig1.signal_id, approved=True, allocated_capital=100.0, target_price=65000.0,
@@ -127,8 +140,9 @@ class TestExecuteOrderConcurrency:
 
         sig2 = TypedSignal(
             ticker='BTC-USD', side='BUY', price=62000.0, target_price=65000.0, stop_loss=60000.0,
-            confidence=70, reason='Test 2', dataset_sha256='0'*64, dataset_approved=True,
-            generated_at=datetime.now(timezone.utc)
+            confidence=70, reason='Test 2', dataset_sha256='2'*64, dataset_approved=True,
+            generated_at=datetime.now(timezone.utc),
+            **_authority('2' * 64, 'BTC-USD'),
         )
         dec2 = RiskDecision(
             signal_id=sig2.signal_id, approved=True, allocated_capital=100.0, target_price=65000.0,

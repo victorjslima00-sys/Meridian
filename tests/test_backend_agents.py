@@ -126,28 +126,29 @@ class TestSizingAlinhadoComBacktest:
         with patch('trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade', return_value=True):
             yield
 
-    def test_alocacao_ao_vivo_bate_com_calculate_position_size(self):
+    def test_alocacao_ao_vivo_bate_com_calculate_position_size(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
         from backend.app.runtime_config import RuntimeConfig
         from trading_bot.risk.position_sizing import calculate_position_size
         cfg = RuntimeConfig.load()
         capital_cash, em_posicoes = (300.0, 100.0)
         open_tickers = ['MGLU3.SA']
-        signal = {'signal': 'BUY', 'current_price': 10.0, 'target_price': 12.0, 'stop_loss': 9.0, 'confidence': 80, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}
+        signal = {'signal': 'BUY', 'current_price': 10.0, 'target_price': 12.0, 'stop_loss': 9.0, 'confidence': 80, **unit_approval_identity('PETR4.SA'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}
         rm = RiskManager(saldo_livre=capital_cash, em_posicoes=em_posicoes)
         decision = rm.evaluate_trade(signal, ticker='PETR4.SA', open_tickers=open_tickers)
         esperado = calculate_position_size(capital_cash=capital_cash, open_positions_capital=em_posicoes, kelly_fraction=cfg.kelly_fraction, max_positions=cfg.max_positions, current_open_count=len(open_tickers))
         assert decision['approved'] is True
         assert decision['allocated_capital'] == pytest.approx(esperado)
 
-    def test_sizing_ignora_confianca(self):
+    def test_sizing_ignora_confianca(self, unit_approval_identity):
         """Confiança diferente NÃO muda a alocação (Kelly agora é fixo, não
         derivado de confiança como antes)."""
         from backend.app.agents.risk_manager import RiskManager
-        base = {'signal': 'BUY', 'current_price': 10.0, 'target_price': 12.0, 'stop_loss': 9.0, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'confidence': 70}
+        base = {'signal': 'BUY', 'current_price': 10.0, 'target_price': 12.0, 'stop_loss': 9.0, **unit_approval_identity('PETR4.SA'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'confidence': 70}
         rm = RiskManager(saldo_livre=300.0, em_posicoes=0.0)
         a = rm.evaluate_trade({**base, 'confidence': 20}, ticker='PETR4.SA', open_tickers=[])
         b = rm.evaluate_trade({**base, 'confidence': 95}, ticker='PETR4.SA', open_tickers=[])
+        assert a['approved'] and b['approved']
         assert a['allocated_capital'] == pytest.approx(b['allocated_capital'])
 
 class TestRiskManager:
@@ -157,71 +158,71 @@ class TestRiskManager:
         with patch('trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade', return_value=True):
             yield
 
-    def test_rejeita_quando_circuit_breaker_ativo(self):
+    def test_rejeita_quando_circuit_breaker_ativo(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
         with patch('trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade', return_value=False):
-            result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'target_price': 55000.0, 'stop_loss': 48000.0, 'confidence': 70, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='BTC-USD', open_tickers=[])
+            result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'target_price': 55000.0, 'stop_loss': 48000.0, 'confidence': 70, **unit_approval_identity('BTC-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='BTC-USD', open_tickers=[])
         assert result['approved'] is False
         assert 'Circuit Breaker' in result['reason']
 
-    def test_rejeita_fail_closed_quando_breaker_lanca_excecao(self):
+    def test_rejeita_fail_closed_quando_breaker_lanca_excecao(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
         with patch('trading_bot.risk.circuit_breaker.CircuitBreaker.can_trade', side_effect=RuntimeError('db indisponível')):
-            result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'target_price': 55000.0, 'stop_loss': 48000.0, 'confidence': 70, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='BTC-USD', open_tickers=[])
+            result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'target_price': 55000.0, 'stop_loss': 48000.0, 'confidence': 70, **unit_approval_identity('BTC-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='BTC-USD', open_tickers=[])
         assert result['approved'] is False
         assert 'fail-closed' in result['reason']
 
-    def test_approves_trade_with_sufficient_capital(self):
+    def test_approves_trade_with_sufficient_capital(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'target_price': 55000.0, 'stop_loss': 48000.0, 'confidence': 70, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='BTC-USD', open_tickers=[])
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'target_price': 55000.0, 'stop_loss': 48000.0, 'confidence': 70, **unit_approval_identity('BTC-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='BTC-USD', open_tickers=[])
         assert result['approved'] is True
         assert result['allocated_capital'] > 0
 
-    def test_rejects_hold_signal(self):
+    def test_rejects_hold_signal(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'HOLD', 'current_price': 50000.0, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='BTC-USD', open_tickers=[])
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'HOLD', 'current_price': 50000.0, **unit_approval_identity('BTC-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='BTC-USD', open_tickers=[])
         assert result['approved'] is False
 
-    def test_rejects_trade_with_zero_capital(self):
+    def test_rejects_trade_with_zero_capital(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(saldo_livre=0.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='BTC-USD', open_tickers=[])
+        result = RiskManager(saldo_livre=0.0).evaluate_trade({'signal': 'BUY', 'current_price': 50000.0, **unit_approval_identity('BTC-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='BTC-USD', open_tickers=[])
         assert result['approved'] is False
 
-    def test_sell_sets_correct_stop_and_target(self):
+    def test_sell_sets_correct_stop_and_target(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
         price = 3000.0
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'SELL', 'current_price': price, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='ETH-USD', open_tickers=[])
-        if result['approved']:
-            assert result['target_price'] < price
-            assert result['stop_loss'] > price
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'SELL', 'current_price': price, **unit_approval_identity('ETH-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 2800.0, 'stop_loss': 3200.0, 'confidence': 70}, ticker='ETH-USD', open_tickers=[])
+        assert result['approved'] is True
+        assert result['target_price'] < price
+        assert result['stop_loss'] > price
 
-    def test_buy_sets_correct_stop_and_target(self):
+    def test_buy_sets_correct_stop_and_target(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
         price = 50000.0
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': price, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='BTC-USD', open_tickers=[])
-        if result['approved']:
-            assert result['target_price'] > price
-            assert result['stop_loss'] < price
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': price, **unit_approval_identity('BTC-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='BTC-USD', open_tickers=[])
+        assert result['approved'] is True
+        assert result['target_price'] > price
+        assert result['stop_loss'] < price
 
-    def test_blocks_correlated_asset_when_btc_open(self):
+    def test_blocks_correlated_asset_when_btc_open(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 3000.0, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='ETH-USD', open_tickers=['BTC-USD'])
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 3000.0, **unit_approval_identity('ETH-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason', 'target_price': 999999.0, 'stop_loss': 1.0, 'confidence': 70}, ticker='ETH-USD', open_tickers=['BTC-USD'])
         assert result['approved'] is False
         assert 'correla' in result['reason'].lower()
 
-    def test_allows_uncorrelated_asset_when_btc_open(self):
+    def test_allows_uncorrelated_asset_when_btc_open(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 150.0, 'target_price': 160.0, 'stop_loss': 140.0, 'confidence': 70, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='SOL-USD', open_tickers=['BTC-USD'])
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 150.0, 'target_price': 160.0, 'stop_loss': 140.0, 'confidence': 70, **unit_approval_identity('SOL-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='SOL-USD', open_tickers=['BTC-USD'])
         assert result['approved'] is True
 
-    def test_allows_eth_when_no_open_positions(self):
+    def test_allows_eth_when_no_open_positions(self, unit_approval_identity):
         from backend.app.agents.risk_manager import RiskManager
-        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 3000.0, 'target_price': 3200.0, 'stop_loss': 2800.0, 'confidence': 70, 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='ETH-USD', open_tickers=[])
+        result = RiskManager(saldo_livre=1000.0).evaluate_trade({'signal': 'BUY', 'current_price': 3000.0, 'target_price': 3200.0, 'stop_loss': 2800.0, 'confidence': 70, **unit_approval_identity('ETH-USD'), 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), 'reason': 'Test reason'}, ticker='ETH-USD', open_tickers=[])
         assert result['approved'] is True
 
 class TestExecutorAgent:
 
-    def test_execute_order_inserts_trade(self):
+    def test_execute_order_inserts_trade(self, unit_approval_identity):
         import tempfile
         import os
         from backend.app.agents.executor import ExecutorAgent
@@ -240,13 +241,12 @@ class TestExecutorAgent:
             conn_setup.close()
 
             sig = TypedSignal(
-                ticker="BTC-USD",
+                **unit_approval_identity("BTC-USD"),
                 side="BUY",
                 price=62000.0,
                 target_price=65000.0,
                 stop_loss=60000.0,
                 reason="Test signal",
-                dataset_sha256="0" * 64,
                 dataset_approved=True,
                 generated_at=datetime.now(timezone.utc),
             )

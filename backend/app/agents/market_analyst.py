@@ -253,12 +253,16 @@ class MarketAnalyst:
 
         try:
             d_sha = approval.dataset_digest(eng_df, self.ticker)
-            approval.require_dataset_approval_by_digest(
+            authority = approval.require_dataset_approval_by_digest(
                 d_sha,
                 registry_path=registry_path,
                 project_root=project_root,
                 settings_path=settings_path,
             )
+            if (authority.dataset_sha256 != d_sha or authority.ticker != self.ticker
+                    or authority.strategy_id != active_strategy
+                    or authority.intended_use != "PAPER_TRADING" or authority.status != "approved"):
+                raise ValueError("Approval identity mismatch for ticker/strategy/dataset/scope")
         except Exception as e:
             logger.warning(
                 "MarketAnalyst dataset approval check failed for %s: %s",
@@ -291,9 +295,11 @@ class MarketAnalyst:
                 f"stop {candidate.stop} / alvo {candidate.target} (ATR)."
             ),
             "generated_at": datetime.now(timezone.utc),
-            "dataset_sha256": d_sha,
+            "dataset_sha256": authority.dataset_sha256,
             "dataset_approved": True,
-            "strategy_id": active_strategy,
+            "strategy_id": authority.strategy_id,
+            "candidate_id": authority.candidate_id,
+            "intended_use": authority.intended_use,
             "market_date": mkt_date_str,
             "decision_bar_date": dec_bar_str,
             "today_bar_removed": closed_res.today_bar_removed,

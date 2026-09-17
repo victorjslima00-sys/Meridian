@@ -5,7 +5,11 @@ from ..data.database import DB_PATH
 
 
 class ExecutorAgent:
-    def __init__(self, db_path: Optional[str] = None, session_authority: Optional[Any] = None):
+    def __init__(self, db_path: Optional[str] = None, session_authority: Optional[Any] = None, *, validation_context=None):
+        from copy import deepcopy
+        from .contracts import approval_lookup_context
+        approval_lookup_context(validation_context)
+        self._validation_context = deepcopy(validation_context)
         self.db_path = db_path or DB_PATH
         self.session_authority = session_authority
 
@@ -28,7 +32,7 @@ class ExecutorAgent:
             }
         try:
             validated_intent = ApprovedExecutionIntent.model_validate(
-                intent.model_dump(mode="python")
+                intent.model_dump(mode="python"), context=self._validation_context
             )
         except Exception as e:
             return {
@@ -63,7 +67,7 @@ class ExecutorAgent:
         if isinstance(intent, ApprovedExecutionIntent):
             try:
                 validated_intent = ApprovedExecutionIntent.model_validate(
-                    intent.model_dump(mode="python")
+                    intent.model_dump(mode="python"), context=self._validation_context
                 )
             except Exception as e:
                 return {

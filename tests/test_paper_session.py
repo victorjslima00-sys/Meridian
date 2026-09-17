@@ -13,6 +13,22 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 from trading_bot.execution.paper_session import PaperSessionRunner
+from tests.conftest import synthetic_identity_kwargs as _authority, make_synthetic_approval
+
+
+@pytest.fixture(autouse=True)
+def local_approvals(monkeypatch):
+    """Per-ticker synthetic authorities bound to distinct digests (exact identity)."""
+    authorities = {
+        "0" * 64: make_synthetic_approval("PETR4", "0" * 64),
+        "1" * 64: make_synthetic_approval("VALE3", "1" * 64),
+    }
+    monkeypatch.setattr(
+        "trading_bot.data.approval.require_dataset_approval_by_digest",
+        lambda d, *a, **kw: authorities[d] if d in authorities else
+        (_ for _ in ()).throw(ValueError("data_approval_required")),
+    )
+
 
 def _init_test_db(db_path: Path, initial_cash: float=1000.0) -> None:
     conn = sqlite3.connect(db_path)
@@ -51,7 +67,7 @@ def test_paper_session_executes_signal_and_reconciles(tmp_path, mock_circuit_bre
     storage_dir = tmp_path / 'paper_sessions'
     _init_test_db(db_file, initial_cash=1000.0)
     runner = PaperSessionRunner(session_id='session_test_001', db_path=str(db_file), storage_dir=str(storage_dir))
-    signals = [{'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Donchian 20d Breakout', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}]
+    signals = [{'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Donchian 20d Breakout', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), **_authority('0' * 64, 'PETR4')}]
     report = runner.run_cycle(signals=signals)
     assert report.orders_executed == 1
     assert report.orders_skipped == 0
@@ -94,7 +110,7 @@ def test_paper_session_idempotent_on_replay_no_duplicate_orders(tmp_path, mock_c
     db_file = tmp_path / 'paper_test.db'
     storage_dir = tmp_path / 'paper_sessions'
     _init_test_db(db_file, initial_cash=1000.0)
-    signals = [{'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Test Signal', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}]
+    signals = [{'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Test Signal', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), **_authority('0' * 64, 'PETR4')}]
     runner1 = PaperSessionRunner(session_id='session_idem_01', db_path=str(db_file), storage_dir=str(storage_dir))
     rep1 = runner1.run_cycle(signals=signals)
     assert rep1.orders_executed == 1
@@ -120,8 +136,8 @@ def test_paper_session_resumes_interrupted_session(tmp_path, mock_circuit_breake
     db_file = tmp_path / 'paper_test.db'
     storage_dir = tmp_path / 'paper_sessions'
     _init_test_db(db_file, initial_cash=2000.0)
-    sig_petr = {'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Sinal 1', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}
-    sig_vale = {'ticker': 'VALE3', 'signal': 'BUY', 'current_price': 60.0, 'target_price': 66.0, 'stop_loss': 57.0, 'confidence': 80, 'reason': 'Sinal 2', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}
+    sig_petr = {'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Sinal 1', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), **_authority('0' * 64, 'PETR4')}
+    sig_vale = {'ticker': 'VALE3', 'signal': 'BUY', 'current_price': 60.0, 'target_price': 66.0, 'stop_loss': 57.0, 'confidence': 80, 'reason': 'Sinal 2', 'dataset_sha256': '1111111111111111111111111111111111111111111111111111111111111111', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), **_authority('1' * 64, 'VALE3')}
     runner_step1 = PaperSessionRunner(session_id='session_resume_01', db_path=str(db_file), storage_dir=str(storage_dir))
     runner_step1.run_cycle(signals=[sig_petr])
     runner_step2 = PaperSessionRunner(session_id='session_resume_01', db_path=str(db_file), storage_dir=str(storage_dir))
@@ -140,7 +156,7 @@ def test_paper_session_exit_management_and_reconciliation(tmp_path, mock_circuit
     storage_dir = tmp_path / 'paper_sessions'
     _init_test_db(db_file, initial_cash=1000.0)
     runner = PaperSessionRunner(session_id='session_exit_01', db_path=str(db_file), storage_dir=str(storage_dir))
-    sig = {'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Entrada', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc)}
+    sig = {'ticker': 'PETR4', 'signal': 'BUY', 'current_price': 30.0, 'target_price': 33.0, 'stop_loss': 28.5, 'confidence': 80, 'reason': 'Entrada', 'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000', 'dataset_approved': True, 'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc), **_authority('0' * 64, 'PETR4')}
     rep1 = runner.run_cycle(signals=[sig])
     assert rep1.orders_executed == 1
     from tests.conftest import make_test_evidenced_quote
@@ -208,6 +224,7 @@ def test_paper_session_conflicting_scalar_does_not_close_trade(tmp_path, mock_ci
         'dataset_sha256': '0000000000000000000000000000000000000000000000000000000000000000',
         'dataset_approved': True,
         'generated_at': __import__('datetime').datetime.now(__import__('datetime').timezone.utc),
+        **_authority('0' * 64, 'PETR4'),
     }
     rep1 = runner.run_cycle(signals=[sig])
     assert rep1.orders_executed == 1

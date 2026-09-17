@@ -8,7 +8,7 @@ CORRELATED_GROUPS: List[List[str]] = [
 
 
 class RiskManager:
-    def __init__(self, saldo_livre: float, config=None, em_posicoes: float = 0.0):
+    def __init__(self, saldo_livre: float, config=None, em_posicoes: float = 0.0, *, validation_context=None):
         """
         saldo_livre  = capital_cash (dinheiro fora de posições) — o teto de
                        alocação, o bot nunca aloca mais que o cash livre.
@@ -17,6 +17,10 @@ class RiskManager:
                        backtest usa. Default 0.0 preserva chamadas antigas.
         """
         from ..runtime_config import RuntimeConfig
+        from copy import deepcopy
+        from .contracts import approval_lookup_context
+        approval_lookup_context(validation_context)
+        self._validation_context = deepcopy(validation_context)
         self.saldo_livre = saldo_livre
         self.em_posicoes = em_posicoes
         self.config = config or RuntimeConfig.load()
@@ -53,9 +57,11 @@ class RiskManager:
                 analyst_signal_dict = dict(analyst_signal)
                 if "ticker" not in analyst_signal_dict and ticker:
                     analyst_signal_dict["ticker"] = ticker
-                signal = TypedSignal.model_validate(analyst_signal_dict)
+                signal = TypedSignal.model_validate(analyst_signal_dict, context=self._validation_context)
             elif isinstance(analyst_signal, TypedSignal):
-                signal = analyst_signal
+                signal = TypedSignal.model_validate(
+                    analyst_signal.model_dump(mode="python"), context=self._validation_context
+                )
             else:
                 raise ValueError("Invalid signal type")
         except Exception as e:

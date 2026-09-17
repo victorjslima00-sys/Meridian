@@ -346,6 +346,28 @@ def _create_synthetic_quote(ticker: str, price: float, age_seconds: float = 0.0)
     )
 
 
+def _authority(digest, ticker="PETR4.SA"):
+    """Candidate identity matching the conftest synthetic mock approval exactly."""
+    from trading_bot.data.approval import compute_candidate_id
+    return {
+        "strategy_id": "donchian_breakout",
+        "intended_use": "PAPER_TRADING",
+        "candidate_id": compute_candidate_id(
+            ticker=ticker,
+            strategy_id="donchian_breakout",
+            intended_use="PAPER_TRADING",
+            dataset_sha256=digest,
+            collected_at_utc="2026-09-16T12:00:00Z",
+            dataset_artifact_sha256="0" * 64,
+            review_csv_sha256="0" * 64,
+            source_sha256="0" * 64,
+            calendar_sha256="0" * 64,
+            adjustments_sha256="0" * 64,
+            point_in_time_sha256="0" * 64,
+        ),
+    }
+
+
 def test_entry_stale_quote_rejected():
     """Stale quote beyond max_age_seconds must be rejected by ApprovedExecutionIntent."""
     now_utc = datetime.datetime.now(timezone.utc)
@@ -358,6 +380,7 @@ def test_entry_stale_quote_rejected():
         dataset_sha256="a" * 64,
         reason="Donchian breakout test",
         generated_at=now_utc,
+        **_authority("a" * 64),
     )
     decision = RiskDecision(
         signal_id=sig.signal_id,
@@ -390,6 +413,7 @@ def test_entry_gap_geometry_rejected():
         dataset_sha256="a" * 64,
         reason="Donchian breakout test",
         generated_at=now_utc,
+        **_authority("a" * 64),
     )
     decision = RiskDecision(
         signal_id=sig.signal_id,
@@ -445,6 +469,7 @@ def test_valid_quote_distinguishes_decision_from_execution_price(tmp_path):
         dataset_sha256="b" * 64,
         reason="Donchian breakout test",
         generated_at=now_utc,
+        **_authority("b" * 64),
     )
     decision = RiskDecision(
         signal_id=sig.signal_id,
@@ -558,7 +583,7 @@ def test_paper_session_risk_rejection_no_crash(tmp_path):
 
     now_utc = datetime.datetime.now(timezone.utc)
     sig = TypedSignal(
-        ticker="VALE3.SA",
+        ticker="PETR4.SA",
         side="BUY",
         price=50.0,
         target_price=60.0,
@@ -566,6 +591,7 @@ def test_paper_session_risk_rejection_no_crash(tmp_path):
         dataset_sha256="c" * 64,
         reason="Donchian breakout test",
         generated_at=now_utc,
+        **_authority("c" * 64),
     )
 
     mock_rm = MagicMock()
@@ -640,6 +666,7 @@ def test_paper_session_zero_operable_cash_rejects(tmp_path):
         dataset_sha256="d" * 64,
         reason="Donchian breakout test",
         generated_at=now_utc,
+        **_authority("d" * 64),
     )
 
     report = runner.run_cycle(signals=[sig.model_dump(mode="json")])
@@ -1039,6 +1066,7 @@ def test_r2_regression_i_intent_continuous_then_closed_before_executor_rejected(
         dataset_approved=True,
         generated_at=valid_dt,
         reason="Session defense test",
+        **_authority("0" * 64),
     )
     decision = RiskDecision(
         signal_id=sig.signal_id,
