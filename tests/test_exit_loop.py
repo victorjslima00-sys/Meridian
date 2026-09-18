@@ -66,6 +66,11 @@ def _insert_active_trade(path, ticker, side, entry_price, target_price, stop_los
         (ticker, side, 1.0, entry_price, target_price, stop_loss,
          datetime.now(), "t", "active"),
     )
+    alloc = 1.0 * entry_price
+    conn.execute(
+        "UPDATE portfolio SET saldo_disponivel = saldo_disponivel + ?, em_posicoes = em_posicoes + ?",
+        (alloc, alloc),
+    )
     conn.commit()
     trade_id = conn.execute("SELECT MAX(id) FROM trades").fetchone()[0]
     conn.close()

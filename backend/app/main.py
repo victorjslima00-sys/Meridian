@@ -5,8 +5,9 @@ from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import random
+import math
 from contextlib import asynccontextmanager, suppress
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from . import worker_state
 
@@ -1306,7 +1307,12 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
         )
 
     # Validation logic (mocked logic through ExecutorAgent or direct)
-    pf = get_portfolio()
+    try:
+        pf = get_portfolio()
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Erro de integridade do portfolio: {e}"
+        )
     cost = current_price * req.quantity
     # usabilidade 2e: ordem manual respeita o mesmo capital OPERÁVEL do
     # laço automático (teto de margem incluído) — o executor re-checa o
@@ -1353,9 +1359,26 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
 class ValorRequest(BaseModel):
     valor: float
 
+    @field_validator("valor", mode="before")
+    @classmethod
+    def validate_valor(cls, v):
+        if isinstance(v, bool) or type(v).__name__ in ("bool", "bool_"):
+            raise ValueError("Boolean values are not allowed as monetary input")
+        if v is None:
+            raise ValueError("Value cannot be None")
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"Value must be a valid float, got {type(v).__name__}")
+        if not math.isfinite(f):
+            raise ValueError("Value must be a finite number (no NaN or Inf)")
+        return f
+
 
 @app.post("/api/portfolio/depositar")
 def api_depositar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
+    if req.valor <= 0:
+        raise HTTPException(status_code=400, detail="Valor deve ser positivo.")
     res = depositar_no_disponivel(req.valor)
     if not res["ok"]:
         raise HTTPException(status_code=400, detail=res["error"])
@@ -1364,6 +1387,8 @@ def api_depositar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
 
 @app.post("/api/portfolio/retirar")
 def api_retirar(req: ValorRequest, api_key: str = Depends(verify_api_key)):
+    if req.valor <= 0:
+        raise HTTPException(status_code=400, detail="Valor deve ser positivo.")
     res = retirar_do_disponivel(req.valor)
     if not res["ok"]:
         raise HTTPException(status_code=400, detail=res["error"])
@@ -1375,6 +1400,8 @@ def api_set_margem_operavel(req: ValorRequest, api_key: str = Depends(verify_api
     """usabilidade 2e: define o teto de exposição do bot. Validação
     (não-negativa, ≤ saldo_disponivel) mora em set_margem_operavel —
     fonte única, mesma usada pelos testes."""
+    if req.valor < 0:
+        raise HTTPException(status_code=400, detail="Margem operável não pode ser negativa.")
     from .data.database import set_margem_operavel
 
     res = set_margem_operavel(req.valor)
@@ -1637,7 +1664,11 @@ def api_get_portfolio():
     )
     from backend.app.data.feed import get_evidenced_quote
 
-    pf = db.get_portfolio()
+    try:
+        pf = db.get_portfolio()
+    except (db.PortfolioIntegrityError, db.AccountingIntegrityError) as e:
+        return _unavailable_portfolio_publication({}, f"portfolio_integrity_error: {str(e)}")
+
     active_trades = db.get_active_trades()
     active_trade_ids = [t["id"] for t in active_trades if "id" in t]
 

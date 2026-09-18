@@ -1,9 +1,20 @@
 import logging
 import sqlite3
 import datetime
+import math
+import time
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from .accounting import (
+    MONETARY_EPSILON,
+    AccountingIntegrityError,
+    PortfolioIntegrityError,
+    validate_monetary_value,
+    validate_portfolio_fields,
+    validate_and_compute_portfolio_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,14 +55,29 @@ def now_b3() -> datetime.datetime:
 
 
 def get_connection(isolation_level=None):
-    conn = sqlite3.connect(DB_PATH, isolation_level=isolation_level)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    conn = sqlite3.connect(DB_PATH, timeout=15.0, isolation_level=isolation_level)
+    conn.execute("PRAGMA busy_timeout=15000;")
     return conn
 
 def init_db():
-    conn = get_connection()
+    conn = get_connection(isolation_level=None)
     try:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        except sqlite3.OperationalError:
+            pass
+
         cursor = conn.cursor()
+        max_retries = 30
+        for attempt in range(max_retries):
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                    time.sleep(0.05 * (attempt + 1))
+                else:
+                    raise
 
         # ------------------------------------------------------------------
         # Portfolio Table — Modelo de 3 Baldes
@@ -74,6 +100,28 @@ def init_db():
             row[1] for row in cursor.execute("PRAGMA table_info(portfolio)").fetchall()
         }
         if "initial_capital" in existing and "patrimonio_total" not in existing:
+            # NEXUS-005-B: Safe migration check - fail closed on ambiguous or corrupt capital values
+            cursor.execute("SELECT current_capital, invested_capital FROM portfolio")
+            legacy_rows = cursor.fetchall()
+            for cc, ic in legacy_rows:
+                if (
+                    cc is None or ic is None
+                    or isinstance(cc, bool) or isinstance(ic, bool)
+                    or not isinstance(cc, (int, float)) or not isinstance(ic, (int, float))
+                    or not math.isfinite(cc) or not math.isfinite(ic)
+                    or cc < 0 or ic < 0 or cc < ic
+                ):
+                    msg = (
+                        "Startup failed: Legacy portfolio migration detected ambiguous or "
+                        "corrupt capital values. Manual migration required."
+                    )
+                    logger.error(msg)
+                    try:
+                        _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
+                    except Exception as alert_err:
+                        logger.error("Falha inesperada ao alertar startup abortado: %s", alert_err)
+                    raise RuntimeError(msg)
+
             cursor.execute(
                 "ALTER TABLE portfolio ADD COLUMN patrimonio_total REAL DEFAULT 0.0"
             )
@@ -86,8 +134,8 @@ def init_db():
             cursor.execute(
                 """
                 UPDATE portfolio SET
-                    saldo_disponivel = COALESCE(current_capital, 0.0),
-                    em_posicoes      = COALESCE(invested_capital, 0.0),
+                    saldo_disponivel = current_capital,
+                    em_posicoes      = invested_capital,
                     patrimonio_total = 0.0
             """
             )
@@ -96,6 +144,51 @@ def init_db():
         # (comportamento anterior intacto em bancos existentes).
         if "margem_operavel" not in existing:
             cursor.execute("ALTER TABLE portfolio ADD COLUMN margem_operavel REAL")
+
+        # NEXUS-005-B: Portfolio singleton validation & migration
+        cursor.execute(
+            "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
+        )
+        pf_rows = cursor.fetchall()
+
+        if len(pf_rows) > 1:
+            msg = (
+                f"Startup failed: Database contains multiple portfolio rows ({len(pf_rows)} rows). "
+                f"Portfolio singleton invariant violated. Manual remediation required."
+            )
+            logger.error(msg)
+            try:
+                _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
+            except Exception as alert_err:
+                logger.error("Falha inesperada ao alertar startup abortado: %s", alert_err)
+            raise RuntimeError(msg)
+        elif len(pf_rows) == 1:
+            pid, pat, disp, em_pos, margem = pf_rows[0]
+            try:
+                validate_portfolio_fields(pat, disp, em_pos, margem)
+            except Exception as e:
+                msg = (
+                    f"Startup failed: Corrupt financial state in existing portfolio row (id={pid}): {e}. "
+                    f"Financial domain invariant violated. Manual remediation required."
+                )
+                logger.error(msg)
+                try:
+                    _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
+                except Exception as alert_err:
+                    logger.error("Falha inesperada ao alertar startup abortado: %s", alert_err)
+                raise RuntimeError(msg) from e
+        else:
+            # len(pf_rows) == 0: Bootstrap canonical initial row
+            cursor.execute(
+                "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) "
+                "VALUES (0.0, 0.0, 0.0, ?)",
+                (datetime.datetime.now(),),
+            )
+
+        # Physical SQLite backstop against multiple rows
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_portfolio_singleton ON portfolio ((1))"
+        )
 
         # Trades Table
         cursor.execute(
@@ -221,15 +314,13 @@ def init_db():
         """
         )
 
-        # Inicializar portfolio se vazio
-        cursor.execute("SELECT COUNT(*) FROM portfolio")
-        if cursor.fetchone()[0] == 0:
-            cursor.execute(
-                "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (0.0, 0.0, 0.0, ?)",
-                (datetime.datetime.now(),),
-            )
-
-        conn.commit()
+        cursor.execute("COMMIT")
+    except Exception:
+        try:
+            cursor.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
 
@@ -239,42 +330,21 @@ def get_portfolio() -> Dict[str, Any]:
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM portfolio ORDER BY id DESC LIMIT 1")
-        row = cursor.fetchone()
+        cursor.execute("SELECT * FROM portfolio")
+        rows = cursor.fetchall()
     finally:
         conn.close()
 
-    if not row:
-        return {
-            "patrimonio_total": 0.0,
-            "saldo_disponivel": 0.0,
-            "em_posicoes": 0.0,
-            "saldo_livre": 0.0,
-            "margem_operavel": None,
-            "saldo_operavel": 0.0,
-        }
-
-    d = dict(row)
-    # patrimonio_total é a coluna real do "cofre" (capital fora do alcance
-    # do bot, só movimentado por depositar_no_disponivel/retirar_do_
-    # disponivel) — NUNCA sobrescrever com saldo_disponivel (capital
-    # entregue ao bot). Bug real encontrado pelo usuário: os dois
-    # apareciam sempre iguais no dashboard porque esta linha existia.
-    d["saldo_livre"] = round(d.get("saldo_disponivel", 0) - d.get("em_posicoes", 0), 4)
-    # usabilidade 2e — fonte única do capital operável do bot: com
-    # margem_operavel definida, ela é um TETO de exposição total
-    # (em_posicoes + novas alocações ≤ margem); sem margem (NULL),
-    # operável = livre, comportamento anterior. Todo consumidor (sizing
-    # do laço automático, rota manual, executor, UI) lê ESTE campo —
-    # nunca recalcula por conta própria.
-    margem = d.get("margem_operavel")
-    if margem is None:
-        d["saldo_operavel"] = d["saldo_livre"]
-    else:
-        d["saldo_operavel"] = round(
-            min(d["saldo_livre"], max(0.0, margem - d.get("em_posicoes", 0))), 4
+    if len(rows) == 0:
+        raise PortfolioIntegrityError(
+            "No portfolio row found: database is uninitialized or portfolio state missing."
         )
-    return d
+    if len(rows) > 1:
+        raise PortfolioIntegrityError(
+            f"Integrity violated: multiple portfolio rows detected ({len(rows)} rows)."
+        )
+
+    return validate_and_compute_portfolio_dict(dict(rows[0]))
 
 
 def set_margem_operavel(valor: float) -> Dict[str, Any]:
@@ -283,110 +353,161 @@ def set_margem_operavel(valor: float) -> Dict[str, Any]:
     entregue ao bot (saldo_disponivel). Zero é válido — congela novas
     entradas, saídas seguem gerenciadas (mesma semântica FAIL-CLOSED do
     resto do sistema)."""
-    if valor < 0:
-        return {"ok": False, "error": "Margem operável não pode ser negativa."}
+    try:
+        v = validate_monetary_value(valor, "margem_operavel", allow_zero=True)
+    except Exception as e:
+        return {"ok": False, "error": f"Margem operável inválida: {e}"}
 
     conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, saldo_disponivel FROM portfolio ORDER BY id DESC LIMIT 1"
+            "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
         )
-        row = cursor.fetchone()
-        if not row:
+        rows = cursor.fetchall()
+        if len(rows) == 0:
             return {"ok": False, "error": "Portfolio não encontrado."}
+        if len(rows) > 1:
+            return {"ok": False, "error": "Integridade violada: múltiplos portfolios."}
 
-        pid, disponivel = row
-        if valor > disponivel:
+        pid, pat, disponivel, em_pos, margem = rows[0]
+        try:
+            _, disp_v, _, _, _, _ = validate_portfolio_fields(
+                pat, disponivel, em_pos, margem
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"Estado de portfolio corrompido: {e}"}
+
+        if v > disp_v:
             return {
                 "ok": False,
                 "error": (
                     f"Margem acima do saldo real entregue ao bot "
-                    f"(disponível: R$ {disponivel:.2f})."
+                    f"(disponível: R$ {disp_v:.2f})."
                 ),
             }
 
         cursor.execute(
             "UPDATE portfolio SET margem_operavel=?, updated_at=? WHERE id=?",
-            (valor, datetime.datetime.now(), pid),
+            (v, datetime.datetime.now(), pid),
         )
         conn.commit()
     finally:
         conn.close()
-    return {"ok": True, "margem_operavel": valor}
+    return {"ok": True, "margem_operavel": v}
 
 
 def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
     """Move valor do patrimonio_total → saldo_disponivel (ação humana)."""
-    if valor <= 0:
-        return {"ok": False, "error": "Valor deve ser positivo."}
+    try:
+        v = validate_monetary_value(valor, "valor", allow_zero=False)
+    except Exception as e:
+        return {"ok": False, "error": f"Valor inválido: {e}"}
 
     conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, patrimonio_total, saldo_disponivel FROM portfolio ORDER BY id DESC LIMIT 1"
+            "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
         )
-        row = cursor.fetchone()
-        if not row:
+        rows = cursor.fetchall()
+        if len(rows) == 0:
             return {"ok": False, "error": "Portfolio não encontrado."}
+        if len(rows) > 1:
+            return {"ok": False, "error": "Integridade violada: múltiplos portfolios."}
 
-        pid, patrimonio, disponivel = row
-        if valor > patrimonio:
+        pid, patrimonio, disponivel, em_pos, margem = rows[0]
+        try:
+            pat_v, disp_v, em_pos_v, margem_v, _, _ = validate_portfolio_fields(
+                patrimonio, disponivel, em_pos, margem
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"Estado de portfolio corrompido: {e}"}
+
+        if v > pat_v:
             return {
                 "ok": False,
-                "error": f"Patrimônio insuficiente (total: R$ {patrimonio:.2f}).",
+                "error": f"Patrimônio insuficiente (total: R$ {pat_v:.2f}).",
             }
+
+        new_pat = round(pat_v - v, 4)
+        new_disp = round(disp_v + v, 4)
+
+        if abs((new_pat + new_disp) - (pat_v + disp_v)) > MONETARY_EPSILON:
+            return {"ok": False, "error": "Falha na conservação de capital."}
 
         cursor.execute(
             "UPDATE portfolio SET patrimonio_total=?, saldo_disponivel=?, updated_at=? WHERE id=?",
-            (patrimonio - valor, disponivel + valor, datetime.datetime.now(), pid),
+            (new_pat, new_disp, datetime.datetime.now(), pid),
         )
         conn.commit()
     finally:
         conn.close()
     return {
         "ok": True,
-        "patrimonio_total": patrimonio - valor,
-        "saldo_disponivel": disponivel + valor,
+        "patrimonio_total": new_pat,
+        "saldo_disponivel": new_disp,
     }
 
 
 def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
     """Move valor do saldo livre → patrimonio_total (ação humana)."""
-    if valor <= 0:
-        return {"ok": False, "error": "Valor deve ser positivo."}
+    try:
+        v = validate_monetary_value(valor, "valor", allow_zero=False)
+    except Exception as e:
+        return {"ok": False, "error": f"Valor inválido: {e}"}
 
     conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1"
+            "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
         )
-        row = cursor.fetchone()
-        if not row:
+        rows = cursor.fetchall()
+        if len(rows) == 0:
             return {"ok": False, "error": "Portfolio não encontrado."}
+        if len(rows) > 1:
+            return {"ok": False, "error": "Integridade violada: múltiplos portfolios."}
 
-        pid, patrimonio, disponivel, em_pos = row
-        livre = disponivel - em_pos
+        pid, patrimonio, disponivel, em_pos, margem = rows[0]
+        try:
+            pat_v, disp_v, em_pos_v, margem_v, saldo_livre, _ = validate_portfolio_fields(
+                patrimonio, disponivel, em_pos, margem
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"Estado de portfolio corrompido: {e}"}
 
-        if valor > livre:
+        if v > saldo_livre:
             return {
                 "ok": False,
-                "error": f"Saldo livre insuficiente (livre: R$ {livre:.2f}).",
+                "error": f"Saldo livre insuficiente (livre: R$ {saldo_livre:.2f}).",
             }
+
+        new_pat = round(pat_v + v, 4)
+        new_disp = round(disp_v - v, 4)
+
+        if new_disp < -MONETARY_EPSILON:
+            return {"ok": False, "error": "Resultado violaria saldo disponível negativo."}
+        if abs(new_disp) <= MONETARY_EPSILON:
+            new_disp = 0.0
+
+        if new_disp - em_pos_v < -MONETARY_EPSILON:
+            return {"ok": False, "error": "Resultado violaria saldo livre negativo."}
+
+        if abs((new_pat + new_disp) - (pat_v + disp_v)) > MONETARY_EPSILON:
+            return {"ok": False, "error": "Falha na conservação de capital."}
 
         cursor.execute(
             "UPDATE portfolio SET patrimonio_total=?, saldo_disponivel=?, updated_at=? WHERE id=?",
-            (patrimonio + valor, disponivel - valor, datetime.datetime.now(), pid),
+            (new_pat, new_disp, datetime.datetime.now(), pid),
         )
         conn.commit()
     finally:
         conn.close()
     return {
         "ok": True,
-        "patrimonio_total": patrimonio + valor,
-        "saldo_disponivel": disponivel - valor,
+        "patrimonio_total": new_pat,
+        "saldo_disponivel": new_disp,
     }
 
 
@@ -591,21 +712,18 @@ def compute_current_equity() -> Optional[float]:
                 + valor mark-to-market das posições ativas (shares × preço atual).
     Se o feed falhar para um ticker (preço <= 0 ou None), não há fallback para
     entry_price — retorna None para indicar indisponibilidade real.
+    Se o estado persistido do portfolio ou das posições for corrupto/inválido,
+    falha closed propagando a respectiva exceção de integridade.
     """
     from .feed import get_current_price
+
+    pf = get_portfolio()
+    caixa_livre = pf["saldo_livre"]
 
     conn = get_connection()
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1"
-        )
-        pf = cursor.fetchone()
-        if not pf:
-            raise RuntimeError("Portfolio não encontrado para cálculo de equity.")
-        caixa_livre = (pf["saldo_disponivel"] or 0.0) - (pf["em_posicoes"] or 0.0)
-
         cursor.execute(
             "SELECT ticker, shares, entry_price FROM trades WHERE status = 'active'"
         )
@@ -615,11 +733,17 @@ def compute_current_equity() -> Optional[float]:
 
     mtm = 0.0
     for pos in posicoes:
+        shares = validate_monetary_value(
+            pos["shares"], f"shares for active trade {pos['ticker']}", allow_zero=False
+        )
         price = get_current_price(pos["ticker"])
         if price is None or price <= 0:
             # Eliminado fallback para entry_price: nunca imputar ou fabricar valor default.
             return None
-        mtm += (pos["shares"] or 0.0) * price
+        price_val = validate_monetary_value(
+            price, f"current price for {pos['ticker']}", allow_zero=False
+        )
+        mtm += shares * price_val
 
     return round(caixa_livre + mtm, 4)
 

@@ -2,6 +2,15 @@ import sqlite3
 import datetime
 from typing import Dict, Any, Optional
 from ..data.database import DB_PATH
+from ..data.accounting import (
+    MONETARY_EPSILON,
+    AccountingIntegrityError,
+    PortfolioIntegrityError,
+    validate_monetary_value,
+    validate_portfolio_fields,
+    validate_trade_accounting_fields,
+    compute_exit_accounting,
+)
 
 
 class ExecutorAgent:
@@ -93,7 +102,20 @@ class ExecutorAgent:
         decision_price = getattr(intent, "decision_price", intent.entry_price)
         execution_price = getattr(intent, "execution_price", intent.entry_price)
         allocated = intent.allocated_capital
-        shares = allocated / execution_price if execution_price > 0 else 0
+
+        # NEXUS-005-B: Validate entry monetary parameters strictly
+        try:
+            allocated_val = validate_monetary_value(allocated, "allocated_capital", allow_zero=False)
+            exec_price_val = validate_monetary_value(execution_price, "execution_price", allow_zero=False)
+            dec_price_val = validate_monetary_value(decision_price, "decision_price", allow_zero=False)
+            shares_val = validate_monetary_value(allocated_val / exec_price_val, "shares", allow_zero=False)
+        except Exception as e:
+            return {"status": "rejected", "reason": f"Accounting validation error on entry parameters: {e}"}
+
+        shares = shares_val
+        execution_price = exec_price_val
+        decision_price = dec_price_val
+        allocated = allocated_val
         target_price = intent.target_price
         stop_loss = intent.stop_loss
         side = intent.side
@@ -134,10 +156,55 @@ class ExecutorAgent:
         try:
             cursor = conn.cursor()
 
+            # NEXUS-005-B: Validate authoritative portfolio row BEFORE any trade mutation
+            cursor.execute(
+                "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
+            )
+            pf_rows = cursor.fetchall()
+            if len(pf_rows) == 0:
+                conn.rollback()
+                return {"status": "rejected", "reason": "Portfolio integrity failure: missing portfolio row"}
+            if len(pf_rows) > 1:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Portfolio integrity failure: multiple portfolio rows ({len(pf_rows)})"}
+
+            pid, pat, disponivel, em_pos, margem_operavel = pf_rows[0]
+            try:
+                pat_v, disp_v, em_pos_v, margem_v, saldo_livre, saldo_operavel = validate_portfolio_fields(
+                    pat, disponivel, em_pos, margem_operavel
+                )
+            except Exception as e:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Portfolio integrity failure: {e}"}
+
+            if allocated > saldo_livre:
+                conn.rollback()
+                return {
+                    "status": "rejected",
+                    "reason": f"Capital livre insuficiente (Livre: {saldo_livre:.2f}, Req: {allocated:.2f})",
+                }
+
+            # usabilidade 2e — portão de capital de TODA entrada
+            if margem_v is not None and em_pos_v + allocated > margem_v + 1e-9:
+                conn.rollback()
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"Margem operável excedida (teto: {margem_v:.2f}, "
+                        f"exposição atual: {em_pos_v:.2f}, ordem: {allocated:.2f})"
+                    ),
+                }
+
+            new_em_pos = round(em_pos_v + allocated, 4)
+            if disp_v - new_em_pos < -MONETARY_EPSILON:
+                conn.rollback()
+                return {"status": "rejected", "reason": "Resulting em_posicoes exceeds saldo_disponivel"}
+
             # Signal idempotency check BEFORE opening position check
             if signal_id:
                 cursor.execute("SELECT 1 FROM trades WHERE signal_id = ?", (signal_id,))
                 if cursor.fetchone():
+                    conn.rollback()
                     return {
                         "status": "skipped_existing_position",
                         "ticker": ticker,
@@ -149,6 +216,7 @@ class ExecutorAgent:
                 (ticker,),
             )
             if cursor.fetchone():
+                conn.rollback()
                 return {
                     "status": "skipped_existing_position",
                     "ticker": ticker,
@@ -188,50 +256,21 @@ class ExecutorAgent:
                     "reason": "Já existe posição ativa ou sinal repetido (concorrência).",
                 }
 
-            # Deduct from portfolio
+            # Deduct from portfolio (increase em_posicoes)
             cursor.execute(
-                "SELECT id, saldo_disponivel, em_posicoes, margem_operavel "
-                "FROM portfolio ORDER BY id DESC LIMIT 1"
+                """
+            UPDATE portfolio SET em_posicoes = ?, updated_at = ? WHERE id = ?
+            """,
+                (new_em_pos, datetime.datetime.now(), pid),
             )
-            row = cursor.fetchone()
-            if row:
-                pid, disponivel, em_pos, margem_operavel = row
-                livre = disponivel - em_pos
-                if allocated > livre:
-                    # Caso extremo onde a alocação excede o livre no momento exato da execução
-                    # Na prática o risk_manager deveria ter barrado, mas barramos aqui por segurança
-                    conn.rollback()
-                    return {
-                        "status": "rejected",
-                        "reason": f"Capital livre insuficiente (Livre: {livre:.2f}, Req: {allocated:.2f})",
-                    }
-
-                # usabilidade 2e — portão de capital de TODA entrada (laço
-                # automático e manual afunilam aqui): com margem_operavel
-                # definida, a exposição total (em_posicoes + alocação) nunca
-                # passa do teto. Checado dentro da MESMA transação IMMEDIATE
-                # que lê em_posicoes — sem TOCTOU com outra entrada
-                # concorrente. Tolerância de 1e-9 só para ruído de float;
-                # o teto é inclusivo (exatamente na margem é aceito).
-                if margem_operavel is not None and em_pos + allocated > margem_operavel + 1e-9:
-                    conn.rollback()
-                    return {
-                        "status": "rejected",
-                        "reason": (
-                            f"Margem operável excedida (teto: {margem_operavel:.2f}, "
-                            f"exposição atual: {em_pos:.2f}, ordem: {allocated:.2f})"
-                        ),
-                    }
-
-                new_em_pos = em_pos + allocated
-                cursor.execute(
-                    """
-                UPDATE portfolio SET em_posicoes = ?, updated_at = ? WHERE id = ?
-                """,
-                    (new_em_pos, datetime.datetime.now(), pid),
-                )
 
             conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             conn.close()
 
@@ -411,16 +450,49 @@ class ExecutorAgent:
                     "reason": f"Exit evidence ticker {validated_evidence.ticker} does not match trade ticker {ticker}",
                 }
 
-            # Calculate PnL
-            if entry_price > 0:
-                if side == "BUY":
-                    pnl_pct = ((px_val - entry_price) / entry_price) * 100
-                else:
-                    pnl_pct = ((entry_price - px_val) / entry_price) * 100
-            else:
-                pnl_pct = 0.0
+            # NEXUS-005-B: Validate persisted trade accounting fields before arithmetic
+            try:
+                shares_val, entry_p_val = validate_trade_accounting_fields(
+                    shares, entry_price, name_shares="shares", name_price="entry_price"
+                )
+            except Exception as e:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Corrupt trade accounting fields: {e}"}
 
-            gross_value = shares * px_val
+            # NEXUS-005-B: Load and validate authoritative portfolio row
+            cursor.execute(
+                "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
+            )
+            pf_rows = cursor.fetchall()
+            if len(pf_rows) == 0:
+                conn.rollback()
+                return {"status": "rejected", "reason": "Portfolio integrity failure: missing portfolio row"}
+            if len(pf_rows) > 1:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Portfolio integrity failure: multiple portfolio rows ({len(pf_rows)})"}
+
+            pid, pat, disponivel, em_pos, margem_op = pf_rows[0]
+            try:
+                pat_v, disp_v, em_pos_v, margem_v, _, _ = validate_portfolio_fields(
+                    pat, disponivel, em_pos, margem_op
+                )
+            except Exception as e:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Portfolio integrity failure: {e}"}
+
+            # NEXUS-005-B: Compute exit accounting with invariant validation (no silent clamp)
+            try:
+                new_disponivel, new_em_pos, return_value, pnl_pct = compute_exit_accounting(
+                    saldo_disponivel=disp_v,
+                    em_posicoes=em_pos_v,
+                    shares=shares_val,
+                    entry_price=entry_p_val,
+                    exit_price=px_val,
+                    side=side,
+                )
+            except AccountingIntegrityError as e:
+                conn.rollback()
+                return {"status": "rejected", "reason": str(e)}
 
             # CAS: transition only if still 'active' inside this IMMEDIATE transaction
             cursor.execute(
@@ -435,26 +507,20 @@ class ExecutorAgent:
                 conn.rollback()
                 return {"status": "already_closed", "trade_id": trade_id}
 
-            # Update portfolio
             cursor.execute(
-                "SELECT id, saldo_disponivel, em_posicoes FROM portfolio ORDER BY id DESC LIMIT 1"
+                """
+            UPDATE portfolio SET saldo_disponivel = ?, em_posicoes = ?, updated_at = ? WHERE id = ?
+            """,
+                (new_disponivel, new_em_pos, datetime.datetime.now(), pid),
             )
-            pf_row = cursor.fetchone()
-            if pf_row:
-                pid, disponivel, em_pos = pf_row
-                original_allocation = shares * entry_price
-                return_value = gross_value
-                new_em_pos = max(0.0, em_pos - original_allocation)
-                new_disponivel = disponivel - original_allocation + return_value
-
-                cursor.execute(
-                    """
-                UPDATE portfolio SET saldo_disponivel = ?, em_posicoes = ?, updated_at = ? WHERE id = ?
-                """,
-                    (new_disponivel, new_em_pos, datetime.datetime.now(), pid),
-                )
 
             conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             conn.close()
 

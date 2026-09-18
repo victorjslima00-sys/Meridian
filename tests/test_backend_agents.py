@@ -292,6 +292,7 @@ class TestExecutorAgent:
         from backend.app.agents.executor import ExecutorAgent
         from tests.conftest import make_test_evidenced_quote
         conn = _init_in_memory_db()
+        conn.execute('UPDATE portfolio SET em_posicoes = 60.0 WHERE id = 1')
         conn.execute('INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status) VALUES (?,?,?,?,?,?,?,?,?)', ('BTC-USD', 'BUY', 0.001, 60000.0, 65000.0, 58000.0, datetime.now(), 't', 'active'))
         conn.commit()
         trade_id = conn.execute('SELECT MAX(id) FROM trades').fetchone()[0]
@@ -305,6 +306,7 @@ class TestExecutorAgent:
         from backend.app.agents.executor import ExecutorAgent
         from tests.conftest import make_test_evidenced_quote
         conn = _init_in_memory_db()
+        conn.execute('UPDATE portfolio SET em_posicoes = 30.0 WHERE id = 1')
         conn.execute('INSERT INTO trades (ticker, side, shares, entry_price, target_price, stop_loss, entry_date, ai_rationale, status) VALUES (?,?,?,?,?,?,?,?,?)', ('ETH-USD', 'BUY', 0.01, 3000.0, 3200.0, 2940.0, datetime.now(), 't', 'active'))
         conn.commit()
         trade_id = conn.execute('SELECT MAX(id) FROM trades').fetchone()[0]
