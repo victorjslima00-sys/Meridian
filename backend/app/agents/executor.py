@@ -119,6 +119,18 @@ class ExecutorAgent:
         target_price = intent.target_price
         stop_loss = intent.stop_loss
         side = intent.side
+        # NEXUS-005-B-R1: Long-only financial execution policy. Opening side must be "BUY".
+        if side == "SELL":
+            return {
+                "status": "rejected",
+                "reason": "SHORT_SELL_EXECUTION_NOT_SUPPORTED: Meridian currently operates in long-only mode",
+            }
+        if side != "BUY":
+            return {
+                "status": "rejected",
+                "reason": f"UNSUPPORTED_SIDE_EXECUTION: Opening side must be 'BUY', got '{side}'",
+            }
+
         is_strategy = isinstance(intent, ApprovedExecutionIntent)
         signal_id = intent.signal_id if is_strategy else None
         rationale = f"Strategy Intent (Signal {signal_id})" if is_strategy else f"Manual: {intent.reason}"
@@ -454,6 +466,17 @@ class ExecutorAgent:
             if status != "active":
                 conn.rollback()
                 return {"status": "already_closed", "trade_id": trade_id}
+
+            # NEXUS-005-B-R1: Persisted active SELL trades are unsupported financial state. Fail closed.
+            if side == "SELL" or side != "BUY":
+                conn.rollback()
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"UNSUPPORTED_ACTIVE_TRADE_SIDE: Active trade {trade_id} has unsupported side '{side}'. "
+                        "Manual remediation required."
+                    ),
+                }
 
             if _canonical(validated_evidence.ticker) != _canonical(ticker):
                 conn.rollback()

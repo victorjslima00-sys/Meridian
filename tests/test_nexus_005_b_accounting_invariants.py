@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.agents.contracts import (
     ApprovedExecutionIntent,
+    ManualExecutionIntent,
     RiskDecision,
     TypedSignal,
 )
@@ -27,6 +28,7 @@ from backend.app.data.accounting import (
     MONETARY_EPSILON,
     AccountingIntegrityError,
     PortfolioIntegrityError,
+    compute_exit_accounting,
     validate_monetary_value,
     validate_portfolio_fields,
 )
@@ -46,11 +48,12 @@ def petr4_approval(monkeypatch):
 
 
 @pytest.fixture
-def temp_db():
+def temp_db(monkeypatch):
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     orig_path = db.DB_PATH
     db.DB_PATH = path
+    monkeypatch.setattr("backend.app.agents.executor.DB_PATH", path)
     try:
         yield path
     finally:
@@ -71,12 +74,14 @@ def _make_intent(
 ) -> ApprovedExecutionIntent:
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     appr = make_synthetic_approval(ticker, digest)
+    target = price * 1.10 if side == "BUY" else price * 0.90
+    stop = price * 0.90 if side == "BUY" else price * 1.10
     sig = TypedSignal(
         ticker=ticker,
         side=side,
         price=price,
-        target_price=price * 1.10,
-        stop_loss=price * 0.90,
+        target_price=target,
+        stop_loss=stop,
         confidence=80,
         reason="NEXUS-005-B test signal",
         dataset_sha256=appr.dataset_sha256,
@@ -90,8 +95,8 @@ def _make_intent(
         signal_id=sig.signal_id,
         approved=True,
         allocated_capital=allocated,
-        target_price=price * 1.10,
-        stop_loss=price * 0.90,
+        target_price=target,
+        stop_loss=stop,
         reason="Approved by Risk Decision",
         decision_timestamp=now_utc,
     )
@@ -139,6 +144,9 @@ def test_b_two_concurrent_init_db_executions(temp_db):
     t2.start()
     t1.join(timeout=10)
     t2.join(timeout=10)
+
+    assert not t1.is_alive(), "Worker thread 1 timed out and is still alive"
+    assert not t2.is_alive(), "Worker thread 2 timed out and is still alive"
 
     assert errors == [], f"Concurrent init_db raised unexpected errors: {errors}"
 
@@ -747,11 +755,15 @@ def test_concurrent_entry_orders_prevent_overallocation(temp_db, monkeypatch):
 
     barrier = threading.Barrier(2)
     results = [None, None]
+    worker_errors = []
 
     def _worker(idx, intent):
-        barrier.wait()
-        agent = ExecutorAgent(db_path=temp_db, session_authority=auth)
-        results[idx] = agent.execute_order(intent)
+        try:
+            barrier.wait(timeout=5)
+            agent = ExecutorAgent(db_path=temp_db, session_authority=auth)
+            results[idx] = agent.execute_order(intent)
+        except Exception as e:
+            worker_errors.append((idx, e))
 
     with override_session_authority(auth):
         ctx1 = contextvars.copy_context()
@@ -762,6 +774,10 @@ def test_concurrent_entry_orders_prevent_overallocation(temp_db, monkeypatch):
         t2.start()
         t1.join(timeout=10)
         t2.join(timeout=10)
+
+    assert not t1.is_alive(), "Worker thread 1 timed out and is still alive"
+    assert not t2.is_alive(), "Worker thread 2 timed out and is still alive"
+    assert not worker_errors, f"Worker thread encountered unhandled exceptions: {worker_errors}"
 
     statuses = [r["status"] for r in results]
     # Exactly one should succeed, one must be rejected for insufficient capital
@@ -775,4 +791,340 @@ def test_concurrent_entry_orders_prevent_overallocation(temp_db, monkeypatch):
 
     assert em_pos == 100.0, f"em_posicoes should be exactly 100.0, got {em_pos}"
     assert len(trades) == 1, f"Expected exactly 1 active trade, got {len(trades)}"
+
+
+# ===========================================================================
+# NEXUS-005-B-R1: Long-Only Enforcement & Fail-Closed SELL / Short Regressions
+# Directive Sections 8 & 9
+# ===========================================================================
+
+def test_r1_a_manual_buy_opening_preserved(temp_db, monkeypatch):
+    """A. manual BUY opening -> existing behavior preserved."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.commit()
+    conn.close()
+
+    api_key = "test-secret-key-16-chars-min"
+    monkeypatch.setenv("API_KEY", api_key)
+    async def _mock_gate():
+        return True, []
+    monkeypatch.setattr("backend.app.main._avaliar_portao_de_entradas", _mock_gate)
+    monkeypatch.setattr("backend.app.main.get_current_price", lambda ticker: 25.0)
+
+    client = TestClient(main.app)
+    headers = {"X-API-Key": api_key}
+    resp = client.post("/api/trades/execute", json={"ticker": "PETR4.SA", "side": "BUY", "quantity": 10.0}, headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "executed"
+    assert data["shares"] == 10.0
+
+    conn = sqlite3.connect(temp_db)
+    trades = conn.execute("SELECT ticker, side, shares, status FROM trades WHERE status='active'").fetchall()
+    em_pos = conn.execute("SELECT em_posicoes FROM portfolio").fetchone()[0]
+    conn.close()
+    assert len(trades) == 1
+    assert trades[0][1] == "BUY"
+    assert em_pos == 250.0
+
+
+def test_r1_b_c_d_manual_sell_opening_rejected_zero_mutation(temp_db, monkeypatch):
+    """B, C, D. manual SELL opening -> rejected, 0 trades inserted, portfolio unchanged."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.commit()
+    conn.close()
+
+    api_key = "test-secret-key-16-chars-min"
+    monkeypatch.setenv("API_KEY", api_key)
+
+    client = TestClient(main.app)
+    headers = {"X-API-Key": api_key}
+    resp = client.post("/api/trades/execute", json={"ticker": "PETR4.SA", "side": "SELL", "quantity": 10.0}, headers=headers)
+    assert resp.status_code == 400
+    assert "SHORT_SELL_EXECUTION_NOT_SUPPORTED" in resp.json()["detail"]
+
+    # C. 0 trades inserted
+    conn = sqlite3.connect(temp_db)
+    trade_count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    # D. portfolio unchanged
+    pf_row = conn.execute("SELECT patrimonio_total, saldo_disponivel, em_posicoes FROM portfolio").fetchone()
+    conn.close()
+    assert trade_count == 0
+    assert pf_row[0] == 1000.0
+    assert pf_row[1] == 1000.0
+    assert pf_row[2] == 0.0
+
+
+def test_r1_e_approved_execution_intent_buy_preserved(temp_db):
+    """E. ApprovedExecutionIntent BUY -> existing behavior preserved."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.commit()
+    conn.close()
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    with override_session_authority(auth):
+        intent = _make_intent(ticker="PETR4.SA", allocated=250.0, price=25.0, side="BUY")
+        executor = ExecutorAgent(db_path=temp_db, session_authority=auth)
+        res = executor.execute_order(intent)
+
+    assert res["status"] == "executed"
+    assert res["shares"] == 10.0
+
+    conn = sqlite3.connect(temp_db)
+    trade = conn.execute("SELECT side, status FROM trades WHERE status='active'").fetchone()
+    em_pos = conn.execute("SELECT em_posicoes FROM portfolio").fetchone()[0]
+    conn.close()
+    assert trade == ("BUY", "active")
+    assert em_pos == 250.0
+
+
+def test_r1_f_g_h_approved_execution_intent_sell_rejected_zero_mutation(temp_db):
+    """F, G, H. ApprovedExecutionIntent SELL -> executor rejects, zero trade mutation, portfolio unchanged."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.commit()
+    conn.close()
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    with override_session_authority(auth):
+        intent = _make_intent(ticker="PETR4.SA", allocated=250.0, price=25.0, side="SELL")
+        executor = ExecutorAgent(db_path=temp_db, session_authority=auth)
+        res = executor.execute_order(intent)
+
+    # F. executor rejects
+    assert res["status"] == "rejected"
+    assert "SHORT_SELL_EXECUTION_NOT_SUPPORTED" in res["reason"]
+
+    # G. zero trade mutation
+    conn = sqlite3.connect(temp_db)
+    trade_count = conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+    # H. portfolio unchanged
+    pf_row = conn.execute("SELECT patrimonio_total, saldo_disponivel, em_posicoes FROM portfolio").fetchone()
+    conn.close()
+    assert trade_count == 0
+    assert pf_row[0] == 1000.0
+    assert pf_row[1] == 1000.0
+    assert pf_row[2] == 0.0
+
+
+def test_r1_i_compute_exit_accounting_side_sell_raises_accounting_integrity_error():
+    """I. compute_exit_accounting(side="SELL") -> AccountingIntegrityError."""
+    with pytest.raises(AccountingIntegrityError) as exc_info:
+        compute_exit_accounting(
+            saldo_disponivel=1000.0,
+            em_posicoes=200.0,
+            shares=10.0,
+            entry_price=20.0,
+            exit_price=30.0,
+            side="SELL",
+        )
+    assert "SHORT_SELL_EXECUTION_NOT_SUPPORTED" in str(exc_info.value)
+
+
+def test_r1_j_k_l_m_persisted_active_sell_close_order_fails_closed(temp_db):
+    """J, K, L, M. persisted active SELL + close_order -> fail closed, trade active, exit_price None, pf unchanged."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=800.0, em_posicoes=200.0")
+    conn.execute(
+        """
+        INSERT INTO trades (ticker, side, shares, entry_price, status)
+        VALUES ('PETR4.SA', 'SELL', 10.0, 20.0, 'active')
+        """
+    )
+    conn.commit()
+    trade_id = conn.execute("SELECT id FROM trades WHERE status='active'").fetchone()[0]
+    conn.close()
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    quote = make_test_evidenced_quote("PETR4.SA", 30.0)
+    executor = ExecutorAgent(db_path=temp_db, session_authority=auth)
+
+    with override_session_authority(auth):
+        res = executor.close_order(trade_id, current_price=30.0, reason="take_profit", evidence=quote)
+
+    # J. fail closed with remediation-required reason
+    assert res["status"] == "rejected"
+    assert "UNSUPPORTED_ACTIVE_TRADE_SIDE" in res["reason"]
+
+    conn = sqlite3.connect(temp_db)
+    row = conn.execute("SELECT status, exit_price FROM trades WHERE id=?", (trade_id,)).fetchone()
+    pf = conn.execute("SELECT patrimonio_total, saldo_disponivel, em_posicoes FROM portfolio").fetchone()
+    conn.close()
+
+    # K. trade remains active
+    assert row[0] == "active"
+    # L. exit_price remains unchanged (None)
+    assert row[1] is None
+    # M. portfolio remains unchanged
+    assert pf[0] == 1000.0
+    assert pf[1] == 800.0
+    assert pf[2] == 200.0
+
+
+def test_r1_n_unsupported_arbitrary_opening_side_deterministic_rejection(temp_db, monkeypatch):
+    """N. unsupported arbitrary opening side -> deterministic rejection."""
+    db.init_db()
+    api_key = "test-secret-key-16-chars-min"
+    monkeypatch.setenv("API_KEY", api_key)
+    client = TestClient(main.app)
+    headers = {"X-API-Key": api_key}
+
+    # API boundary
+    resp = client.post("/api/trades/execute", json={"ticker": "PETR4.SA", "side": "HOLD", "quantity": 10.0}, headers=headers)
+    assert resp.status_code == 400
+    assert "UNSUPPORTED_SIDE_EXECUTION" in resp.json()["detail"]
+
+    # Executor direct boundary with manual SELL
+    manual = ManualExecutionIntent(
+        ticker="PETR4.SA",
+        side="SELL",
+        entry_price=20.0,
+        allocated_capital=200.0,
+        target_price=18.0,
+        stop_loss=22.0,
+        reason="Arbitrary side test",
+        operator="test_operator",
+    )
+    executor = ExecutorAgent(db_path=temp_db)
+    res = executor.execute_manual_order(manual)
+    assert res["status"] == "rejected"
+    assert "SHORT_SELL_EXECUTION_NOT_SUPPORTED" in res["reason"]
+
+    # Executor direct boundary with non-intent object
+    res_bad = executor.execute_manual_order("not_an_intent")
+    assert res_bad["status"] == "rejected"
+
+
+def test_r1_o_buy_entry_exit_roundtrip_correct(temp_db):
+    """O. BUY entry -> exit roundtrip remains correct."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.commit()
+    conn.close()
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    with override_session_authority(auth):
+        intent = _make_intent(ticker="PETR4.SA", allocated=200.0, price=20.0, side="BUY")
+        executor = ExecutorAgent(db_path=temp_db, session_authority=auth)
+        res_entry = executor.execute_order(intent)
+        assert res_entry["status"] == "executed"
+
+        conn = sqlite3.connect(temp_db)
+        trade_id = conn.execute("SELECT id FROM trades WHERE status='active'").fetchone()[0]
+        conn.close()
+
+        quote = make_test_evidenced_quote("PETR4.SA", 25.0)
+        res_exit = executor.close_order(trade_id, current_price=25.0, reason="take_profit", evidence=quote)
+        assert res_exit["status"] == "closed"
+
+    pf = db.get_portfolio()
+    assert pf["em_posicoes"] == 0.0
+    # Entry 10 shares @ 20 = 200. Exit 10 shares @ 25 = 250. PnL = +50. Saldo disponivel = 1000 - 200 + 250 = 1050.
+    assert pf["saldo_disponivel"] == 1050.0
+
+
+def test_r1_argus_exact_reproduction_case_1_losing_short_fails_closed(temp_db):
+    """Section 9: CASE 1 - SELL shares=10, entry=20, exit=30 MUST NOT produce +100 BRL cash."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=800.0, em_posicoes=200.0")
+    conn.execute(
+        """
+        INSERT INTO trades (ticker, side, shares, entry_price, status)
+        VALUES ('PETR4.SA', 'SELL', 10.0, 20.0, 'active')
+        """
+    )
+    conn.commit()
+    trade_id = conn.execute("SELECT id FROM trades WHERE status='active'").fetchone()[0]
+    conn.close()
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    quote = make_test_evidenced_quote("PETR4.SA", 30.0)
+    executor = ExecutorAgent(db_path=temp_db, session_authority=auth)
+
+    with override_session_authority(auth):
+        res = executor.close_order(trade_id, current_price=30.0, reason="stop_loss", evidence=quote)
+
+    assert res["status"] == "rejected"
+    assert "UNSUPPORTED_ACTIVE_TRADE_SIDE" in res["reason"]
+
+    # Invariant: cash MUST NOT increase to 900.0 (800 + 100 fabricated cash)
+    pf = db.get_portfolio()
+    assert pf["saldo_disponivel"] == 800.0
+    assert pf["em_posicoes"] == 200.0
+
+    # Also directly verify compute_exit_accounting fails closed
+    with pytest.raises(AccountingIntegrityError):
+        compute_exit_accounting(
+            saldo_disponivel=800.0,
+            em_posicoes=200.0,
+            shares=10.0,
+            entry_price=20.0,
+            exit_price=30.0,
+            side="SELL",
+        )
+
+
+def test_r1_argus_exact_reproduction_case_2_winning_short_fails_closed(temp_db):
+    """Section 9: CASE 2 - SELL shares=10, entry=20, exit=10 MUST NOT produce -100 BRL cash."""
+    db.init_db()
+    conn = sqlite3.connect(temp_db)
+    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=800.0, em_posicoes=200.0")
+    conn.execute(
+        """
+        INSERT INTO trades (ticker, side, shares, entry_price, status)
+        VALUES ('PETR4.SA', 'SELL', 10.0, 20.0, 'active')
+        """
+    )
+    conn.commit()
+    trade_id = conn.execute("SELECT id FROM trades WHERE status='active'").fetchone()[0]
+    conn.close()
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    quote = make_test_evidenced_quote("PETR4.SA", 10.0)
+    executor = ExecutorAgent(db_path=temp_db, session_authority=auth)
+
+    with override_session_authority(auth):
+        res = executor.close_order(trade_id, current_price=10.0, reason="take_profit", evidence=quote)
+
+    assert res["status"] == "rejected"
+    assert "UNSUPPORTED_ACTIVE_TRADE_SIDE" in res["reason"]
+
+    # Invariant: cash MUST NOT decrease to 700.0 (800 - 100 inverted cash)
+    pf = db.get_portfolio()
+    assert pf["saldo_disponivel"] == 800.0
+    assert pf["em_posicoes"] == 200.0
+
+    # Also directly verify compute_exit_accounting fails closed
+    with pytest.raises(AccountingIntegrityError):
+        compute_exit_accounting(
+            saldo_disponivel=800.0,
+            em_posicoes=200.0,
+            shares=10.0,
+            entry_price=20.0,
+            exit_price=10.0,
+            side="SELL",
+        )
+
 

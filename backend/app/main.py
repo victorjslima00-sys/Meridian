@@ -1302,6 +1302,18 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
     if req.quantity <= 0:
         raise HTTPException(status_code=400, detail="Quantidade deve ser maior que 0")
 
+    # NEXUS-005-B-R1: Long-only financial execution policy. Reject opening side SELL or non-BUY.
+    if req.side == "SELL":
+        raise HTTPException(
+            status_code=400,
+            detail="SHORT_SELL_EXECUTION_NOT_SUPPORTED: Meridian currently operates in long-only mode",
+        )
+    if req.side != "BUY":
+        raise HTTPException(
+            status_code=400,
+            detail=f"UNSUPPORTED_SIDE_EXECUTION: Opening side must be 'BUY', got '{req.side}'",
+        )
+
     # Ordem manual passa pelo mesmo PORTÃO ÚNICO do laço automático de
     # entradas (ver _avaliar_portao_de_entradas) — nunca um caminho de
     # bloqueio separado, que poderia divergir e deixar uma ordem manual

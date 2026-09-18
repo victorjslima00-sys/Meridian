@@ -154,6 +154,16 @@ def compute_exit_accounting(
     Raises:
         AccountingIntegrityError if remaining position capital is negative or invariant fails.
     """
+    # NEXUS-005-B-R1: Long-only accounting defense in depth. Short positions are not supported.
+    if side == "SELL":
+        raise AccountingIntegrityError(
+            "SHORT_SELL_EXECUTION_NOT_SUPPORTED: Short positions are not supported under the long-only accounting model"
+        )
+    if side != "BUY":
+        raise AccountingIntegrityError(
+            f"UNSUPPORTED_TRADE_SIDE: Expected 'BUY', got '{side}'"
+        )
+
     s, entry_p = validate_trade_accounting_fields(
         shares, entry_price, name_shares="shares", name_price="entry_price"
     )
@@ -191,12 +201,8 @@ def compute_exit_accounting(
     new_disp_val = validate_monetary_value(new_disp, "new_saldo_disponivel", allow_zero=True)
     new_em_pos_val = validate_monetary_value(new_em_pos, "new_em_posicoes", allow_zero=True)
 
-    if side == "BUY":
-        pnl_pct = float(((exit_p - entry_p) / entry_p) * 100.0)
-    elif side == "SELL":
-        pnl_pct = float(((entry_p - exit_p) / entry_p) * 100.0)
-    else:
-        raise AccountingIntegrityError(f"Invalid trade side: {side}")
+    # Under long-only policy, side is guaranteed to be BUY at this point
+    pnl_pct = float(((exit_p - entry_p) / entry_p) * 100.0)
 
     return new_disp_val, new_em_pos_val, return_value, pnl_pct
 
