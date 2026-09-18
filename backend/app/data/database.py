@@ -74,7 +74,8 @@ def init_db():
                 cursor.execute("BEGIN IMMEDIATE")
                 break
             except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower() and attempt < max_retries - 1:
+                err_msg = str(e).lower()
+                if ("locked" in err_msg or "busy" in err_msg) and attempt < max_retries - 1:
                     time.sleep(0.05 * (attempt + 1))
                 else:
                     raise
@@ -120,7 +121,7 @@ def init_db():
                         _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
                     except Exception as alert_err:
                         logger.error("Falha inesperada ao alertar startup abortado: %s", alert_err)
-                    raise RuntimeError(msg)
+                    raise PortfolioIntegrityError(msg)
 
             cursor.execute(
                 "ALTER TABLE portfolio ADD COLUMN patrimonio_total REAL DEFAULT 0.0"
@@ -161,7 +162,7 @@ def init_db():
                 _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
             except Exception as alert_err:
                 logger.error("Falha inesperada ao alertar startup abortado: %s", alert_err)
-            raise RuntimeError(msg)
+            raise PortfolioIntegrityError(msg)
         elif len(pf_rows) == 1:
             pid, pat, disp, em_pos, margem = pf_rows[0]
             try:
@@ -176,7 +177,7 @@ def init_db():
                     _alerta_telegram_startup(f"🛑 [Meridian] Startup abortado — {msg}")
                 except Exception as alert_err:
                     logger.error("Falha inesperada ao alertar startup abortado: %s", alert_err)
-                raise RuntimeError(msg) from e
+                raise PortfolioIntegrityError(msg) from e
         else:
             # len(pf_rows) == 0: Bootstrap canonical initial row
             cursor.execute(
@@ -361,13 +362,16 @@ def set_margem_operavel(valor: float) -> Dict[str, Any]:
     conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
         cursor.execute(
             "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
         )
         rows = cursor.fetchall()
         if len(rows) == 0:
+            conn.rollback()
             return {"ok": False, "error": "Portfolio não encontrado."}
         if len(rows) > 1:
+            conn.rollback()
             return {"ok": False, "error": "Integridade violada: múltiplos portfolios."}
 
         pid, pat, disponivel, em_pos, margem = rows[0]
@@ -376,9 +380,11 @@ def set_margem_operavel(valor: float) -> Dict[str, Any]:
                 pat, disponivel, em_pos, margem
             )
         except Exception as e:
+            conn.rollback()
             return {"ok": False, "error": f"Estado de portfolio corrompido: {e}"}
 
         if v > disp_v:
+            conn.rollback()
             return {
                 "ok": False,
                 "error": (
@@ -392,6 +398,12 @@ def set_margem_operavel(valor: float) -> Dict[str, Any]:
             (v, datetime.datetime.now(), pid),
         )
         conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
     return {"ok": True, "margem_operavel": v}
@@ -407,13 +419,16 @@ def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
     conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
         cursor.execute(
             "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
         )
         rows = cursor.fetchall()
         if len(rows) == 0:
+            conn.rollback()
             return {"ok": False, "error": "Portfolio não encontrado."}
         if len(rows) > 1:
+            conn.rollback()
             return {"ok": False, "error": "Integridade violada: múltiplos portfolios."}
 
         pid, patrimonio, disponivel, em_pos, margem = rows[0]
@@ -422,9 +437,11 @@ def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
                 patrimonio, disponivel, em_pos, margem
             )
         except Exception as e:
+            conn.rollback()
             return {"ok": False, "error": f"Estado de portfolio corrompido: {e}"}
 
         if v > pat_v:
+            conn.rollback()
             return {
                 "ok": False,
                 "error": f"Patrimônio insuficiente (total: R$ {pat_v:.2f}).",
@@ -434,6 +451,7 @@ def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
         new_disp = round(disp_v + v, 4)
 
         if abs((new_pat + new_disp) - (pat_v + disp_v)) > MONETARY_EPSILON:
+            conn.rollback()
             return {"ok": False, "error": "Falha na conservação de capital."}
 
         cursor.execute(
@@ -441,6 +459,12 @@ def depositar_no_disponivel(valor: float) -> Dict[str, Any]:
             (new_pat, new_disp, datetime.datetime.now(), pid),
         )
         conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
     return {
@@ -460,13 +484,16 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
     conn = get_connection(isolation_level="IMMEDIATE")
     try:
         cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
         cursor.execute(
             "SELECT id, patrimonio_total, saldo_disponivel, em_posicoes, margem_operavel FROM portfolio"
         )
         rows = cursor.fetchall()
         if len(rows) == 0:
+            conn.rollback()
             return {"ok": False, "error": "Portfolio não encontrado."}
         if len(rows) > 1:
+            conn.rollback()
             return {"ok": False, "error": "Integridade violada: múltiplos portfolios."}
 
         pid, patrimonio, disponivel, em_pos, margem = rows[0]
@@ -475,9 +502,11 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
                 patrimonio, disponivel, em_pos, margem
             )
         except Exception as e:
+            conn.rollback()
             return {"ok": False, "error": f"Estado de portfolio corrompido: {e}"}
 
         if v > saldo_livre:
+            conn.rollback()
             return {
                 "ok": False,
                 "error": f"Saldo livre insuficiente (livre: R$ {saldo_livre:.2f}).",
@@ -487,14 +516,17 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
         new_disp = round(disp_v - v, 4)
 
         if new_disp < -MONETARY_EPSILON:
+            conn.rollback()
             return {"ok": False, "error": "Resultado violaria saldo disponível negativo."}
         if abs(new_disp) <= MONETARY_EPSILON:
             new_disp = 0.0
 
         if new_disp - em_pos_v < -MONETARY_EPSILON:
+            conn.rollback()
             return {"ok": False, "error": "Resultado violaria saldo livre negativo."}
 
         if abs((new_pat + new_disp) - (pat_v + disp_v)) > MONETARY_EPSILON:
+            conn.rollback()
             return {"ok": False, "error": "Falha na conservação de capital."}
 
         cursor.execute(
@@ -502,6 +534,12 @@ def retirar_do_disponivel(valor: float) -> Dict[str, Any]:
             (new_pat, new_disp, datetime.datetime.now(), pid),
         )
         conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
     return {
@@ -735,6 +773,9 @@ def compute_current_equity() -> Optional[float]:
     for pos in posicoes:
         shares = validate_monetary_value(
             pos["shares"], f"shares for active trade {pos['ticker']}", allow_zero=False
+        )
+        validate_monetary_value(
+            pos["entry_price"], f"entry_price for active trade {pos['ticker']}", allow_zero=False
         )
         price = get_current_price(pos["ticker"])
         if price is None or price <= 0:

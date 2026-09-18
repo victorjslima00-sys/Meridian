@@ -67,9 +67,10 @@ def _make_intent(
     allocated: float = 100.0,
     price: float = 25.0,
     side: str = "BUY",
+    digest: str = "0" * 64,
 ) -> ApprovedExecutionIntent:
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    appr = make_synthetic_approval(ticker, "0" * 64)
+    appr = make_synthetic_approval(ticker, digest)
     sig = TypedSignal(
         ticker=ticker,
         side=side,
@@ -684,3 +685,94 @@ def test_ad_compute_current_equity_corrupt_portfolio_or_trade_fails_closed(temp_
         with pytest.raises(AccountingIntegrityError) as exc_info:
             db.compute_current_equity()
         assert "shares" in str(exc_info.value).lower()
+
+    # 3. Corrupt active trade entry_price
+    conn = sqlite3.connect(temp_db)
+    conn.execute("DELETE FROM trades")
+    conn.execute(
+        "INSERT INTO trades (ticker, side, shares, entry_price, status) VALUES ('PETR4.SA', 'BUY', 5.0, -10.0, 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    with patch("backend.app.data.feed.get_current_price", return_value=12.0):
+        with pytest.raises(AccountingIntegrityError) as exc_info:
+            db.compute_current_equity()
+        assert "entry_price" in str(exc_info.value).lower()
+
+
+# ===========================================================================
+# Concurrency & TradeRequest Hardening Tests
+# ===========================================================================
+
+def test_trade_request_quantity_rejects_bool_and_non_finite():
+    """TradeRequest rejects bool, NaN, Inf, and non-positive quantity."""
+    from backend.app.main import TradeRequest
+    from pydantic import ValidationError
+
+    for invalid_qty in (True, False, float("nan"), float("inf"), float("-inf"), 0, -5.0, None):
+        with pytest.raises((ValidationError, ValueError)):
+            TradeRequest(ticker="PETR4.SA", side="BUY", quantity=invalid_qty)
+
+
+def test_concurrent_entry_orders_prevent_overallocation(temp_db, monkeypatch):
+    """Two concurrent entry orders with combined cost > saldo_livre must not over-allocate."""
+    db.init_db()
+
+    # Seed portfolio with exactly 150.0 saldo_disponivel, 0.0 em_posicoes
+    conn = sqlite3.connect(temp_db)
+    conn.execute(
+        "UPDATE portfolio SET patrimonio_total=500.0, saldo_disponivel=150.0, em_posicoes=0.0"
+    )
+    conn.commit()
+    conn.close()
+
+    # Set up synthetic authority for VALE3.SA as well
+    appr_vale = make_synthetic_approval("VALE3.SA", "1" * 64)
+    orig_lookup = monkeypatch
+    monkeypatch.setattr(
+        "trading_bot.data.approval.require_dataset_approval_by_digest",
+        lambda d, *a, **kw: appr_vale if d == "1" * 64 else
+        make_synthetic_approval("PETR4.SA", "0" * 64) if d == "0" * 64 else
+        (_ for _ in ()).throw(ValueError("data_approval_required")),
+    )
+
+    intent_petr = _make_intent(ticker="PETR4.SA", allocated=100.0, price=25.0)
+    intent_vale = _make_intent(ticker="VALE3.SA", allocated=100.0, price=50.0, digest="1" * 64)
+
+    from backend.app.markets.b3_session import AutonomousSessionAuthority, B3DayType, B3SessionPhase, override_session_authority
+    import contextvars
+
+    auth = AutonomousSessionAuthority(override_fn=lambda dt: (True, "OK", B3DayType.NORMAL_TRADING_DAY, B3SessionPhase.CONTINUOUS))
+
+    barrier = threading.Barrier(2)
+    results = [None, None]
+
+    def _worker(idx, intent):
+        barrier.wait()
+        agent = ExecutorAgent(db_path=temp_db, session_authority=auth)
+        results[idx] = agent.execute_order(intent)
+
+    with override_session_authority(auth):
+        ctx1 = contextvars.copy_context()
+        ctx2 = contextvars.copy_context()
+        t1 = threading.Thread(target=ctx1.run, args=(_worker, 0, intent_petr))
+        t2 = threading.Thread(target=ctx2.run, args=(_worker, 1, intent_vale))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+    statuses = [r["status"] for r in results]
+    # Exactly one should succeed, one must be rejected for insufficient capital
+    assert "executed" in statuses, f"Expected at least one execution, got {results}"
+    assert "rejected" in statuses, f"Expected one rejection due to capital limits, got {results}"
+
+    conn = sqlite3.connect(temp_db)
+    em_pos = conn.execute("SELECT em_posicoes FROM portfolio").fetchone()[0]
+    trades = conn.execute("SELECT ticker, shares FROM trades WHERE status='active'").fetchall()
+    conn.close()
+
+    assert em_pos == 100.0, f"em_posicoes should be exactly 100.0, got {em_pos}"
+    assert len(trades) == 1, f"Expected exactly 1 active trade, got {len(trades)}"
+

@@ -1279,6 +1279,23 @@ class TradeRequest(BaseModel):
     side: str
     quantity: float
 
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def validate_quantity(cls, v):
+        if isinstance(v, bool) or type(v).__name__ in ("bool", "bool_"):
+            raise ValueError("Boolean values are not allowed as quantity")
+        if v is None:
+            raise ValueError("Quantity cannot be None")
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"Quantity must be a valid float, got {type(v).__name__}")
+        if not math.isfinite(f):
+            raise ValueError("Quantity must be a finite number (no NaN or Inf)")
+        if f <= 0:
+            raise ValueError("Quantity must be positive")
+        return f
+
 
 @app.post("/api/trades/execute")
 def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_key)):

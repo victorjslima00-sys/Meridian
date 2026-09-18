@@ -185,6 +185,12 @@ def compute_exit_accounting(
     elif abs(new_disp) <= MONETARY_EPSILON:
         new_disp = 0.0
 
+    # Section 10: Validate computed values before return
+    validate_monetary_value(original_allocation, "original_allocation", allow_zero=False)
+    validate_monetary_value(return_value, "return_value", allow_zero=True)
+    new_disp_val = validate_monetary_value(new_disp, "new_saldo_disponivel", allow_zero=True)
+    new_em_pos_val = validate_monetary_value(new_em_pos, "new_em_posicoes", allow_zero=True)
+
     if side == "BUY":
         pnl_pct = float(((exit_p - entry_p) / entry_p) * 100.0)
     elif side == "SELL":
@@ -192,4 +198,5 @@ def compute_exit_accounting(
     else:
         raise AccountingIntegrityError(f"Invalid trade side: {side}")
 
-    return new_disp, new_em_pos, return_value, pnl_pct
+    return new_disp_val, new_em_pos_val, return_value, pnl_pct
+

@@ -26,8 +26,8 @@ class ExecutorAgent:
         """Conexão padrão do executor: IMMEDIATE (escreve logo na primeira
         instrução) + busy_timeout, para esperar (em vez de estourar
         'database is locked' na hora) quando outra conexão segura o lock."""
-        conn = sqlite3.connect(self.db_path, isolation_level="IMMEDIATE")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn = sqlite3.connect(self.db_path, timeout=15.0, isolation_level="IMMEDIATE")
+        conn.execute("PRAGMA busy_timeout=15000")
         return conn
 
     def execute_order(self, intent: Any = None, *args, **kwargs) -> Dict[str, Any]:
@@ -155,6 +155,7 @@ class ExecutorAgent:
         conn = self._connect()
         try:
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
 
             # NEXUS-005-B: Validate authoritative portfolio row BEFORE any trade mutation
             cursor.execute(
@@ -184,8 +185,8 @@ class ExecutorAgent:
                     "reason": f"Capital livre insuficiente (Livre: {saldo_livre:.2f}, Req: {allocated:.2f})",
                 }
 
-            # usabilidade 2e — portão de capital de TODA entrada
-            if margem_v is not None and em_pos_v + allocated > margem_v + 1e-9:
+            # usabilidade 2e — portão de capital de TODA entrada (com tolerância canônica de epsilon)
+            if margem_v is not None and em_pos_v + allocated > margem_v + MONETARY_EPSILON:
                 conn.rollback()
                 return {
                     "status": "rejected",
@@ -199,6 +200,13 @@ class ExecutorAgent:
             if disp_v - new_em_pos < -MONETARY_EPSILON:
                 conn.rollback()
                 return {"status": "rejected", "reason": "Resulting em_posicoes exceeds saldo_disponivel"}
+
+            # Validate computed resulting portfolio state before update
+            try:
+                validate_portfolio_fields(pat_v, disp_v, new_em_pos, margem_v)
+            except Exception as e:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Resulting portfolio accounting invalid: {e}"}
 
             # Signal idempotency check BEFORE opening position check
             if signal_id:
@@ -430,6 +438,7 @@ class ExecutorAgent:
         conn = self._connect()
         try:
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
 
             # 5. Load active trade BEFORE authorizing evidence ticker
             cursor.execute(
@@ -438,13 +447,16 @@ class ExecutorAgent:
             )
             row = cursor.fetchone()
             if not row:
+                conn.rollback()
                 return {"status": "error", "reason": "Trade not found."}
 
             ticker, side, shares, entry_price, status = row
             if status != "active":
+                conn.rollback()
                 return {"status": "already_closed", "trade_id": trade_id}
 
             if _canonical(validated_evidence.ticker) != _canonical(ticker):
+                conn.rollback()
                 return {
                     "status": "rejected",
                     "reason": f"Exit evidence ticker {validated_evidence.ticker} does not match trade ticker {ticker}",
@@ -493,6 +505,13 @@ class ExecutorAgent:
             except AccountingIntegrityError as e:
                 conn.rollback()
                 return {"status": "rejected", "reason": str(e)}
+
+            # Validate computed resulting portfolio state before update
+            try:
+                validate_portfolio_fields(pat_v, new_disponivel, new_em_pos, margem_op)
+            except Exception as e:
+                conn.rollback()
+                return {"status": "rejected", "reason": f"Resulting portfolio accounting invalid: {e}"}
 
             # CAS: transition only if still 'active' inside this IMMEDIATE transaction
             cursor.execute(
