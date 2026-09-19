@@ -402,3 +402,76 @@ def test_j_normal_paper_buy_path_under_synthetic_approved_authority(tmp_path, mo
     assert trade[1] == "BUY"
     assert trade[4] == "active"
     conn.close()
+
+
+# ===========================================================================
+# Test K: Active position feed failure (delisted/0.0/timeout) fails closed
+# ===========================================================================
+@pytest.mark.parametrize("bad_price", [0.0, None])
+def test_k_active_position_feed_failure_fails_closed(tmp_path, mock_circuit_breaker, bad_price):
+    """
+    Edge case: An active trade exists in SQLite, but the external price feed
+    returns 0.0 or None. compute_current_equity returns None and PaperSession
+    rejects the new signal fail-closed without mutating portfolio or executing.
+    """
+    db_file = tmp_path / f"paper_test_k_{bad_price}.db"
+    storage_dir = tmp_path / "paper_sessions"
+    _init_test_db(db_file, patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=300.0, margem_operavel=1000.0)
+
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        "INSERT INTO trades (ticker, side, shares, entry_price, status) VALUES ('MGLU3', 'BUY', 100.0, 3.0, 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    runner = PaperSessionRunner(session_id=f"session_test_k_{bad_price}", db_path=str(db_file), storage_dir=str(storage_dir))
+    sig = _make_signal(ticker="VALE3", price=60.0, target_price=66.0, stop_loss=57.0, digest="1" * 64)
+
+    with patch("backend.app.data.feed.get_current_price", return_value=bad_price):
+        report = runner.run_cycle(signals=[sig])
+
+    assert report.orders_executed == 0
+    assert report.orders_rejected == 1
+    assert report.reconciliation_ok is True
+
+    conn = sqlite3.connect(db_file)
+    trades = conn.execute("SELECT ticker FROM trades WHERE status = 'active'").fetchall()
+    conn.close()
+    assert len(trades) == 1
+    assert trades[0][0] == "MGLU3"
+
+
+def test_k_active_position_feed_exception_fails_closed(tmp_path, mock_circuit_breaker):
+    """
+    Edge case: An active trade exists in SQLite, but the external price feed
+    raises a network timeout or connection exception. PaperSession rejects
+    the new signal fail-closed without mutating portfolio or executing.
+    """
+    db_file = tmp_path / "paper_test_k_timeout.db"
+    storage_dir = tmp_path / "paper_sessions"
+    _init_test_db(db_file, patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=300.0, margem_operavel=1000.0)
+
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        "INSERT INTO trades (ticker, side, shares, entry_price, status) VALUES ('MGLU3', 'BUY', 100.0, 3.0, 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    runner = PaperSessionRunner(session_id="session_test_k_timeout", db_path=str(db_file), storage_dir=str(storage_dir))
+    sig = _make_signal(ticker="VALE3", price=60.0, target_price=66.0, stop_loss=57.0, digest="1" * 64)
+
+    with patch("backend.app.data.feed.get_current_price", side_effect=TimeoutError("Feed timeout")):
+        report = runner.run_cycle(signals=[sig])
+
+    assert report.orders_executed == 0
+    assert report.orders_rejected == 1
+    assert report.reconciliation_ok is True
+
+    conn = sqlite3.connect(db_file)
+    trades = conn.execute("SELECT ticker FROM trades WHERE status = 'active'").fetchall()
+    conn.close()
+    assert len(trades) == 1
+    assert trades[0][0] == "MGLU3"
+
