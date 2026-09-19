@@ -19,6 +19,7 @@ import pandas as pd
 
 from trading_bot.signals.engine import compute_signal, Candidate, get_ibov_data, ibov_in_uptrend
 from trading_bot.risk.position_sizing import calculate_position_size
+from backend.app.data.accounting import MONETARY_EPSILON
 
 logger = logging.getLogger(__name__)
 
@@ -369,10 +370,11 @@ def run_regime_backtest(
                 if pos_size <= 0:
                     continue
 
-                if capital_cash < pos_size:
+                if capital_cash + MONETARY_EPSILON < pos_size:
                     logger.warning("[%s] Cash insuficiente p/ %s. Requerido: %.2f | Disp: %.2f",
                                    current_date, c.ticker, pos_size, capital_cash)
                     continue
+                pos_size = min(pos_size, capital_cash)
 
                 # Aborta se abriu abaixo do stop planejado
                 if open_price <= c.stop:

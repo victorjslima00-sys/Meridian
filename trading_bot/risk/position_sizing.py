@@ -194,4 +194,7 @@ def calculate_position_size(
     if allocated_capital <= 0:
         return 0.0
 
-    return round(allocated_capital, 4)
+    res = round(allocated_capital, 4)
+    if res > float(capital_cash):
+        res = float(capital_cash)
+    return round(res, 4)

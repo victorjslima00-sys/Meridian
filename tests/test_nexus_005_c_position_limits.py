@@ -725,7 +725,7 @@ def test_23_backtest_runtime_sizing_parity():
     assert runtime_sized == 1500.0
 
 
-def test_23_backtest_causal_equity_at_open_no_lookahead():
+def test_23b_backtest_causal_equity_at_open_no_lookahead():
     """Verify backtest causal equity uses today's open price without lookahead."""
     import pandas as pd
 
@@ -960,6 +960,90 @@ def test_27_production_path_backtest_event_order_regression(monkeypatch):
     # CAND_B MUST NOT have entered at day t open because POS_A was still occupying the only slot!
     cand_b_trades = [t for t in res.trades if t.ticker == "CAND_B"]
     assert len(cand_b_trades) == 0, f"CAND_B illegally entered at day t open via intraday exit lookahead: {cand_b_trades}"
+
+
+def test_27b_production_path_open_entry_sizing_unaltered_by_later_intraday_exit(monkeypatch):
+    """
+    Directly exercises run_regime_backtest() proving that an existing position
+    hitting its target later intraday on day t does NOT alter the reference equity
+    or position sizing used for a day t market-open entry (Section 10).
+    """
+    import pandas as pd
+    from datetime import date
+    from trading_bot.backtest.engine import run_regime_backtest
+    from trading_bot.signals.engine import Candidate
+
+    d_start = date(2022, 1, 1)
+    rows_a, rows_b = [], []
+    cur = d_start
+    for _ in range(200):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    regime_start = cur
+    for _ in range(30):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    t_minus_1 = cur
+    cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+    t_day = cur
+
+    # Day t-1: POS_A opens at 100.0. Initial capital = 10,000.0.
+    # Allocation for POS_A: 10,000 * 0.10 = 1,000.0.
+    # Remaining cash at end of day t-1 = 9,000.0.
+    rows_a.append({"ts": t_minus_1, "o": 100.0, "h": 102.0, "l": 98.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+    rows_b.append({"ts": t_minus_1, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    # Day t: POS_A open=100.0 does NOT trigger stop (90.0) or target (110.0) gap exit.
+    # Causal reference equity at day t open = cash (9,000.0) + MTM (1,000.0 * 100/100) = 10,000.0.
+    # CAND_B is evaluated at day t open.
+    # max_position_fraction = 0.10 -> CAND_B size MUST be min(10000*0.25, 10000*0.10, 9000) = 1,000.0.
+    # Later intraday, POS_A high=150.0 hits target (110.0), which returns cash if lookahead occurred!
+    rows_a.append({"ts": t_day, "o": 100.0, "h": 150.0, "l": 99.0, "c": 120.0, "v": 10000.0, "adj_close": 120.0})
+    rows_b.append({"ts": t_day, "o": 50.0, "h": 52.0, "l": 48.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    data = {"POS_A": pd.DataFrame(rows_a), "CAND_B": pd.DataFrame(rows_b)}
+
+    def mock_signal(df, ticker, **kwargs):
+        last_ts = df["ts"].iloc[-1]
+        if ticker == "POS_A" and last_ts == (pd.Timestamp(t_minus_1) - pd.Timedelta(days=1)).date():
+            return Candidate("POS_A", score=0.9, entry_price=100.0, stop=90.0, target=110.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        if ticker == "CAND_B" and last_ts == t_minus_1:
+            return Candidate("CAND_B", score=0.95, entry_price=50.0, stop=45.0, target=55.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        return None
+
+    monkeypatch.setattr("trading_bot.backtest.engine.compute_signal", mock_signal)
+    monkeypatch.setattr("trading_bot.backtest.engine.ibov_in_uptrend", lambda df, ts: True)
+
+    res = run_regime_backtest(
+        data=data,
+        regime_name="r1_sizing_causality",
+        start=regime_start,
+        end=t_day,
+        capital=10000.0,
+        max_positions=2,
+        kelly_fraction=0.25,
+        max_position_fraction=0.10,
+        ibov_filter=False,
+    )
+
+    # POS_A exited with target on day t
+    pos_a_trades = [t for t in res.trades if t.ticker == "POS_A"]
+    assert len(pos_a_trades) == 1
+    assert pos_a_trades[0].exit_reason == "target"
+    assert pos_a_trades[0].exit_date == t_day
+
+    # CAND_B entered on day t at OPEN
+    # Its sizing MUST be exactly 1000.0 (based on 10,000.0 causal reference equity at open)
+    cand_b_trades = [t for t in res.trades if t.ticker == "CAND_B"]
+    assert len(cand_b_trades) == 1
+    assert cand_b_trades[0].entry_date == t_day
+    assert cand_b_trades[0].capital_allocated == 1000.0, (
+        f"CAND_B sizing was altered by intraday exit lookahead: {cand_b_trades[0].capital_allocated} != 1000.0"
+    )
 
 
 # ===========================================================================
