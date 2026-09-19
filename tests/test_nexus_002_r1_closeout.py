@@ -146,8 +146,8 @@ def isolated_db(tmp_path):
     cursor.execute("""
         CREATE TABLE portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            patrimonio_total REAL DEFAULT 1000.0,
-            saldo_disponivel REAL DEFAULT 1000.0,
+            patrimonio_total REAL DEFAULT 2000.0,
+            saldo_disponivel REAL DEFAULT 2000.0,
             em_posicoes REAL DEFAULT 0.0,
             margem_operavel REAL,
             updated_at TIMESTAMP
@@ -155,7 +155,7 @@ def isolated_db(tmp_path):
     """)
     cursor.execute(
         "INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) "
-        "VALUES (1000.0, 1000.0, 0.0, ?)",
+        "VALUES (2000.0, 2000.0, 0.0, ?)",
         (datetime.now(timezone.utc).isoformat(),),
     )
     cursor.execute(

@@ -36,7 +36,7 @@ def synthetic_approval(monkeypatch):
     monkeypatch.setattr("trading_bot.data.approval.require_dataset_approval_by_digest", lookup)
 
 
-def _create_isolated_db(db_path: Path, initial_cash: float = 1000.0):
+def _create_isolated_db(db_path: Path, initial_cash: float = 2000.0):
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cursor.execute("""

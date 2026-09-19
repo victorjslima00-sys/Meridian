@@ -449,7 +449,7 @@ def test_valid_quote_distinguishes_decision_from_execution_price(tmp_path):
     conn.execute(
         "CREATE TABLE portfolio (id INTEGER PRIMARY KEY, saldo_disponivel REAL, patrimonio_total REAL, em_posicoes REAL, margem_operavel REAL, updated_at TIMESTAMP)"
     )
-    conn.execute("INSERT INTO portfolio VALUES (1, 10000.0, 10000.0, 0.0, 10000.0, CURRENT_TIMESTAMP)")
+    conn.execute("INSERT INTO portfolio VALUES (1, 30000.0, 30000.0, 0.0, 30000.0, CURRENT_TIMESTAMP)")
     conn.execute(
         "CREATE TABLE trades ("
         "id INTEGER PRIMARY KEY, ticker TEXT, side TEXT, entry_price REAL, decision_price REAL, "

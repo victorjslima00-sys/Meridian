@@ -227,7 +227,7 @@ def _isolated_db(path):
     conn.execute("""CREATE TABLE portfolio (id INTEGER PRIMARY KEY AUTOINCREMENT,
         patrimonio_total REAL DEFAULT 0.0, saldo_disponivel REAL DEFAULT 0.0,
         em_posicoes REAL DEFAULT 0.0, margem_operavel REAL, updated_at TIMESTAMP)""")
-    conn.execute("INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (1000.0, 1000.0, 0.0, ?)",
+    conn.execute("INSERT INTO portfolio (patrimonio_total, saldo_disponivel, em_posicoes, updated_at) VALUES (2000.0, 2000.0, 0.0, ?)",
                  (datetime.now(timezone.utc).isoformat(),))
     conn.execute("CREATE UNIQUE INDEX idx_trades_strategy_signal_id ON trades(signal_id) WHERE signal_id IS NOT NULL")
     conn.execute("CREATE UNIQUE INDEX idx_trades_single_active ON trades(ticker) WHERE status = 'active'")

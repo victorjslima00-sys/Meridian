@@ -7,14 +7,24 @@ CORRELATED_GROUPS: List[List[str]] = [
 ]
 
 
+from trading_bot.risk.position_sizing import _UNSET
+
+
 class RiskManager:
-    def __init__(self, saldo_livre: float, config=None, em_posicoes: float = 0.0, *, validation_context=None):
+    def __init__(
+        self,
+        saldo_livre: float,
+        config=None,
+        em_posicoes: float = 0.0,
+        reference_equity: Any = _UNSET,
+        *,
+        validation_context=None
+    ):
         """
-        saldo_livre  = capital_cash (dinheiro fora de posições) — o teto de
-                       alocação, o bot nunca aloca mais que o cash livre.
-        em_posicoes  = open_positions_capital (capital já em posições). Junto
-                       com saldo_livre forma o total_equity que o Kelly do
-                       backtest usa. Default 0.0 preserva chamadas antigas.
+        saldo_livre      = capital_cash (dinheiro fora de posições) — base de
+                           alocação operável.
+        em_posicoes      = open_positions_capital (capital já em posições).
+        reference_equity = Referência canônica de equity (NEXUS-005-C1).
         """
         from ..runtime_config import RuntimeConfig
         from copy import deepcopy
@@ -23,6 +33,7 @@ class RiskManager:
         self._validation_context = deepcopy(validation_context)
         self.saldo_livre = saldo_livre
         self.em_posicoes = em_posicoes
+        self.reference_equity = reference_equity
         self.config = config or RuntimeConfig.load()
 
     def _is_correlated_with_open(self, ticker: str, open_tickers: List[str]) -> bool:
@@ -167,17 +178,31 @@ class RiskManager:
                 stop_loss=stop_loss,
                 decision_timestamp=datetime.now(timezone.utc),
             )
-
         win_loss_ratio = reward / risk if risk > 0 else 0
 
         from trading_bot.risk.position_sizing import calculate_position_size
-        pos_size = calculate_position_size(
-            capital_cash=self.saldo_livre,
-            open_positions_capital=self.em_posicoes,
-            kelly_fraction=self.config.kelly_fraction,
-            max_positions=self.config.max_positions,
-            current_open_count=len(open_tickers),
-        )
+        try:
+            sizing_kwargs = {
+                "capital_cash": self.saldo_livre,
+                "open_positions_capital": self.em_posicoes,
+                "kelly_fraction": self.config.kelly_fraction,
+                "max_positions": self.config.max_positions,
+                "current_open_count": len(open_tickers),
+                "max_position_fraction": self.config.max_position_fraction,
+            }
+            if self.reference_equity is not _UNSET:
+                sizing_kwargs["reference_equity"] = self.reference_equity
+
+            pos_size = calculate_position_size(**sizing_kwargs)
+        except Exception as e:
+            return RiskDecision(
+                signal_id=signal.signal_id,
+                approved=False,
+                reason=f"Sizing veto: fail closed ({e})",
+                target_price=target_price,
+                stop_loss=stop_loss,
+                decision_timestamp=datetime.now(timezone.utc),
+            )
 
         if pos_size <= 0:
             return RiskDecision(
@@ -196,6 +221,11 @@ class RiskManager:
             target_price=target_price,
             stop_loss=stop_loss,
             decision_timestamp=datetime.now(timezone.utc),
-            reason=f"Aprovado (Donchian). Risco:Retorno {win_loss_ratio:.2f} | Kelly {self.config.kelly_fraction} do equity. Alocando R$ {pos_size:.2f}."
+            reason=(
+                f"Aprovado (Donchian). Risco:Retorno {win_loss_ratio:.2f} | "
+                f"Kelly {self.config.kelly_fraction:.0%} | "
+                f"MaxPosFrac {self.config.max_position_fraction:.0%}. "
+                f"Alocando R$ {pos_size:.2f}."
+            ),
         )
 

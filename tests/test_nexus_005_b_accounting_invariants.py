@@ -613,7 +613,7 @@ def test_ab_normal_entry_exit_round_trip_accounting(temp_db):
     """AB. normal entry/exit round trip -> correct saldo/em_posicoes/P&L behavior."""
     db.init_db()
     conn = sqlite3.connect(temp_db)
-    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=500.0, em_posicoes=0.0")
+    conn.execute("UPDATE portfolio SET patrimonio_total=2000.0, saldo_disponivel=2000.0, em_posicoes=0.0")
     conn.commit()
     conn.close()
 
@@ -626,9 +626,9 @@ def test_ab_normal_entry_exit_round_trip_accounting(temp_db):
     assert res_entry["shares"] == 10.0
 
     pf_entry = db.get_portfolio()
-    assert pf_entry["saldo_disponivel"] == 500.0
+    assert pf_entry["saldo_disponivel"] == 2000.0
     assert pf_entry["em_posicoes"] == 200.0
-    assert pf_entry["saldo_livre"] == 300.0
+    assert pf_entry["saldo_livre"] == 1800.0
 
     conn = sqlite3.connect(temp_db)
     trade_id = conn.execute("SELECT id FROM trades WHERE status = 'active'").fetchone()[0]
@@ -636,7 +636,7 @@ def test_ab_normal_entry_exit_round_trip_accounting(temp_db):
 
     # 2. Exit with profit: exit price 25 BRL/share (+25% PnL)
     # Gross return: 10 * 25 = 250 BRL. Realized PnL: +50 BRL.
-    # New saldo_disponivel = 500 - 200 + 250 = 550 BRL.
+    # New saldo_disponivel = 2000 - 200 + 250 = 2050 BRL.
     # New em_posicoes = 200 - 200 = 0.0 BRL.
     ev_exit = make_test_evidenced_quote("PETR4.SA", 25.0)
     res_exit = executor.close_order(trade_id, 25.0, "Take Profit", evidence=ev_exit)
@@ -644,9 +644,9 @@ def test_ab_normal_entry_exit_round_trip_accounting(temp_db):
     assert res_exit["pnl_pct"] == 25.0
 
     pf_exit = db.get_portfolio()
-    assert pf_exit["saldo_disponivel"] == 550.0
+    assert pf_exit["saldo_disponivel"] == 2050.0
     assert pf_exit["em_posicoes"] == 0.0
-    assert pf_exit["saldo_livre"] == 550.0
+    assert pf_exit["saldo_livre"] == 2050.0
 
 
 # ===========================================================================
@@ -757,10 +757,19 @@ def test_concurrent_entry_orders_prevent_overallocation(temp_db, monkeypatch):
     results = [None, None]
     worker_errors = []
 
+    from backend.app.runtime_config import RuntimeConfig
+    custom_cfg = RuntimeConfig(
+        execution_mode="manual",
+        kelly_fraction=0.25,
+        max_positions=3,
+        max_position_fraction=1.0,
+        llm_failure_policy="hold",
+    )
+
     def _worker(idx, intent):
         try:
             barrier.wait(timeout=5)
-            agent = ExecutorAgent(db_path=temp_db, session_authority=auth)
+            agent = ExecutorAgent(db_path=temp_db, session_authority=auth, config=custom_cfg)
             results[idx] = agent.execute_order(intent)
         except Exception as e:
             worker_errors.append((idx, e))
@@ -802,7 +811,7 @@ def test_r1_a_manual_buy_opening_preserved(temp_db, monkeypatch):
     """A. manual BUY opening -> existing behavior preserved."""
     db.init_db()
     conn = sqlite3.connect(temp_db)
-    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.execute("UPDATE portfolio SET patrimonio_total=2500.0, saldo_disponivel=2500.0, em_posicoes=0.0")
     conn.commit()
     conn.close()
 
@@ -863,7 +872,7 @@ def test_r1_e_approved_execution_intent_buy_preserved(temp_db):
     """E. ApprovedExecutionIntent BUY -> existing behavior preserved."""
     db.init_db()
     conn = sqlite3.connect(temp_db)
-    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.execute("UPDATE portfolio SET patrimonio_total=2500.0, saldo_disponivel=2500.0, em_posicoes=0.0")
     conn.commit()
     conn.close()
 
@@ -1013,7 +1022,7 @@ def test_r1_o_buy_entry_exit_roundtrip_correct(temp_db):
     """O. BUY entry -> exit roundtrip remains correct."""
     db.init_db()
     conn = sqlite3.connect(temp_db)
-    conn.execute("UPDATE portfolio SET patrimonio_total=1000.0, saldo_disponivel=1000.0, em_posicoes=0.0")
+    conn.execute("UPDATE portfolio SET patrimonio_total=2000.0, saldo_disponivel=2000.0, em_posicoes=0.0")
     conn.commit()
     conn.close()
 
@@ -1036,8 +1045,8 @@ def test_r1_o_buy_entry_exit_roundtrip_correct(temp_db):
 
     pf = db.get_portfolio()
     assert pf["em_posicoes"] == 0.0
-    # Entry 10 shares @ 20 = 200. Exit 10 shares @ 25 = 250. PnL = +50. Saldo disponivel = 1000 - 200 + 250 = 1050.
-    assert pf["saldo_disponivel"] == 1050.0
+    # Entry 10 shares @ 20 = 200. Exit 10 shares @ 25 = 250. PnL = +50. Saldo disponivel = 2000 - 200 + 250 = 2050.
+    assert pf["saldo_disponivel"] == 2050.0
 
 
 def test_r1_argus_exact_reproduction_case_1_losing_short_fails_closed(temp_db):

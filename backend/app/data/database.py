@@ -54,8 +54,9 @@ def now_b3() -> datetime.datetime:
     return datetime.datetime.now(TZ_B3)
 
 
-def get_connection(isolation_level=None):
-    conn = sqlite3.connect(DB_PATH, timeout=15.0, isolation_level=isolation_level)
+def get_connection(isolation_level=None, db_path=None):
+    path = db_path or DB_PATH
+    conn = sqlite3.connect(path, timeout=15.0, isolation_level=isolation_level)
     conn.execute("PRAGMA busy_timeout=15000;")
     return conn
 
@@ -326,8 +327,8 @@ def init_db():
         conn.close()
 
 
-def get_portfolio() -> Dict[str, Any]:
-    conn = get_connection()
+def get_portfolio(db_path=None) -> Dict[str, Any]:
+    conn = get_connection(db_path=db_path)
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()
@@ -744,7 +745,7 @@ def get_risk_metrics(verify_provenance: bool = False, agent: Optional[Any] = Non
 # Equity Snapshots — base do Circuit Breaker (drawdowns reais)
 # ---------------------------------------------------------------------------
 
-def compute_current_equity() -> Optional[float]:
+def compute_current_equity(db_path=None) -> Optional[float]:
     """
     Equity real = caixa livre (saldo_disponivel - em_posicoes)
                 + valor mark-to-market das posições ativas (shares × preço atual).
@@ -755,10 +756,10 @@ def compute_current_equity() -> Optional[float]:
     """
     from .feed import get_current_price
 
-    pf = get_portfolio()
+    pf = get_portfolio(db_path=db_path)
     caixa_livre = pf["saldo_livre"]
 
-    conn = get_connection()
+    conn = get_connection(db_path=db_path)
     conn.row_factory = sqlite3.Row
     try:
         cursor = conn.cursor()

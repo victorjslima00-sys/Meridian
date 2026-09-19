@@ -141,8 +141,8 @@ class TestSensibilidadeAoModeloDeImpacto:
         # ADTV pequeno de propósito: o slippage precisa ser grande o bastante
         # para não ser engolido pelo round(pnl_pct, 6) com que o Trade é gravado.
         adtv, vol = _liquidez(dados, 10_000.0)
-        kw = dict(adtv_brl=adtv, daily_vol=vol)
-        base = _roda(dados, janela)
+        kw = dict(adtv_brl=adtv, daily_vol=vol, max_position_fraction=1.0)
+        base = _roda(dados, janela, max_position_fraction=1.0)
         meio = _roda(dados, janela, slippage_coef=0.5, **kw)
         cheio = _roda(dados, janela, slippage_coef=1.0, **kw)
         s_meio = base.trades[0].pnl_pct - meio.trades[0].pnl_pct

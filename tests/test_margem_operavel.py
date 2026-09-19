@@ -40,7 +40,7 @@ def temp_db_path():
 def _set_portfolio(path, saldo_disponivel, em_posicoes, margem_operavel=None):
     conn = sqlite3.connect(path)
     try:
-        conn.execute('UPDATE portfolio SET saldo_disponivel=?, em_posicoes=?, margem_operavel=? WHERE id = (SELECT id FROM portfolio ORDER BY id DESC LIMIT 1)', (saldo_disponivel, em_posicoes, margem_operavel))
+        conn.execute('UPDATE portfolio SET patrimonio_total=?, saldo_disponivel=?, em_posicoes=?, margem_operavel=? WHERE id = (SELECT id FROM portfolio ORDER BY id DESC LIMIT 1)', (saldo_disponivel, saldo_disponivel, em_posicoes, margem_operavel))
         conn.commit()
     finally:
         conn.close()
@@ -142,7 +142,15 @@ def _ordem_aprovada(allocated):
     )
 
 def _executor_para(path):
-    ex = ExecutorAgent()
+    from backend.app.runtime_config import RuntimeConfig
+    cfg = RuntimeConfig(
+        execution_mode="manual",
+        kelly_fraction=0.25,
+        max_positions=3,
+        max_position_fraction=1.0,
+        llm_failure_policy="hold",
+    )
+    ex = ExecutorAgent(config=cfg)
     ex.db_path = path
     return ex
 

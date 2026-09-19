@@ -14,13 +14,22 @@ from ..data.accounting import (
 
 
 class ExecutorAgent:
-    def __init__(self, db_path: Optional[str] = None, session_authority: Optional[Any] = None, *, validation_context=None):
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        session_authority: Optional[Any] = None,
+        config: Optional[Any] = None,
+        *,
+        validation_context=None
+    ):
         from copy import deepcopy
         from .contracts import approval_lookup_context
+        from ..runtime_config import RuntimeConfig
         approval_lookup_context(validation_context)
         self._validation_context = deepcopy(validation_context)
         self.db_path = db_path or DB_PATH
         self.session_authority = session_authority
+        self.config = config or RuntimeConfig.load()
 
     def _connect(self) -> sqlite3.Connection:
         """Conexão padrão do executor: IMMEDIATE (escreve logo na primeira
@@ -164,6 +173,36 @@ class ExecutorAgent:
                     "reason": f"Gap geometry violation: execution_price {execution_price} outside (stop {stop_loss}, target {target_price})",
                 }
 
+        # NEXUS-005-C1: Fresh reference equity check before financial mutation
+        import math
+        try:
+            from ..data.database import compute_current_equity
+            execution_reference_equity = compute_current_equity(self.db_path)
+            if (
+                execution_reference_equity is None
+                or not isinstance(execution_reference_equity, (int, float))
+                or math.isnan(execution_reference_equity)
+                or math.isinf(execution_reference_equity)
+                or execution_reference_equity <= 0
+            ):
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"Execution concentration backstop: reference equity unavailable or invalid "
+                        f"({execution_reference_equity})"
+                    ),
+                }
+        except PortfolioIntegrityError as e:
+            return {
+                "status": "rejected",
+                "reason": f"Portfolio integrity failure: {e}",
+            }
+        except Exception as e:
+            return {
+                "status": "rejected",
+                "reason": f"Execution concentration backstop: failed to compute reference equity ({e})",
+            }
+
         conn = self._connect()
         try:
             cursor = conn.cursor()
@@ -189,6 +228,32 @@ class ExecutorAgent:
             except Exception as e:
                 conn.rollback()
                 return {"status": "rejected", "reason": f"Portfolio integrity failure: {e}"}
+
+            # NEXUS-005-C1: Transactional concentration backstop
+            # Conservative transactional reference: min(execution_reference_equity, disp_v)
+            transactional_reference = min(execution_reference_equity, disp_v)
+            if transactional_reference <= 0:
+                conn.rollback()
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"Execution concentration backstop: transactional reference capital is "
+                        f"non-positive ({transactional_reference:.2f})"
+                    ),
+                }
+
+            max_pos_fraction = self.config.max_position_fraction
+            hard_position_cap = round(transactional_reference * max_pos_fraction, 4)
+            if allocated > hard_position_cap + MONETARY_EPSILON:
+                conn.rollback()
+                return {
+                    "status": "rejected",
+                    "reason": (
+                        f"Position concentration limit exceeded: allocated R$ {allocated:.2f} > "
+                        f"hard cap R$ {hard_position_cap:.2f} ({max_pos_fraction:.0%} of "
+                        f"ref R$ {transactional_reference:.2f})"
+                    ),
+                }
 
             if allocated > saldo_livre:
                 conn.rollback()
@@ -219,6 +284,18 @@ class ExecutorAgent:
             except Exception as e:
                 conn.rollback()
                 return {"status": "rejected", "reason": f"Resulting portfolio accounting invalid: {e}"}
+
+            # NEXUS-005-C1: Transactional max_positions check inside BEGIN IMMEDIATE (Close TOCTOU)
+            max_positions = self.config.max_positions
+            cursor.execute("SELECT COUNT(DISTINCT ticker) FROM trades WHERE status = 'active'")
+            active_count_row = cursor.fetchone()
+            active_count = active_count_row[0] if active_count_row else 0
+            if active_count >= max_positions:
+                conn.rollback()
+                return {
+                    "status": "rejected",
+                    "reason": f"Max positions limit reached ({active_count}/{max_positions})",
+                }
 
             # Signal idempotency check BEFORE opening position check
             if signal_id:

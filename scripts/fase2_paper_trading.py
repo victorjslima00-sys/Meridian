@@ -79,17 +79,19 @@ def main():
     capital = risk_cfg.get("capital_initial", 300.0) # Simulado
     kelly = risk_cfg.get("kelly_fraction", 0.25)
     max_pos = risk_cfg.get("max_positions", 3)
+    max_pos_fraction = risk_cfg.get("max_position_fraction", 0.10)
     
-    print(f"\n{len(candidates)} candidatos encontrados. Aplicando filtro Kelly e Solicitando Aprovação...")
+    print(f"\n{len(candidates)} candidatos encontrados. Aplicando filtro Kelly/Concentração e Solicitando Aprovação...")
     
     for cand in candidates:
-        # Filtro de risco (Kelly)
+        # Filtro de risco (Kelly + Concentração)
         allocation = calculate_position_size(
             capital_cash=capital,
             open_positions_capital=0.0, # Simulado sem posições abertas
             kelly_fraction=kelly,
             max_positions=max_pos,
-            current_open_count=0
+            current_open_count=0,
+            max_position_fraction=max_pos_fraction,
         )
         qty = int(allocation / cand.entry_price) if allocation > 0 else 0
         if qty <= 0:

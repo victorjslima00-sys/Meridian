@@ -900,12 +900,14 @@ async def _run_one_scan_cycle():
                 )
                 continue
 
-            # Sizing alinhado ao backtest (Fase 1 Commit 2) DENTRO da margem
-            # operável (usabilidade 2e): o capital em posições entra para
-            # formar o total_equity que o Kelly fixo do backtest usa, mas a
-            # base de caixa é o operável — a posição nasce limitada pelo teto
-            # que o usuário definiu, não pelo livre bruto.
-            rm = RiskManager(saldo_livre=saldo_operavel, em_posicoes=em_posicoes)
+            # Sizing alinhado ao backtest (NEXUS-005-C1) DENTRO da margem
+            # operável e com limites rígidos de concentração (max_position_fraction).
+            current_equity = await asyncio.to_thread(compute_current_equity)
+            rm = RiskManager(
+                saldo_livre=saldo_operavel,
+                em_posicoes=em_posicoes,
+                reference_equity=current_equity,
+            )
             decision = rm.evaluate_trade(
                 sig, ticker=ticker, open_tickers=open_tickers
             )
@@ -1352,6 +1354,44 @@ def execute_manual_trade(req: TradeRequest, api_key: str = Depends(verify_api_ke
             detail=(
                 f"Capital operável insuficiente. Necessário: R$ {cost:.2f}, "
                 f"operável: R$ {pf.get('saldo_operavel', 0):.2f}"
+            ),
+        )
+
+    # NEXUS-005-C1: Hard financial limits for manual path (same as autonomous)
+    from .runtime_config import RuntimeConfig
+    from .data.accounting import MONETARY_EPSILON
+    cfg = RuntimeConfig.load()
+
+    from .data.database import get_connection
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(DISTINCT ticker) FROM trades WHERE status = 'active'")
+        active_count = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    if active_count >= cfg.max_positions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Limite de {cfg.max_positions} posições atingido ({active_count}/{cfg.max_positions}).",
+        )
+
+    ref_eq = compute_current_equity()
+    if ref_eq is None or ref_eq <= 0 or math.isnan(ref_eq) or math.isinf(ref_eq):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Reference equity indisponível ou inválido para ordem manual ({ref_eq}).",
+        )
+
+    trans_ref = min(ref_eq, pf.get("saldo_disponivel", pf.get("saldo_livre", 0)))
+    max_cap = round(trans_ref * cfg.max_position_fraction, 4)
+    if cost > max_cap + MONETARY_EPSILON:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Concentração máxima excedida: R$ {cost:.2f} > teto R$ {max_cap:.2f} "
+                f"({cfg.max_position_fraction:.0%} de ref R$ {trans_ref:.2f})"
             ),
         )
 

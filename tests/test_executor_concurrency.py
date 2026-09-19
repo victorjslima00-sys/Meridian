@@ -60,7 +60,7 @@ def temp_db_path():
 
 def _set_portfolio(db_path, saldo_disponivel, em_posicoes):
     conn = _real_connect(db_path)
-    conn.execute('UPDATE portfolio SET saldo_disponivel = ?, em_posicoes = ?, updated_at = ? WHERE id = (SELECT id FROM portfolio ORDER BY id DESC LIMIT 1)', (saldo_disponivel, em_posicoes, datetime.now()))
+    conn.execute('UPDATE portfolio SET patrimonio_total = ?, saldo_disponivel = ?, em_posicoes = ?, updated_at = ? WHERE id = (SELECT id FROM portfolio ORDER BY id DESC LIMIT 1)', (saldo_disponivel, saldo_disponivel, em_posicoes, datetime.now()))
     conn.commit()
     conn.close()
 
@@ -165,7 +165,8 @@ class TestExecuteOrderConcurrency:
                 results[idx] = ExecutorAgent(db_path=temp_db_path).execute_order(intents[idx])
             except Exception as e:
                 results[idx] = e
-        with patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kw: _real_connect(temp_db_path, **kw)):
+        with patch('backend.app.data.feed.get_current_price', return_value=62000.0), \
+             patch('backend.app.agents.executor.sqlite3.connect', side_effect=lambda p, **kw: _real_connect(temp_db_path, **kw)):
             threads = [threading.Thread(target=contextvars.copy_context().run, args=(_worker, i)) for i in range(2)]
             for t in threads:
                 t.start()

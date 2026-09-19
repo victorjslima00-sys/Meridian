@@ -64,6 +64,7 @@ def main():
         capital=risk_cfg.get("capital_initial", 300.0),
         kelly_fraction=risk_cfg.get("kelly_fraction", 0.25),
         max_positions=risk_cfg.get("max_positions", 3),
+        max_position_fraction=risk_cfg.get("max_position_fraction", 0.10),
         max_hold_days=sig_cfg.get("max_hold_days", 15),
         signal_params=signal_params,
         regimes=bt_cfg.get("regimes"),

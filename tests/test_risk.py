@@ -99,8 +99,13 @@ def test_correlation_low_passes():
 # ── Position Sizing ──────────────────────────────────────────────────────────
 
 def test_position_sizing_basic():
-    size = calculate_position_size(1000.0, 0.0, 0.25, 3, 0)
+    # Com max_position_fraction=0.30, Kelly (0.25) é mais restritivo que a concentração
+    size = calculate_position_size(1000.0, 0.0, 0.25, 3, 0, max_position_fraction=0.30)
     assert size == pytest.approx(250.0)
+
+    # Com default max_position_fraction=0.10, concentração (10%) limita a 100.0
+    size_default = calculate_position_size(1000.0, 0.0, 0.25, 3, 0)
+    assert size_default == pytest.approx(100.0)
 
 
 def test_position_sizing_max_positions_reached():
@@ -113,17 +118,16 @@ def test_position_sizing_no_cash():
     assert size == 0.0
 
 
-def test_position_sizing_invalid_kelly_uses_fallback():
-    """kelly_fraction inválido deve usar fallback 0.25 sem lançar exceção."""
-    size_zero = calculate_position_size(1000.0, 0.0, 0.0, 3, 0)
-    size_over = calculate_position_size(1000.0, 0.0, 1.5, 3, 0)
-    # Ambos devem usar 0.25 como fallback
-    assert size_zero == pytest.approx(250.0)
-    assert size_over == pytest.approx(250.0)
+def test_position_sizing_invalid_kelly_fails_closed():
+    """NEXUS-005-C1: kelly_fraction inválido deve falhar closed (raise ValueError), sem fallback 0.25."""
+    with pytest.raises(ValueError):
+        calculate_position_size(1000.0, 0.0, 0.0, 3, 0)
+    with pytest.raises(ValueError):
+        calculate_position_size(1000.0, 0.0, 1.5, 3, 0)
 
 
 def test_position_sizing_capped_by_cash():
     """Quando allocation > capital_cash, deve retornar capital_cash."""
-    # total_equity=500, kelly=0.9 → allocation=450, mas cash=200
-    size = calculate_position_size(200.0, 300.0, 0.90, 3, 0)
+    # total_equity=500, kelly=0.9, max_frac=0.9 → allocation=450, mas cash=200
+    size = calculate_position_size(200.0, 300.0, 0.90, 3, 0, max_position_fraction=0.90)
     assert size == pytest.approx(200.0)

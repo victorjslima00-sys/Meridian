@@ -102,6 +102,7 @@ def run_regime_backtest(
     capital: float,
     kelly_fraction: float = 0.25,
     max_positions: int = 3,
+    max_position_fraction: float = 0.10,
     max_hold_days: int = 15,
     signal_params: Optional[dict] = None,
     ibov_filter: bool = True,          # Filtro macro: só opera quando IBOV > SMA-50
@@ -355,13 +356,36 @@ def run_regime_backtest(
                 low = float(today_row["l"].iloc[0])
                 high = float(today_row["h"].iloc[0])
 
-                capital_invested = sum(p.capital for p in open_positions.values())
+                # NEXUS-005-C1: Compute causal reference equity at simulated entry instant (market open).
+                # Active positions are valued at today's open price (or previous close if no bar today).
+                # Strict anti-lookahead: no future intraday or close prices of current_date are used.
+                mtm_active = 0.0
+                for pos_ticker, pos_obj in open_positions.items():
+                    df_pos = regime_data.get(pos_ticker)
+                    if df_pos is not None:
+                        today_bar = df_pos[df_pos["ts"] == current_date]
+                        if not today_bar.empty:
+                            open_p = float(today_bar["o"].iloc[0])
+                            mtm_active += pos_obj.capital * (open_p / pos_obj.entry_price)
+                        else:
+                            prev_bars = df_pos[df_pos["ts"] < current_date]
+                            if not prev_bars.empty:
+                                prev_c = float(prev_bars["c"].iloc[-1])
+                                mtm_active += pos_obj.capital * (prev_c / pos_obj.entry_price)
+                            else:
+                                mtm_active += pos_obj.capital
+                    else:
+                        mtm_active += pos_obj.capital
+
+                reference_equity = capital_cash + mtm_active
                 pos_size = calculate_position_size(
                     capital_cash=capital_cash,
-                    open_positions_capital=capital_invested,
+                    open_positions_capital=mtm_active,
                     kelly_fraction=kelly_fraction,
                     max_positions=max_positions,
-                    current_open_count=len(open_positions)
+                    current_open_count=len(open_positions),
+                    max_position_fraction=max_position_fraction,
+                    reference_equity=reference_equity,
                 )
 
                 # FILTRO DE LIQUIDEZ (restrição de EXECUÇÃO, não de sinal).
@@ -521,6 +545,7 @@ def run_full_backtest(
     capital: float,
     kelly_fraction: float = 0.25,
     max_positions: int = 3,
+    max_position_fraction: float = 0.10,
     max_hold_days: int = 15,
     signal_params: Optional[dict] = None,
     regimes: Optional[list[dict]] = None,
@@ -541,6 +566,7 @@ def run_full_backtest(
             capital=capital,
             kelly_fraction=kelly_fraction,
             max_positions=max_positions,
+            max_position_fraction=max_position_fraction,
             max_hold_days=max_hold_days,
             signal_params=signal_params,
             ibov_filter=ibov_filter,
