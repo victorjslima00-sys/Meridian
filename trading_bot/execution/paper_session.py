@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.agents.executor import ExecutorAgent
 from backend.app.agents.risk_manager import RiskManager
-from backend.app.data.database import DB_PATH
+from backend.app.data.database import DB_PATH, compute_current_equity, get_portfolio
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +66,8 @@ class PaperSessionReport(BaseModel):
     orders_skipped: int
     orders_rejected: int
     orders_closed: int
-    portfolio_before: Dict[str, float]
-    portfolio_after: Dict[str, float]
+    portfolio_before: Dict[str, Any]
+    portfolio_after: Dict[str, Any]
     reconciliation_ok: bool
     discrepancies: List[str]
     real_broker_calls: Optional[int] = None
@@ -181,45 +181,8 @@ class PaperSessionRunner:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def get_portfolio_state(self) -> Dict[str, float]:
-        conn = self._get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT saldo_disponivel, em_posicoes, margem_operavel, patrimonio_total "
-                "FROM portfolio ORDER BY id DESC LIMIT 1"
-            )
-            row = cursor.fetchone()
-            if not row:
-                return {
-                    "saldo_disponivel": 0.0,
-                    "em_posicoes": 0.0,
-                    "saldo_livre": 0.0,
-                    "margem_operavel": 0.0,
-                    "saldo_operavel": 0.0,
-                    "patrimonio_total": 0.0,
-                }
-            disponivel = float(row[0] or 0.0)
-            em_posicoes = float(row[1] or 0.0)
-            raw_margem = row[2]
-            margem = float(raw_margem) if raw_margem is not None else None
-            patrimonio = float(row[3] or 0.0)
-            saldo_livre = max(0.0, disponivel - em_posicoes)
-            if margem is None:
-                saldo_operavel = saldo_livre
-            else:
-                saldo_operavel = min(saldo_livre, max(0.0, margem - em_posicoes))
-
-            return {
-                "saldo_disponivel": disponivel,
-                "em_posicoes": em_posicoes,
-                "saldo_livre": saldo_livre,
-                "margem_operavel": margem,
-                "saldo_operavel": round(saldo_operavel, 4),
-                "patrimonio_total": patrimonio,
-            }
-        finally:
-            conn.close()
+    def get_portfolio_state(self) -> Dict[str, Any]:
+        return get_portfolio(db_path=self.db_path)
 
     def get_active_tickers(self) -> List[str]:
         conn = self._get_connection()
@@ -348,7 +311,21 @@ class PaperSessionRunner:
             )
 
             # Avaliação pelo RiskManager com saldo operável canônico (NEXUS-004)
-            pf_state = self.get_portfolio_state()
+            # e equity canônico (NEXUS-005-C1 / R2)
+            try:
+                pf_state = self.get_portfolio_state()
+            except Exception as e:
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={
+                        "reason": f"Portfolio state integrity failure (fail-closed): {e}",
+                        "error_type": type(e).__name__,
+                    },
+                    ticker=ticker,
+                )
+                continue
+
             saldo_operavel = pf_state["saldo_operavel"]
             em_pos = pf_state["em_posicoes"]
 
@@ -361,18 +338,73 @@ class PaperSessionRunner:
                 )
                 continue
 
-            ref_equity = pf_state.get("patrimonio_total")
-            if ref_equity is None or ref_equity <= 0:
-                ref_equity = saldo_operavel + em_pos
-
             try:
-                rm = self.risk_manager_cls(
-                    saldo_livre=saldo_operavel,
-                    em_posicoes=em_pos,
-                    reference_equity=ref_equity,
+                current_equity = compute_current_equity(self.db_path)
+            except Exception as e:
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={
+                        "reason": f"Reference equity computation failed (fail-closed): {e}",
+                        "error_type": type(e).__name__,
+                    },
+                    ticker=ticker,
                 )
-            except TypeError:
-                rm = self.risk_manager_cls(saldo_livre=saldo_operavel, em_posicoes=em_pos)
+                continue
+
+            if current_equity is None:
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={
+                        "reason": "Reference equity is unavailable (None)",
+                        "reference_equity": None,
+                    },
+                    ticker=ticker,
+                )
+                continue
+
+            if isinstance(current_equity, bool) or not isinstance(current_equity, (int, float)):
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={
+                        "reason": f"Reference equity is non-numeric: {current_equity!r}",
+                        "reference_equity": str(current_equity),
+                    },
+                    ticker=ticker,
+                )
+                continue
+
+            if not math.isfinite(current_equity):
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={
+                        "reason": f"Reference equity is non-finite: {current_equity}",
+                        "reference_equity": str(current_equity),
+                    },
+                    ticker=ticker,
+                )
+                continue
+
+            if current_equity <= 0:
+                orders_rejected += 1
+                self.journal.append_event(
+                    event_type="ORDER_REJECTED",
+                    payload={
+                        "reason": f"Reference equity must be strictly positive: {current_equity}",
+                        "reference_equity": current_equity,
+                    },
+                    ticker=ticker,
+                )
+                continue
+
+            rm = self.risk_manager_cls(
+                saldo_livre=saldo_operavel,
+                em_posicoes=em_pos,
+                reference_equity=current_equity,
+            )
             decision = rm.evaluate_trade(sig, ticker=ticker, open_tickers=open_tickers)
 
             self.journal.append_event(

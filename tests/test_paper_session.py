@@ -59,7 +59,11 @@ def mock_feed_quotes():
             return make_test_evidenced_quote("VALE3", 60.0)
         return make_test_evidenced_quote(t_clean, 50.0)
 
-    with patch("backend.app.data.feed.get_evidenced_quote", side_effect=_quote_side_effect):
+    def _price_side_effect(ticker, *args, **kwargs):
+        return _quote_side_effect(ticker).price
+
+    with patch("backend.app.data.feed.get_evidenced_quote", side_effect=_quote_side_effect), \
+         patch("backend.app.data.feed.get_current_price", side_effect=_price_side_effect):
         yield
 
 def test_paper_session_executes_signal_and_reconciles(tmp_path, mock_circuit_breaker):
