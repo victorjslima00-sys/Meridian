@@ -11,7 +11,6 @@ toda a lógica de fechamento no loop principal.
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Mapping, Optional
@@ -28,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Regimes obrigatórios (plano v4)
 REGIMES = [
     {"name": "crise_volatilidade", "start": "2020-03-01", "end": "2020-09-30"},
-    {"name": "alta_juros",         "start": "2021-06-01", "end": "2022-12-31"},
-    {"name": "recuperacao_lateral","start": "2023-01-01", "end": "2024-06-30"},
+    {"name": "alta_juros", "start": "2021-06-01", "end": "2022-12-31"},
+    {"name": "recuperacao_lateral", "start": "2023-01-01", "end": "2024-06-30"},
 ]
 
 
@@ -239,11 +238,12 @@ def run_regime_backtest(
             pos.days_open += 1
 
         # ------------------------------------------------------------------
-        # 2. Fechar posições (stop / target / timeout)
+        # 2A. DAY t OPEN: Fechar posições cuja abertura viola stop/alvo (gap-stop / gap-target)
+        # Processa estritamente apenas saídas conhecidas no momento do OPEN.
         # ------------------------------------------------------------------
-        to_close: list[tuple[str, float, str]] = []
+        open_gap_exits: list[tuple[str, float, str]] = []
 
-        for ticker, pos in open_positions.items():
+        for ticker, pos in list(open_positions.items()):
             df_t = regime_data.get(ticker)
             if df_t is None:
                 continue
@@ -253,48 +253,15 @@ def run_regime_backtest(
                 continue
 
             open_price = float(row["o"].iloc[0])
-            low  = float(row["l"].iloc[0])
-            high = float(row["h"].iloc[0])
-            close = float(row["c"].iloc[0])
-
-            exit_price = None
-            exit_reason = None
 
             # 1. Se a abertura já violar o Stop, liquidado no preço de abertura (gap down)
             if open_price <= pos.stop:
-                exit_price = open_price
-                exit_reason = "stop_gap"
+                open_gap_exits.append((ticker, open_price, "stop_gap"))
             # 2. Se a abertura já violar o Alvo, realiza lucro na abertura (gap up)
             elif open_price >= pos.target:
-                exit_price = open_price
-                exit_reason = "target_gap"
-            # 3. Fluxo normal intra-day
-            elif low <= pos.stop:
-                exit_price = pos.stop
-                exit_reason = "stop"
-            elif high >= pos.target:
-                exit_price = pos.target
-                exit_reason = "target"
-            elif pos.days_open >= pos.max_hold_days:
-                exit_price = close
-                exit_reason = "timeout"
-            # Saída antecipada: "no fechamento do dia N, sai se não avançou X%".
-            # Vem DEPOIS de stop/alvo de propósito — aqueles são eventos
-            # intradiários já consumados; esta é decisão de fechamento. Usa só
-            # o fechamento do próprio dia, mesma base de informação do timeout,
-            # portanto sem look-ahead.
-            elif (
-                early_exit_day > 0
-                and pos.days_open >= early_exit_day
-                and (close / pos.entry_price - 1) < early_exit_min_gain
-            ):
-                exit_price = close
-                exit_reason = "early_exit"
+                open_gap_exits.append((ticker, open_price, "target_gap"))
 
-            if exit_price is not None:
-                to_close.append((ticker, exit_price, exit_reason))
-
-        for ticker, exit_price, exit_reason in to_close:
+        for ticker, exit_price, exit_reason in open_gap_exits:
             pos = open_positions.pop(ticker)
             pnl_pct = (
                 (exit_price / pos.entry_price - 1)
@@ -302,7 +269,7 @@ def run_regime_backtest(
                 - slippage_do_trade(ticker, pos.entry_date, pos.capital)
             )
             pnl_abs = pos.capital * pnl_pct
-            capital_cash += pos.capital + pnl_abs   # ← devolve capital (bug v1 corrigido)
+            capital_cash += pos.capital + pnl_abs
 
             trades.append(Trade(
                 ticker=ticker,
@@ -320,10 +287,15 @@ def run_regime_backtest(
             ))
 
         # ------------------------------------------------------------------
-        # 3. Abrir novas posições (se há slots e IBOV em uptrend)
+        # 2B & 2C. DAY t OPEN: Avaliar, dimensionar e abrir novas posições
+        # Slots e caixa disponíveis no OPEN refletem estritamente a abertura.
+        # Nenhuma saída intradiária futura (high/low/close de hoje) pode financiar
+        # ou liberar slots retroativamente para a abertura de hoje.
         # ------------------------------------------------------------------
         slots = max_positions - len(open_positions)
         market_ok = ibov_in_uptrend(ibov_df, current_date) if ibov_df is not None else True
+
+        opened_today: list[tuple[Candidate, _OpenPos, float, float, float, float, float]] = []
 
         if slots > 0 and capital_cash > 10 and market_ok:
             candidates: list[Candidate] = []
@@ -356,7 +328,7 @@ def run_regime_backtest(
                 low = float(today_row["l"].iloc[0])
                 high = float(today_row["h"].iloc[0])
 
-                # NEXUS-005-C1: Compute causal reference equity at simulated entry instant (market open).
+                # NEXUS-005-C1 / R1: Compute causal reference equity at simulated entry instant (market open).
                 # Active positions are valued at today's open price (or previous close if no bar today).
                 # Strict anti-lookahead: no future intraday or close prices of current_date are used.
                 mtm_active = 0.0
@@ -389,18 +361,6 @@ def run_regime_backtest(
                 )
 
                 # FILTRO DE LIQUIDEZ (restrição de EXECUÇÃO, não de sinal).
-                # Uma ordem que representa fração grande do volume diário não é
-                # executável ao preço do backtest — a premissa "compro na
-                # abertura" quebra muito antes disso. Recusar a entrada modela
-                # a realidade; não é escolher trades vencedores.
-                #
-                # É filtro de ENTRADA e depende do TAMANHO DA ORDEM: o mesmo
-                # papel volta a ser elegível com capital menor. Um filtro
-                # retroativo de universo ("nunca opere small cap") seria
-                # curve-fitting travestido.
-                #
-                # Fail-safe: sem ADTV para o ticker-data, NÃO bloqueia — vetar
-                # por ausência de dado apagaria trades por motivo errado.
                 if max_adtv_participation > 0 and adtv_brl:
                     _adtv = (adtv_brl.get(c.ticker) or {}).get(current_date)
                     if _adtv and _adtv > 0 and pos_size / _adtv > max_adtv_participation:
@@ -417,66 +377,139 @@ def run_regime_backtest(
                 # Aborta se abriu abaixo do stop planejado
                 if open_price <= c.stop:
                     logger.info("[%s] Entrada abortada por gap: open=%.2f <= stop original=%.2f",
-                                 c.ticker, open_price, c.stop)
+                                c.ticker, open_price, c.stop)
                     continue
 
                 # Recalcula stop/target proporcionalmente ao fill real (open)
                 stop_dist = (c.entry_price - c.stop) / c.entry_price
                 target_dist = (c.target - c.entry_price) / c.entry_price
-                
+
                 entry_price_real = open_price
                 stop_real = round(entry_price_real * (1 - stop_dist), 2)
                 target_real = round(entry_price_real * (1 + target_dist), 2)
 
                 capital_cash -= pos_size
-                
-                # Verifica se o novo stop/target foi atingido no PRÓPRIO DIA de entrada
-                exit_price = None
-                exit_reason = None
-                
-                if low <= stop_real:
-                    exit_price = stop_real
-                    exit_reason = "stop"
-                elif high >= target_real:
-                    exit_price = target_real
-                    exit_reason = "target"
-                    
-                if exit_price is not None:
-                    # Trade fechado no mesmo dia
-                    pnl_pct = (
-                        (exit_price / entry_price_real - 1)
-                        - custo_do_trade(pos_size)
-                        - slippage_do_trade(c.ticker, current_date, pos_size)
-                    )
-                    pnl_abs = pos_size * pnl_pct
-                    capital_cash += pos_size + pnl_abs
-                    
-                    trades.append(Trade(
-                        ticker=c.ticker,
-                        entry_date=current_date,
-                        exit_date=current_date,
-                        entry_price=entry_price_real,
-                        exit_price=exit_price,
-                        stop=stop_real,
-                        target=target_real,
-                        exit_reason=exit_reason,
-                        pnl_pct=round(pnl_pct, 6),
-                        pnl_abs=round(pnl_abs, 2),
-                        capital_allocated=pos_size,
-                        signal_score=c.score,
-                    ))
-                else:
-                    # Posição sobrevive ao primeiro dia
-                    open_positions[c.ticker] = _OpenPos(
-                        ticker=c.ticker,
-                        entry_date=current_date,
-                        entry_price=entry_price_real,
-                        stop=stop_real,
-                        target=target_real,
-                        capital=pos_size,
-                        score=c.score,
-                        max_hold_days=max_hold_days,
-                    )
+
+                new_pos = _OpenPos(
+                    ticker=c.ticker,
+                    entry_date=current_date,
+                    entry_price=entry_price_real,
+                    stop=stop_real,
+                    target=target_real,
+                    capital=pos_size,
+                    score=c.score,
+                    max_hold_days=max_hold_days,
+                )
+                open_positions[c.ticker] = new_pos
+                opened_today.append((c, new_pos, entry_price_real, stop_real, target_real, low, high))
+
+        # ------------------------------------------------------------------
+        # 2D. AFTER OPEN DECISION: Processar saídas intradiárias (low / high / close)
+        # ------------------------------------------------------------------
+        # 1. Posições que já estavam abertas antes de hoje (excluindo as abertas hoje)
+        opened_today_tickers = {c.ticker for c, _, _, _, _, _, _ in opened_today}
+        to_close_intraday: list[tuple[str, float, str]] = []
+
+        for ticker, pos in list(open_positions.items()):
+            if ticker in opened_today_tickers:
+                continue
+
+            df_t = regime_data.get(ticker)
+            if df_t is None:
+                continue
+
+            row = df_t[df_t["ts"] == current_date]
+            if row.empty:
+                continue
+
+            low = float(row["l"].iloc[0])
+            high = float(row["h"].iloc[0])
+            close = float(row["c"].iloc[0])
+
+            exit_price = None
+            exit_reason = None
+
+            if low <= pos.stop:
+                exit_price = pos.stop
+                exit_reason = "stop"
+            elif high >= pos.target:
+                exit_price = pos.target
+                exit_reason = "target"
+            elif pos.days_open >= pos.max_hold_days:
+                exit_price = close
+                exit_reason = "timeout"
+            elif (
+                early_exit_day > 0
+                and pos.days_open >= early_exit_day
+                and (close / pos.entry_price - 1) < early_exit_min_gain
+            ):
+                exit_price = close
+                exit_reason = "early_exit"
+
+            if exit_price is not None:
+                to_close_intraday.append((ticker, exit_price, exit_reason))
+
+        for ticker, exit_price, exit_reason in to_close_intraday:
+            pos = open_positions.pop(ticker)
+            pnl_pct = (
+                (exit_price / pos.entry_price - 1)
+                - custo_do_trade(pos.capital)
+                - slippage_do_trade(ticker, pos.entry_date, pos.capital)
+            )
+            pnl_abs = pos.capital * pnl_pct
+            capital_cash += pos.capital + pnl_abs
+
+            trades.append(Trade(
+                ticker=ticker,
+                entry_date=pos.entry_date,
+                exit_date=current_date,
+                entry_price=pos.entry_price,
+                exit_price=exit_price,
+                stop=pos.stop,
+                target=pos.target,
+                exit_reason=exit_reason,
+                pnl_pct=round(pnl_pct, 6),
+                pnl_abs=round(pnl_abs, 2),
+                capital_allocated=pos.capital,
+                signal_score=pos.score,
+            ))
+
+        # 2. Posições recém-abertas no mesmo dia (saída intradiária no próprio dia de entrada)
+        for c, pos, entry_price_real, stop_real, target_real, low, high in opened_today:
+            exit_price = None
+            exit_reason = None
+
+            if low <= stop_real:
+                exit_price = stop_real
+                exit_reason = "stop"
+            elif high >= target_real:
+                exit_price = target_real
+                exit_reason = "target"
+
+            if exit_price is not None:
+                open_positions.pop(c.ticker, None)
+                pnl_pct = (
+                    (exit_price / entry_price_real - 1)
+                    - custo_do_trade(pos.capital)
+                    - slippage_do_trade(c.ticker, current_date, pos.capital)
+                )
+                pnl_abs = pos.capital * pnl_pct
+                capital_cash += pos.capital + pnl_abs
+
+                trades.append(Trade(
+                    ticker=c.ticker,
+                    entry_date=current_date,
+                    exit_date=current_date,
+                    entry_price=entry_price_real,
+                    exit_price=exit_price,
+                    stop=stop_real,
+                    target=target_real,
+                    exit_reason=exit_reason,
+                    pnl_pct=round(pnl_pct, 6),
+                    pnl_abs=round(pnl_abs, 2),
+                    capital_allocated=pos.capital,
+                    signal_score=c.score,
+                ))
 
         # ------------------------------------------------------------------
         # 4. Equity curve = cash + MTM das posições abertas

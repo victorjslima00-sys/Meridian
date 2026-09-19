@@ -264,7 +264,7 @@ async def test_a_real_market_analyst_autonomous_path_with_valid_approval(
     assert sig.dataset_sha256 == real_digest
 
     # 2. RiskManager evaluation
-    rm = RiskManager(saldo_livre=1000.0, em_posicoes=0.0)
+    rm = RiskManager(saldo_livre=1000.0, em_posicoes=0.0, reference_equity=1000.0)
     decision = rm.evaluate_trade(sig, ticker=ticker)
     assert isinstance(decision, RiskDecision)
     assert decision.approved is True

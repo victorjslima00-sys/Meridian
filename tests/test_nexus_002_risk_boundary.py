@@ -60,7 +60,7 @@ def test_risk_manager_rejects_hold_signal():
 
 
 def test_risk_manager_approves_valid_signal_with_deterministic_decision_id(mock_circuit_breaker):
-    rm = RiskManager(saldo_livre=1000.0)
+    rm = RiskManager(saldo_livre=1000.0, reference_equity=1000.0)
     sig = TypedSignal.model_validate({
         "ticker": "PETR4",
         "side": "BUY",

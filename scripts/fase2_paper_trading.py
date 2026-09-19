@@ -77,6 +77,8 @@ def main():
         return
 
     capital = risk_cfg.get("capital_initial", 300.0) # Simulado
+    open_positions_capital = 0.0 # Simulado sem posições abertas
+    simulated_reference_equity = float(capital + open_positions_capital)
     kelly = risk_cfg.get("kelly_fraction", 0.25)
     max_pos = risk_cfg.get("max_positions", 3)
     max_pos_fraction = risk_cfg.get("max_position_fraction", 0.10)
@@ -87,11 +89,12 @@ def main():
         # Filtro de risco (Kelly + Concentração)
         allocation = calculate_position_size(
             capital_cash=capital,
-            open_positions_capital=0.0, # Simulado sem posições abertas
+            open_positions_capital=open_positions_capital,
             kelly_fraction=kelly,
             max_positions=max_pos,
             current_open_count=0,
             max_position_fraction=max_pos_fraction,
+            reference_equity=simulated_reference_equity,
         )
         qty = int(allocation / cand.entry_price) if allocation > 0 else 0
         if qty <= 0:

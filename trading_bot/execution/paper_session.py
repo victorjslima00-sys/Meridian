@@ -259,7 +259,7 @@ class PaperSessionRunner:
         executor = self.executor_cls(db_path=self.db_path)
         if hasattr(executor, "session_authority") and self.session_authority is not None:
             executor.session_authority = self.session_authority
-        
+
         from backend.app.agents.contracts import ApprovedExecutionIntent, TypedSignal
         from backend.app.markets.b3_session import get_session_authority
 
@@ -361,7 +361,18 @@ class PaperSessionRunner:
                 )
                 continue
 
-            rm = self.risk_manager_cls(saldo_livre=saldo_operavel, em_posicoes=em_pos)
+            ref_equity = pf_state.get("patrimonio_total")
+            if ref_equity is None or ref_equity <= 0:
+                ref_equity = saldo_operavel + em_pos
+
+            try:
+                rm = self.risk_manager_cls(
+                    saldo_livre=saldo_operavel,
+                    em_posicoes=em_pos,
+                    reference_equity=ref_equity,
+                )
+            except TypeError:
+                rm = self.risk_manager_cls(saldo_livre=saldo_operavel, em_posicoes=em_pos)
             decision = rm.evaluate_trade(sig, ticker=ticker, open_tickers=open_tickers)
 
             self.journal.append_event(

@@ -7,12 +7,10 @@ All tests execute against isolated temporary SQLite databases.
 """
 
 import datetime
-import math
 import os
 import sqlite3
 import tempfile
 import threading
-from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -368,6 +366,7 @@ def test_11_manual_concentration_bypass_rejected(temp_db, monkeypatch):
 
     api_key = "test-secret-key-16-chars-min"
     monkeypatch.setenv("API_KEY", api_key)
+
     async def _mock_gate():
         return True, []
     monkeypatch.setattr("backend.app.main._avaliar_portao_de_entradas", _mock_gate)
@@ -427,6 +426,7 @@ def test_13_max_positions_reached_manual_rejected(temp_db, monkeypatch):
 
     api_key = "test-secret-key-16-chars-min"
     monkeypatch.setenv("API_KEY", api_key)
+
     async def _mock_gate():
         return True, []
     monkeypatch.setattr("backend.app.main._avaliar_portao_de_entradas", _mock_gate)
@@ -765,3 +765,355 @@ def test_23_backtest_causal_equity_at_open_no_lookahead():
     )
     # 10% of 1210 = 121.0
     assert sized == 121.0
+
+
+# ===========================================================================
+# 24. NEXUS-005-C1-R1: Reference Equity Required (Omission Rejected)
+# ===========================================================================
+def test_24_reference_equity_required_omission_impossible():
+    """Verify reference_equity cannot be omitted; TypeError is raised."""
+    with pytest.raises(TypeError, match="missing.*required keyword-only argument"):
+        calculate_position_size(  # type: ignore[call-arg]
+            capital_cash=1000.0,
+            open_positions_capital=0.0,
+            kelly_fraction=0.25,
+            max_positions=3,
+            current_open_count=0,
+            max_position_fraction=0.10,
+        )
+
+    with pytest.raises(ValueError, match="Reference equity is unavailable"):
+        calculate_position_size(
+            capital_cash=1000.0,
+            reference_equity=None,
+        )
+
+
+# ===========================================================================
+# 25. NEXUS-005-C1-R1: Strict Boolean Domain Rejection Matrix
+# ===========================================================================
+def test_25_bool_rejection_matrix():
+    """Verify True and False are strictly rejected across all numeric parameters."""
+    valid_kwargs = {
+        "capital_cash": 1000.0,
+        "open_positions_capital": 0.0,
+        "kelly_fraction": 0.25,
+        "max_positions": 3,
+        "current_open_count": 0,
+        "max_position_fraction": 0.10,
+        "reference_equity": 1000.0,
+    }
+
+    # reference_equity = True / False
+    for b in [True, False]:
+        with pytest.raises(ValueError, match="Reference equity cannot be a boolean"):
+            validate_reference_equity(b)
+        kw = dict(valid_kwargs, reference_equity=b)
+        with pytest.raises(ValueError, match="Reference equity cannot be a boolean"):
+            calculate_position_size(**kw)
+
+    # capital_cash = True / False
+    for b in [True, False]:
+        kw = dict(valid_kwargs, capital_cash=b)
+        with pytest.raises(ValueError, match="capital_cash.*cannot be a boolean"):
+            calculate_position_size(**kw)
+
+    # kelly_fraction = True / False
+    for b in [True, False]:
+        kw = dict(valid_kwargs, kelly_fraction=b)
+        with pytest.raises(ValueError, match="kelly_fraction cannot be a boolean"):
+            calculate_position_size(**kw)
+
+    # max_position_fraction = True / False
+    for b in [True, False]:
+        kw = dict(valid_kwargs, max_position_fraction=b)
+        with pytest.raises(ValueError, match="max_position_fraction cannot be a boolean"):
+            calculate_position_size(**kw)
+
+    # max_positions = True / False
+    for b in [True, False]:
+        kw = dict(valid_kwargs, max_positions=b)
+        with pytest.raises(ValueError, match="max_positions cannot be a boolean"):
+            calculate_position_size(**kw)
+
+    # current_open_count = True / False
+    for b in [True, False]:
+        kw = dict(valid_kwargs, current_open_count=b)
+        with pytest.raises(ValueError, match="current_open_count cannot be a boolean"):
+            calculate_position_size(**kw)
+
+    # open_positions_capital = True / False
+    for b in [True, False]:
+        kw = dict(valid_kwargs, open_positions_capital=b)
+        with pytest.raises(ValueError, match="open_positions_capital cannot be a boolean"):
+            calculate_position_size(**kw)
+
+
+# ===========================================================================
+# 26. NEXUS-005-C1-R1: numpy.bool_ Rejection
+# ===========================================================================
+def test_26_numpy_bool_rejection():
+    """Verify numpy.bool_ is strictly rejected when numpy is available."""
+    try:
+        import numpy as np
+    except ImportError:
+        pytest.skip("numpy not installed")
+
+    valid_kwargs = {
+        "capital_cash": 1000.0,
+        "open_positions_capital": 0.0,
+        "kelly_fraction": 0.25,
+        "max_positions": 3,
+        "current_open_count": 0,
+        "max_position_fraction": 0.10,
+        "reference_equity": 1000.0,
+    }
+
+    for b in [np.bool_(True), np.bool_(False)]:
+        with pytest.raises(ValueError, match="Reference equity cannot be a boolean"):
+            validate_reference_equity(b)
+        with pytest.raises(ValueError, match="Reference equity cannot be a boolean"):
+            calculate_position_size(**dict(valid_kwargs, reference_equity=b))
+        with pytest.raises(ValueError, match="capital_cash.*cannot be a boolean"):
+            calculate_position_size(**dict(valid_kwargs, capital_cash=b))
+        with pytest.raises(ValueError, match="kelly_fraction cannot be a boolean"):
+            calculate_position_size(**dict(valid_kwargs, kelly_fraction=b))
+        with pytest.raises(ValueError, match="max_position_fraction cannot be a boolean"):
+            calculate_position_size(**dict(valid_kwargs, max_position_fraction=b))
+        with pytest.raises(ValueError, match="max_positions cannot be a boolean"):
+            calculate_position_size(**dict(valid_kwargs, max_positions=b))
+        with pytest.raises(ValueError, match="current_open_count cannot be a boolean"):
+            calculate_position_size(**dict(valid_kwargs, current_open_count=b))
+
+
+# ===========================================================================
+# 27. NEXUS-005-C1-R1: Production-Path Anti-Lookahead Event-Time Ordering
+# ===========================================================================
+def test_27_production_path_backtest_event_order_regression(monkeypatch):
+    """
+    Directly exercises run_regime_backtest() proving that an existing position
+    hitting target later intraday on day t CANNOT free its slot for a day t
+    market-open entry.
+    """
+    import pandas as pd
+    from datetime import date
+    from trading_bot.backtest.engine import run_regime_backtest
+    from trading_bot.signals.engine import Candidate
+
+    d_start = date(2022, 1, 1)
+    rows_a, rows_b = [], []
+    cur = d_start
+    for _ in range(200):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    regime_start = cur
+    for _ in range(30):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    t_minus_1 = cur
+    cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+    t_day = cur
+
+    # Day t-1: POS_A opens
+    rows_a.append({"ts": t_minus_1, "o": 100.0, "h": 102.0, "l": 98.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+    rows_b.append({"ts": t_minus_1, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    # Day t: POS_A open=100.0 does NOT trigger stop (90.0) or target (110.0) gap exit.
+    # Later intraday, high=115.0 hits target (110.0).
+    # CAND_B has an active signal generated at t-1 ready for day t open.
+    rows_a.append({"ts": t_day, "o": 100.0, "h": 115.0, "l": 99.0, "c": 105.0, "v": 10000.0, "adj_close": 105.0})
+    rows_b.append({"ts": t_day, "o": 50.0, "h": 52.0, "l": 48.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    data = {"POS_A": pd.DataFrame(rows_a), "CAND_B": pd.DataFrame(rows_b)}
+
+    def mock_signal(df, ticker, **kwargs):
+        last_ts = df["ts"].iloc[-1]
+        if ticker == "POS_A" and last_ts == (pd.Timestamp(t_minus_1) - pd.Timedelta(days=1)).date():
+            return Candidate("POS_A", score=0.9, entry_price=100.0, stop=90.0, target=110.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        if ticker == "CAND_B" and last_ts == t_minus_1:
+            return Candidate("CAND_B", score=0.95, entry_price=50.0, stop=45.0, target=55.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        return None
+
+    monkeypatch.setattr("trading_bot.backtest.engine.compute_signal", mock_signal)
+    monkeypatch.setattr("trading_bot.backtest.engine.ibov_in_uptrend", lambda df, ts: True)
+
+    res = run_regime_backtest(
+        data=data,
+        regime_name="r1_event_order",
+        start=regime_start,
+        end=t_day,
+        capital=1000.0,
+        max_positions=1,
+        ibov_filter=False,
+    )
+
+    # POS_A exited with target
+    pos_a_trades = [t for t in res.trades if t.ticker == "POS_A"]
+    assert len(pos_a_trades) == 1
+    assert pos_a_trades[0].exit_reason == "target"
+    assert pos_a_trades[0].exit_date == t_day
+
+    # CAND_B MUST NOT have entered at day t open because POS_A was still occupying the only slot!
+    cand_b_trades = [t for t in res.trades if t.ticker == "CAND_B"]
+    assert len(cand_b_trades) == 0, f"CAND_B illegally entered at day t open via intraday exit lookahead: {cand_b_trades}"
+
+
+# ===========================================================================
+# 28. NEXUS-005-C1-R1: Intraday Exit Cannot Increase Same-Day Open Cash
+# ===========================================================================
+def test_28_intraday_exit_cannot_increase_same_day_open_cash(monkeypatch):
+    """
+    Verify that cash returned by an intraday exit on day t cannot be used
+    to finance a day t open entry.
+    """
+    import pandas as pd
+    from datetime import date
+    from trading_bot.backtest.engine import run_regime_backtest
+    from trading_bot.signals.engine import Candidate
+
+    d_start = date(2022, 1, 1)
+    rows_a, rows_b = [], []
+    cur = d_start
+    for _ in range(200):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    regime_start = cur
+    for _ in range(30):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    t_minus_1 = cur
+    cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+    t_day = cur
+
+    rows_a.append({"ts": t_minus_1, "o": 100.0, "h": 102.0, "l": 98.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+    rows_b.append({"ts": t_minus_1, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    rows_a.append({"ts": t_day, "o": 100.0, "h": 115.0, "l": 99.0, "c": 105.0, "v": 10000.0, "adj_close": 105.0})
+    rows_b.append({"ts": t_day, "o": 50.0, "h": 52.0, "l": 48.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    data = {"POS_A": pd.DataFrame(rows_a), "CAND_B": pd.DataFrame(rows_b)}
+
+    def mock_signal(df, ticker, **kwargs):
+        last_ts = df["ts"].iloc[-1]
+        if ticker == "POS_A" and last_ts == (pd.Timestamp(t_minus_1) - pd.Timedelta(days=1)).date():
+            return Candidate("POS_A", score=0.9, entry_price=100.0, stop=90.0, target=110.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        if ticker == "CAND_B" and last_ts == t_minus_1:
+            return Candidate("CAND_B", score=0.95, entry_price=50.0, stop=45.0, target=55.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        return None
+
+    monkeypatch.setattr("trading_bot.backtest.engine.compute_signal", mock_signal)
+    monkeypatch.setattr("trading_bot.backtest.engine.ibov_in_uptrend", lambda df, ts: True)
+
+    res = run_regime_backtest(
+        data=data,
+        regime_name="r1_cash_order",
+        start=regime_start,
+        end=t_day,
+        capital=100.0,
+        max_positions=5,
+        max_position_fraction=1.0,
+        kelly_fraction=1.0,
+        ibov_filter=False,
+    )
+
+    cand_b_trades = [t for t in res.trades if t.ticker == "CAND_B"]
+    assert len(cand_b_trades) == 0, f"CAND_B illegally financed by same-day intraday exit: {cand_b_trades}"
+
+
+# ===========================================================================
+# 29. NEXUS-005-C1-R1: Gap-at-Open Exit Frees Slot and Cash Causal Policy
+# ===========================================================================
+def test_29_gap_at_open_frees_slot_and_cash_causal_policy(monkeypatch):
+    """
+    Verify that an open-price gap exit (gap up >= target or gap down <= stop)
+    known at market open DOES causally free slot and cash before open entry decision.
+    """
+    import pandas as pd
+    from datetime import date
+    from trading_bot.backtest.engine import run_regime_backtest
+    from trading_bot.signals.engine import Candidate
+
+    d_start = date(2022, 1, 1)
+    rows_a, rows_b = [], []
+    cur = d_start
+    for _ in range(200):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    regime_start = cur
+    for _ in range(30):
+        rows_a.append({"ts": cur, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+        rows_b.append({"ts": cur, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+        cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+
+    t_minus_1 = cur
+    cur = (pd.Timestamp(cur) + pd.Timedelta(days=1)).date()
+    t_day = cur
+
+    rows_a.append({"ts": t_minus_1, "o": 100.0, "h": 102.0, "l": 98.0, "c": 100.0, "v": 10000.0, "adj_close": 100.0})
+    rows_b.append({"ts": t_minus_1, "o": 50.0, "h": 51.0, "l": 49.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    # Day t: POS_A GAPS UP at open (open=112.0 >= target 110.0) -> target_gap exit AT OPEN
+    rows_a.append({"ts": t_day, "o": 112.0, "h": 115.0, "l": 110.0, "c": 114.0, "v": 10000.0, "adj_close": 114.0})
+    rows_b.append({"ts": t_day, "o": 50.0, "h": 52.0, "l": 48.0, "c": 50.0, "v": 10000.0, "adj_close": 50.0})
+
+    data = {"POS_A": pd.DataFrame(rows_a), "CAND_B": pd.DataFrame(rows_b)}
+
+    def mock_signal(df, ticker, **kwargs):
+        last_ts = df["ts"].iloc[-1]
+        if ticker == "POS_A" and last_ts == (pd.Timestamp(t_minus_1) - pd.Timedelta(days=1)).date():
+            return Candidate("POS_A", score=0.9, entry_price=100.0, stop=90.0, target=110.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        if ticker == "CAND_B" and last_ts == t_minus_1:
+            return Candidate("CAND_B", score=0.95, entry_price=50.0, stop=45.0, target=55.0, signal_ts=last_ts, rsi=55.0, volume_ratio=2.0, near_support=False, signal_details={})
+        return None
+
+    monkeypatch.setattr("trading_bot.backtest.engine.compute_signal", mock_signal)
+    monkeypatch.setattr("trading_bot.backtest.engine.ibov_in_uptrend", lambda df, ts: True)
+
+    res = run_regime_backtest(
+        data=data,
+        regime_name="r1_gap_at_open",
+        start=regime_start,
+        end=t_day,
+        capital=1000.0,
+        max_positions=1,
+        ibov_filter=False,
+    )
+
+    pos_a_trades = [t for t in res.trades if t.ticker == "POS_A"]
+    assert len(pos_a_trades) == 1
+    assert pos_a_trades[0].exit_reason == "target_gap"
+
+    cand_b_trades = [t for t in res.trades if t.ticker == "CAND_B"]
+    assert len(cand_b_trades) == 1
+    assert cand_b_trades[0].entry_date == t_day
+
+
+# ===========================================================================
+# 30. NEXUS-005-C1-R1: Fase 2 Paper Sizing Explicit Reference Equity Parity
+# ===========================================================================
+def test_30_fase2_paper_sizing_explicit_reference_equity():
+    """Verify fase2 paper sizing explicitly computes and passes reference equity."""
+    capital = 300.0
+    open_positions_capital = 0.0
+    simulated_reference_equity = float(capital + open_positions_capital)
+
+    allocation = calculate_position_size(
+        capital_cash=capital,
+        open_positions_capital=open_positions_capital,
+        kelly_fraction=0.25,
+        max_positions=3,
+        current_open_count=0,
+        max_position_fraction=0.10,
+        reference_equity=simulated_reference_equity,
+    )
+    assert allocation == 30.0

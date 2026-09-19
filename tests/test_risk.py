@@ -100,34 +100,34 @@ def test_correlation_low_passes():
 
 def test_position_sizing_basic():
     # Com max_position_fraction=0.30, Kelly (0.25) é mais restritivo que a concentração
-    size = calculate_position_size(1000.0, 0.0, 0.25, 3, 0, max_position_fraction=0.30)
+    size = calculate_position_size(1000.0, 0.0, 0.25, 3, 0, max_position_fraction=0.30, reference_equity=1000.0)
     assert size == pytest.approx(250.0)
 
     # Com default max_position_fraction=0.10, concentração (10%) limita a 100.0
-    size_default = calculate_position_size(1000.0, 0.0, 0.25, 3, 0)
+    size_default = calculate_position_size(1000.0, 0.0, 0.25, 3, 0, reference_equity=1000.0)
     assert size_default == pytest.approx(100.0)
 
 
 def test_position_sizing_max_positions_reached():
-    size = calculate_position_size(1000.0, 2000.0, 0.25, 3, 3)
+    size = calculate_position_size(1000.0, 2000.0, 0.25, 3, 3, reference_equity=3000.0)
     assert size == 0.0
 
 
 def test_position_sizing_no_cash():
-    size = calculate_position_size(0.0, 2000.0, 0.25, 3, 1)
+    size = calculate_position_size(0.0, 2000.0, 0.25, 3, 1, reference_equity=2000.0)
     assert size == 0.0
 
 
 def test_position_sizing_invalid_kelly_fails_closed():
     """NEXUS-005-C1: kelly_fraction inválido deve falhar closed (raise ValueError), sem fallback 0.25."""
     with pytest.raises(ValueError):
-        calculate_position_size(1000.0, 0.0, 0.0, 3, 0)
+        calculate_position_size(1000.0, 0.0, 0.0, 3, 0, reference_equity=1000.0)
     with pytest.raises(ValueError):
-        calculate_position_size(1000.0, 0.0, 1.5, 3, 0)
+        calculate_position_size(1000.0, 0.0, 1.5, 3, 0, reference_equity=1000.0)
 
 
 def test_position_sizing_capped_by_cash():
     """Quando allocation > capital_cash, deve retornar capital_cash."""
     # total_equity=500, kelly=0.9, max_frac=0.9 → allocation=450, mas cash=200
-    size = calculate_position_size(200.0, 300.0, 0.90, 3, 0, max_position_fraction=0.90)
+    size = calculate_position_size(200.0, 300.0, 0.90, 3, 0, max_position_fraction=0.90, reference_equity=500.0)
     assert size == pytest.approx(200.0)

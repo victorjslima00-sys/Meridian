@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Any, List
 
 # Grupos de ativos altamente correlacionados.
 # Dentro de um grupo, apenas 1 posição aberta é permitida de cada vez.
@@ -7,16 +7,13 @@ CORRELATED_GROUPS: List[List[str]] = [
 ]
 
 
-from trading_bot.risk.position_sizing import _UNSET
-
-
 class RiskManager:
     def __init__(
         self,
         saldo_livre: float,
         config=None,
         em_posicoes: float = 0.0,
-        reference_equity: Any = _UNSET,
+        reference_equity: Any = None,
         *,
         validation_context=None
     ):
@@ -161,7 +158,6 @@ class RiskManager:
         current_price = signal.price
         target_price = signal.target_price
         stop_loss = signal.stop_loss
-        confidence = signal.confidence or 50
 
         if signal.side == "BUY":
             reward = target_price - current_price
@@ -182,18 +178,15 @@ class RiskManager:
 
         from trading_bot.risk.position_sizing import calculate_position_size
         try:
-            sizing_kwargs = {
-                "capital_cash": self.saldo_livre,
-                "open_positions_capital": self.em_posicoes,
-                "kelly_fraction": self.config.kelly_fraction,
-                "max_positions": self.config.max_positions,
-                "current_open_count": len(open_tickers),
-                "max_position_fraction": self.config.max_position_fraction,
-            }
-            if self.reference_equity is not _UNSET:
-                sizing_kwargs["reference_equity"] = self.reference_equity
-
-            pos_size = calculate_position_size(**sizing_kwargs)
+            pos_size = calculate_position_size(
+                capital_cash=self.saldo_livre,
+                open_positions_capital=self.em_posicoes,
+                kelly_fraction=self.config.kelly_fraction,
+                max_positions=self.config.max_positions,
+                current_open_count=len(open_tickers),
+                max_position_fraction=self.config.max_position_fraction,
+                reference_equity=self.reference_equity,
+            )
         except Exception as e:
             return RiskDecision(
                 signal_id=signal.signal_id,
@@ -228,4 +221,3 @@ class RiskManager:
                 f"Alocando R$ {pos_size:.2f}."
             ),
         )
-

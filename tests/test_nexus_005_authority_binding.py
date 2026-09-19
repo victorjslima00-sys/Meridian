@@ -198,7 +198,7 @@ async def test_analyst_fails_closed_on_identity_mismatch(authority):
 
 
 def test_risk_manager_custom_context(authority, mock_circuit_breaker):
-    rm = RiskManager(saldo_livre=100_000.0, validation_context=authority.context)
+    rm = RiskManager(saldo_livre=100_000.0, reference_equity=100_000.0, validation_context=authority.context)
     decision = rm.evaluate_trade(authority.payload)
     assert decision.approved is True
     assert decision.signal_id == compute_signal_id(
